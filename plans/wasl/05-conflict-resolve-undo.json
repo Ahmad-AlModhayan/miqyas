@@ -1,0 +1,39 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "05-conflict-resolve-undo",
+  "name": "Resolving a conflict, then undoing it",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "s1",
+      "type": "action",
+      "text": "Open the app's home page and click 'Problems' in the sidebar"
+    },
+    {
+      "id": "a1",
+      "type": "assertion",
+      "text": "Under 'Conflicts' a conflict for 'summary.docx' is listed with the choices 'Keep this computer's version', 'Keep the Drive version' and 'Keep both'"
+    },
+    {
+      "id": "s2",
+      "type": "action",
+      "text": "Click 'Keep both' for summary.docx"
+    },
+    {
+      "id": "a2",
+      "type": "assertion",
+      "text": "summary.docx is no longer listed under Conflicts and a message offers to undo the choice"
+    },
+    {
+      "id": "s3",
+      "type": "action",
+      "text": "Click 'Undo' in that message"
+    },
+    {
+      "id": "a3",
+      "type": "assertion",
+      "text": "The conflict for summary.docx is listed again"
+    }
+  ]
+}

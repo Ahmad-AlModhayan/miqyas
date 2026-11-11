@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miqyas.kahflabs.com/schema/mutation-report.schema.json",
+  "title": "Miqyas mutation report (mutation-report.json)",
+  "description": "Written by `miqyas mutate`. Shares the method, screenshots, usage and plan-result definitions with report.json: load both schema files into the validator together.",
+  "type": "object",
+  "required": ["tool", "mode", "version", "runId", "dryRun", "model", "usage", "method", "screenshots", "summary", "runs"],
+  "additionalProperties": false,
+  "properties": {
+    "tool": { "const": "miqyas" },
+    "mode": { "const": "mutate" },
+    "version": { "$ref": "report.schema.json#/$defs/semver" },
+    "runId": { "type": "string", "minLength": 1 },
+    "dryRun": { "type": "boolean" },
+    "model": { "oneOf": [{ "type": "null" }, { "$ref": "report.schema.json#/$defs/modelInfo" }] },
+    "usage": { "oneOf": [{ "type": "null" }, { "$ref": "report.schema.json#/$defs/usage" }] },
+    "method": { "$ref": "report.schema.json#/$defs/method" },
+    "screenshots": { "$ref": "report.schema.json#/$defs/screenshots" },
+    "summary": {
+      "type": "object",
+      "required": ["preset", "results", "valid", "excluded", "detected", "detectedElsewhere", "rate"],
+      "properties": {
+        "preset": { "type": "string" },
+        "baseline": {
+          "type": "object",
+          "required": ["tool", "detected", "of", "source"],
+          "properties": { "tool": { "type": "string" }, "detected": { "type": "integer" }, "of": { "type": "integer" }, "source": { "type": "string" } }
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "kind", "plan", "outcome", "detail", "caughtBy"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "kind": { "type": "string" },
+              "plan": { "type": "string" },
+              "assertion": { "type": "string" },
+              "outcome": { "type": "string" },
+              "detail": { "type": "string" },
+              "caughtBy": { "type": "array", "items": { "type": "string" } },
+              "observation": { "type": "string" }
+            }
+          }
+        },
+        "valid": { "description": "Valid mutations (Stryker): killed or survived.", "$ref": "report.schema.json#/$defs/count" },
+        "excluded": {
+          "description": "Mutations left out of the rate because they could not be judged, by outcome.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "inconclusive": { "$ref": "report.schema.json#/$defs/count" }, "ineffective": { "$ref": "report.schema.json#/$defs/count" }, "error": { "$ref": "report.schema.json#/$defs/count" }, "not_run": { "$ref": "report.schema.json#/$defs/count" } }
+        },
+        "detected": { "$ref": "report.schema.json#/$defs/count" },
+        "detectedElsewhere": { "$ref": "report.schema.json#/$defs/count" },
+        "rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "runs": { "type": "object", "additionalProperties": { "type": "array", "items": { "$ref": "report.schema.json#/$defs/planResult" } } }
+  }
+}

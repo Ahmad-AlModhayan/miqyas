@@ -1,0 +1,39 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "11-history-and-views",
+  "name": "History lists runs and a view's space limit can be changed",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "s1",
+      "type": "action",
+      "text": "Open the app's home page and click 'History' in the sidebar"
+    },
+    {
+      "id": "a1",
+      "type": "assertion",
+      "text": "At least one sync run of 'Desktop test' is listed with a date and a result"
+    },
+    {
+      "id": "s2",
+      "type": "action",
+      "text": "Click 'Views' in the sidebar"
+    },
+    {
+      "id": "a2",
+      "type": "assertion",
+      "text": "The view 'Archive' is listed with its space limit choices (5 GB to 250 GB)"
+    },
+    {
+      "id": "s3",
+      "type": "action",
+      "text": "In the 'Archive' view choose the 50 GB space limit"
+    },
+    {
+      "id": "a3",
+      "type": "assertion",
+      "text": "50 GB is now the selected space limit for 'Archive'"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<title>Fixture search</title>
+</head>
+<body>
+<main>
+  <h1>Search</h1>
+  <!-- No method: the browser submits a GET, so the typed text lands in the URL. -->
+  <form>
+    <label>Query <input name="q"></label>
+    <button>Search</button>
+  </form>
+  <p id="results"></p>
+</main>
+<script>
+  const q = new URLSearchParams(location.search).get('q');
+  if (q) document.getElementById('results').textContent = `Results for ${q}`;
+</script>
+</body>
+</html>

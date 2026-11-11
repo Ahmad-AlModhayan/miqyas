@@ -1,0 +1,44 @@
+{
+  "name": "wasl-tray",
+  "description": "The four mutations of the TestSprite evaluation on Wasl (the TestSprite evaluation on Wasl, 2026-10-28), applied to the scrubbed dist-mock build of the tray window. Plan and assertion ids are those `miqyas import testsprite` assigns to desktop/testsprite/plans. Each probe is measured on the rendered page before the run (SRS FR-M2): the swapped text on the recycle-bin screen, the sidebar (nav.side) at x=0 under dir=rtl, and for the two error hides an injected element with the error's classes 0 px high (a stand-in: reaching the real errors needs typed input and mock state).",
+  "baseline": { "tool": "TestSprite", "detected": 3, "of": 4, "source": "the TestSprite evaluation on Wasl, 2026-10-28" },
+  "mutations": [
+    {
+      "id": "bin-text",
+      "title": "Empty recycle-bin text swapped",
+      "kind": "string-swap",
+      "from": "The recycle bin is empty",
+      "to": "Nothing to show here",
+      "plan": "01-navigation",
+      "assertion": "a7",
+      "probe": { "steps": ["nav.side >> text=Recycle bin"], "measure": "text" }
+    },
+    {
+      "id": "field-error-hidden",
+      "title": "Add-pair error list hidden by CSS (text still in the DOM)",
+      "kind": "css",
+      "css": ".field-error{display:none}",
+      "plan": "03-add-pair-validation",
+      "assertion": "a2",
+      "probe": { "html": "<div class=\"field-error\" id=\"miqyas-probe\">probe</div>", "measure": "height", "selector": "#miqyas-probe" }
+    },
+    {
+      "id": "passphrase-error-hidden",
+      "title": "Wrong-passphrase error hidden by CSS (text still in the DOM)",
+      "kind": "css",
+      "css": ".kf-field-error .kf-field-help{display:none}",
+      "plan": "06-vault-unlock",
+      "assertion": "a2",
+      "probe": { "html": "<div class=\"kf-field-error\"><p class=\"kf-field-help\" id=\"miqyas-probe\">probe</p></div>", "measure": "height", "selector": "#miqyas-probe" }
+    },
+    {
+      "id": "rtl-flip",
+      "title": "Layout stays left to right under dir=rtl",
+      "kind": "css",
+      "css": "html[dir=rtl] body{direction:ltr}",
+      "plan": "07-language-arabic",
+      "assertion": "a1",
+      "probe": { "rootAttrs": { "dir": "rtl" }, "measure": "left", "selector": "nav.side" }
+    }
+  ]
+}

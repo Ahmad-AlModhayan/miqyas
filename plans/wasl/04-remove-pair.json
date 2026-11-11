@@ -1,0 +1,44 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "04-remove-pair",
+  "name": "Removing a folder pair asks first and can be cancelled",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "s1",
+      "type": "action",
+      "text": "Open the app's home page"
+    },
+    {
+      "id": "s2",
+      "type": "action",
+      "text": "Click 'Remove pair' in the 'Music' card"
+    },
+    {
+      "id": "a1",
+      "type": "assertion",
+      "text": "A confirmation dialog appears asking whether to remove the pair"
+    },
+    {
+      "id": "s3",
+      "type": "action",
+      "text": "Cancel the dialog"
+    },
+    {
+      "id": "a2",
+      "type": "assertion",
+      "text": "The 'Music' card is still listed"
+    },
+    {
+      "id": "s4",
+      "type": "action",
+      "text": "Click 'Remove pair' in the 'Music' card again and confirm the removal in the dialog"
+    },
+    {
+      "id": "a3",
+      "type": "assertion",
+      "text": "The 'Music' card is no longer listed on the Folder pairs screen"
+    }
+  ]
+}

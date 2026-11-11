@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<title>Fixture app</title>
+<style>
+  body { font-family: sans-serif; margin: 0; display: flex; }
+  nav { width: 180px; padding: 12px; background: #eef; }
+  main { padding: 12px; flex: 1; }
+  .field-error { color: #b00; border: 1px solid #b00; padding: 8px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  [hidden] { display: none; }
+  /* A styled radio: the input sits under its chip, which takes the clicks. */
+  .chip { position: relative; display: inline-block; }
+  .chip input { position: absolute; inset: 0; margin: 0; width: 100%; height: 100%; }
+  .chip span { position: relative; z-index: 1; display: block; padding: 6px 12px; background: #fff; border: 1px solid #888; }
+</style>
+</head>
+<body>
+<nav aria-label="Sections"><a href="#" id="nav-pairs">Folder pairs</a></nav>
+<main>
+  <section id="pairs">
+    <h1>Folder pairs</h1>
+    <button id="add">Add folder pair</button>
+    <fieldset><legend>Language</legend>
+      <label class="chip"><input type="radio" name="lang" value="ar" id="lang-ar"><span>Arabic</span></label>
+    </fieldset>
+    <p id="lang-state" hidden>Arabic is on</p>
+  </section>
+  <section id="form" hidden>
+    <h1>Add folder pair</h1>
+    <label>Name <input id="name"></label>
+    <button id="create">Create and preview</button>
+    <button id="back">Back</button>
+    <div class="field-error" role="alert" id="errors" hidden>Missing: a folder on this computer, a name</div>
+  </section>
+  <p class="sr-only">Screen reader copy: Paired with Pixel 8.</p>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  $('add').onclick = () => { $('pairs').hidden = true; $('form').hidden = false; };
+  $('create').onclick = () => { if (!$('name').value) $('errors').hidden = false; };
+  $('lang-ar').onchange = () => { document.documentElement.dir = 'rtl'; $('lang-state').hidden = false; };
+  $('back').onclick = () => { $('form').hidden = true; $('errors').hidden = true; $('pairs').hidden = false; };
+</script>
+</body>
+</html>

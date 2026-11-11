@@ -1,0 +1,39 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "08-device-pairing",
+  "name": "Adding a device by showing a code and confirming the four words",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "s1",
+      "type": "action",
+      "text": "Open the app's home page and click 'Devices' in the sidebar"
+    },
+    {
+      "id": "a1",
+      "type": "assertion",
+      "text": "'Your devices' lists 'Study PC' as this computer"
+    },
+    {
+      "id": "s2",
+      "type": "action",
+      "text": "Click 'Add a device' to show a code on this computer"
+    },
+    {
+      "id": "a2",
+      "type": "assertion",
+      "text": "A pairing code is shown"
+    },
+    {
+      "id": "s3",
+      "type": "action",
+      "text": "Wait until four words to compare appear, then answer that the words match"
+    },
+    {
+      "id": "a3",
+      "type": "assertion",
+      "text": "Within a few seconds a newly added device is listed under 'Your devices'"
+    }
+  ]
+}

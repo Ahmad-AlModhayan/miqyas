@@ -1,0 +1,24 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "09-join-bad-code",
+  "name": "Joining a device with a code that isn't a Wasl code",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "s1",
+      "type": "action",
+      "text": "Open the app's home page and click 'Devices' in the sidebar"
+    },
+    {
+      "id": "s2",
+      "type": "action",
+      "text": "Type 'hello-not-a-code' into the 'Pairing code' field and click 'Join'"
+    },
+    {
+      "id": "a1",
+      "type": "assertion",
+      "text": "An error says this is not a Wasl pairing code, and no device is added"
+    }
+  ]
+}

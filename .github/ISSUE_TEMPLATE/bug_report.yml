@@ -1,0 +1,36 @@
+name: Bug report
+description: Something in Miqyas is wrong: a check, a verdict, a report, the CLI or the docs
+labels: [needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problem or a scrubber miss? Do not file it here; use the private report link on the issue chooser.
+        Do not paste secrets, real user data or a full `payloads.jsonl`.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options: [CLI, runner, ledger and verdicts, readiness checks, scrubber, mutation self-check, report, plans, docs, other]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Commands, a plan file or a fixture that goes red on this bug.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+  - type: input
+    id: platform
+    attributes:
+      label: Node version and OS

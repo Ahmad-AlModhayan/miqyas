@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miqyas.kahflabs.com/schema/report.schema.json",
+  "title": "Miqyas run report (report.json)",
+  "description": "Written by `miqyas run`. The method block says how the run was made; it names the scrub rules file and its SHA-256, never the scrub terms.",
+  "type": "object",
+  "required": ["tool", "version", "runId", "startedAt", "finishedAt", "target", "dryRun", "model", "verdict", "totals", "usage", "method", "screenshots", "plans"],
+  "additionalProperties": false,
+  "properties": {
+    "tool": { "const": "miqyas" },
+    "version": { "$ref": "#/$defs/semver" },
+    "runId": { "type": "string", "minLength": 1 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "target": { "type": "object", "required": ["url"], "additionalProperties": false, "properties": { "url": { "type": "string", "format": "uri" } } },
+    "dryRun": { "type": "boolean" },
+    "model": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/modelInfo" }] },
+    "verdict": { "enum": ["pass", "fail", "error", "dry_run"] },
+    "totals": {
+      "type": "object",
+      "required": ["plans", "plansPassed", "assertions", "passed", "failed", "notChecked", "blocked", "unverified"],
+      "additionalProperties": false,
+      "properties": {
+        "plans": { "$ref": "#/$defs/count" },
+        "plansPassed": { "$ref": "#/$defs/count" },
+        "assertions": { "$ref": "#/$defs/count" },
+        "passed": { "$ref": "#/$defs/count" },
+        "failed": { "$ref": "#/$defs/count" },
+        "notChecked": { "$ref": "#/$defs/count" },
+        "blocked": { "$ref": "#/$defs/count" },
+        "unverified": { "$ref": "#/$defs/count" }
+      }
+    },
+    "usage": { "$ref": "#/$defs/usage" },
+    "method": { "$ref": "#/$defs/method" },
+    "screenshots": { "$ref": "#/$defs/screenshots" },
+    "plans": { "type": "array", "items": { "$ref": "#/$defs/planResult" } }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "semver": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+" },
+    "modelInfo": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "properties": { "provider": { "type": "string" }, "model": { "type": "string" }, "effort": { "type": "string" } }
+    },
+    "usage": {
+      "type": "object",
+      "required": ["calls", "inputTokens", "outputTokens"],
+      "additionalProperties": false,
+      "properties": {
+        "calls": { "$ref": "#/$defs/count" },
+        "inputTokens": { "$ref": "#/$defs/count" },
+        "outputTokens": { "$ref": "#/$defs/count" },
+        "byModel": {
+          "description": "The same counts by the model that answered each call; a server-side fallback can answer on another model than the one asked.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["calls", "inputTokens", "outputTokens"],
+            "additionalProperties": false,
+            "properties": { "calls": { "$ref": "#/$defs/count" }, "inputTokens": { "$ref": "#/$defs/count" }, "outputTokens": { "$ref": "#/$defs/count" } }
+          }
+        }
+      }
+    },
+    "screenshots": {
+      "type": "object",
+      "required": ["secretsMasked", "redacted", "note"],
+      "additionalProperties": false,
+      "properties": { "secretsMasked": { "type": "boolean" }, "redacted": { "type": "boolean" }, "note": { "type": "string", "minLength": 1 } }
+    },
+    "method": {
+      "type": "object",
+      "required": ["versions", "os", "model", "settings", "preset", "scrub"],
+      "additionalProperties": false,
+      "properties": {
+        "versions": {
+          "type": "object",
+          "required": ["miqyas", "node", "playwright", "browser"],
+          "additionalProperties": false,
+          "properties": {
+            "miqyas": { "$ref": "#/$defs/semver" },
+            "node": { "$ref": "#/$defs/semver" },
+            "playwright": { "$ref": "#/$defs/semver" },
+            "browser": { "description": "Chromium version; null when no browser was launched.", "type": ["string", "null"] }
+          }
+        },
+        "os": {
+          "type": "object",
+          "required": ["platform", "release", "arch"],
+          "additionalProperties": false,
+          "properties": { "platform": { "type": "string" }, "release": { "type": "string" }, "arch": { "type": "string" } }
+        },
+        "model": {
+          "description": "null in a dry run: no model was called.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "allOf": [{ "$ref": "#/$defs/modelInfo" }],
+              "type": "object",
+              "required": ["maxTokens", "maxTurns"],
+              "properties": { "maxTokens": { "type": "integer", "minimum": 1 }, "maxTurns": { "type": "integer", "minimum": 1 } },
+              "unevaluatedProperties": false
+            }
+          ]
+        },
+        "settings": {
+          "type": "object",
+          "required": ["concurrency", "viewport", "timeouts", "allowOtherOrigins", "headed"],
+          "additionalProperties": false,
+          "properties": {
+            "concurrency": { "type": "integer", "minimum": 1 },
+            "viewport": {
+              "type": "object",
+              "required": ["width", "height"],
+              "additionalProperties": false,
+              "properties": { "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 } }
+            },
+            "timeouts": {
+              "type": "object",
+              "required": ["planMs", "navigationMs", "actionMs"],
+              "additionalProperties": false,
+              "properties": { "planMs": { "$ref": "#/$defs/count" }, "navigationMs": { "$ref": "#/$defs/count" }, "actionMs": { "$ref": "#/$defs/count" } }
+            },
+            "allowOtherOrigins": { "type": "boolean" },
+            "headed": { "type": "boolean" }
+          }
+        },
+        "preset": { "description": "The mutation preset's name; null for a plain run.", "type": ["string", "null"] },
+        "scrub": {
+          "description": "The scrub rules file name, its SHA-256 and how many terms it holds. Never the terms themselves.",
+          "type": "object",
+          "required": ["file", "sha256", "terms"],
+          "additionalProperties": false,
+          "properties": {
+            "file": { "type": ["string", "null"] },
+            "sha256": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[0-9a-f]{64}$" }] },
+            "terms": { "$ref": "#/$defs/count" }
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["nodes"],
+      "properties": {
+        "screenshot": { "type": "string" },
+        "crop": { "type": "string" },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["ref", "role", "name", "box"],
+            "properties": {
+              "ref": { "type": "string" },
+              "role": { "type": "string" },
+              "name": { "type": "string" },
+              "state": { "type": "string" },
+              "box": { "type": "object", "required": ["x", "y", "width", "height"], "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "width": { "type": "number" }, "height": { "type": "number" } } }
+            }
+          }
+        },
+        "url": { "type": "string" },
+        "capturedAt": { "type": "string" },
+        "unmasked": { "type": "string" }
+      }
+    },
+    "entry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "stepId", "text", "verdict", "method", "observation"],
+          "properties": {
+            "kind": { "const": "assertion" },
+            "stepId": { "type": "string" },
+            "text": { "type": "string" },
+            "verdict": { "enum": ["pass", "fail", "not_checked", "blocked", "unverified"] },
+            "method": { "enum": ["code", "ai", "none"] },
+            "observation": { "type": "string" },
+            "reason": { "type": "string" },
+            "evidence": { "$ref": "#/$defs/evidence" },
+            "durationMs": { "type": "number", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "stepId", "text", "status", "summary", "actions"],
+          "properties": {
+            "kind": { "const": "action" },
+            "stepId": { "type": "string" },
+            "text": { "type": "string" },
+            "status": { "enum": ["done", "failed", "blocked"] },
+            "summary": { "type": "string" },
+            "actions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["tool", "input", "ok"],
+                "properties": { "tool": { "type": "string" }, "input": { "type": "object" }, "locator": { "type": "string" }, "ok": { "type": "boolean" }, "error": { "type": "string" }, "unmasked": { "type": "string" } }
+              }
+            },
+            "durationMs": { "type": "number", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "planResult": {
+      "type": "object",
+      "required": ["planId", "name", "verdict", "counts", "entries", "durationMs"],
+      "properties": {
+        "planId": { "type": "string" },
+        "name": { "type": "string" },
+        "file": { "type": "string" },
+        "verdict": { "enum": ["pass", "fail", "error"] },
+        "counts": {
+          "type": "object",
+          "required": ["assertions", "passed", "failed", "notChecked", "blocked", "unverified"],
+          "properties": {
+            "assertions": { "$ref": "#/$defs/count" },
+            "passed": { "$ref": "#/$defs/count" },
+            "failed": { "$ref": "#/$defs/count" },
+            "notChecked": { "$ref": "#/$defs/count" },
+            "blocked": { "$ref": "#/$defs/count" },
+            "unverified": { "$ref": "#/$defs/count" }
+          }
+        },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+        "error": { "type": "string" },
+        "durationMs": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

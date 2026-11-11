@@ -1,0 +1,29 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "10-agent-changes",
+  "name": "Reviewing an agent's changeset",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "s1",
+      "type": "action",
+      "text": "Open the app's home page and click 'Agent changes' in the sidebar"
+    },
+    {
+      "id": "a1",
+      "type": "assertion",
+      "text": "A changeset from 'claude-code' that changed 4 items is waiting, with 'Accept', 'Revert' and 'Show changes' buttons"
+    },
+    {
+      "id": "s2",
+      "type": "action",
+      "text": "Click 'Show changes' on that changeset"
+    },
+    {
+      "id": "a2",
+      "type": "assertion",
+      "text": "A diff of the changed files is shown"
+    }
+  ]
+}

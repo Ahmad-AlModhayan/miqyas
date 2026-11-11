@@ -1,0 +1,89 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "01-navigation",
+  "name": "Every sidebar item opens its screen",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "s1",
+      "type": "action",
+      "text": "Open the app's home page"
+    },
+    {
+      "id": "a1",
+      "type": "assertion",
+      "text": "The heading 'Folder pairs' is visible and the sidebar lists Folder pairs, Views, Devices, Agent changes, Problems, History, Recycle bin and Settings"
+    },
+    {
+      "id": "s2",
+      "type": "action",
+      "text": "Click 'Views' in the sidebar"
+    },
+    {
+      "id": "a2",
+      "type": "assertion",
+      "text": "The heading 'Views' is visible"
+    },
+    {
+      "id": "s3",
+      "type": "action",
+      "text": "Click 'Devices' in the sidebar"
+    },
+    {
+      "id": "a3",
+      "type": "assertion",
+      "text": "The heading 'Devices' is visible"
+    },
+    {
+      "id": "s4",
+      "type": "action",
+      "text": "Click 'Agent changes' in the sidebar"
+    },
+    {
+      "id": "a4",
+      "type": "assertion",
+      "text": "The heading 'Agent changes' is visible"
+    },
+    {
+      "id": "s5",
+      "type": "action",
+      "text": "Click 'Problems' in the sidebar"
+    },
+    {
+      "id": "a5",
+      "type": "assertion",
+      "text": "The heading 'Problems' is visible"
+    },
+    {
+      "id": "s6",
+      "type": "action",
+      "text": "Click 'History' in the sidebar"
+    },
+    {
+      "id": "a6",
+      "type": "assertion",
+      "text": "The heading 'History' is visible"
+    },
+    {
+      "id": "s7",
+      "type": "action",
+      "text": "Click 'Recycle bin' in the sidebar"
+    },
+    {
+      "id": "a7",
+      "type": "assertion",
+      "text": "The heading 'Recycle bin' is visible and the text 'The recycle bin is empty' is shown"
+    },
+    {
+      "id": "s8",
+      "type": "action",
+      "text": "Click 'Settings' in the sidebar"
+    },
+    {
+      "id": "a8",
+      "type": "assertion",
+      "text": "The heading 'Settings' is visible"
+    }
+  ]
+}

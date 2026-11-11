@@ -1,0 +1,39 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "02-pause-resume",
+  "name": "Pausing and resuming a folder pair",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "s1",
+      "type": "action",
+      "text": "Open the app's home page"
+    },
+    {
+      "id": "a1",
+      "type": "assertion",
+      "text": "The folder pair card named 'Music' shows the status 'Paused' and a 'Resume' button"
+    },
+    {
+      "id": "s2",
+      "type": "action",
+      "text": "Click the 'Resume' button in the 'Music' card"
+    },
+    {
+      "id": "a2",
+      "type": "assertion",
+      "text": "The 'Music' card no longer shows 'Paused' and its button now reads 'Pause'"
+    },
+    {
+      "id": "s3",
+      "type": "action",
+      "text": "Click the 'Pause' button in the 'Desktop test' card"
+    },
+    {
+      "id": "a3",
+      "type": "assertion",
+      "text": "The 'Desktop test' card shows the status 'Paused' and a 'Resume' button"
+    }
+  ]
+}

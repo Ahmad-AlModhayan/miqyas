@@ -1,0 +1,11 @@
+{
+  "ignoreCase": true,
+  "terms": [
+    { "from": "KahfLabs", "to": "Example Org" },
+    { "from": "mizwala", "to": "project-a" },
+    { "from": "qasd", "to": "project-b" },
+    { "from": "06-adhan-engine.md", "to": "engine-notes.md" },
+    { "from": "adhan", "to": "engine" },
+    { "from": "هاتف فلان", "to": "هاتفي" }
+  ]
+}

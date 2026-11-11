@@ -1,0 +1,44 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "03-add-pair-validation",
+  "name": "Adding a folder pair with nothing filled in lists what is missing",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "s1",
+      "type": "action",
+      "text": "Open the app's home page"
+    },
+    {
+      "id": "s2",
+      "type": "action",
+      "text": "Click the 'Add folder pair' button"
+    },
+    {
+      "id": "a1",
+      "type": "assertion",
+      "text": "The 'Add folder pair' screen is shown with sections for the folder on this computer, the Google account, the folder on Google Drive, a name, and a sync method"
+    },
+    {
+      "id": "s3",
+      "type": "action",
+      "text": "Without choosing anything, click the button at the bottom of the form that continues to the preview"
+    },
+    {
+      "id": "a2",
+      "type": "assertion",
+      "text": "An error list appears that says a folder on this computer, a folder on Google Drive and a name are missing"
+    },
+    {
+      "id": "s4",
+      "type": "action",
+      "text": "Click the back button at the top of the screen"
+    },
+    {
+      "id": "a3",
+      "type": "assertion",
+      "text": "The 'Folder pairs' screen is shown again"
+    }
+  ]
+}

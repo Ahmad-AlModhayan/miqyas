@@ -1,0 +1,92 @@
+# Node / TypeScript (core, CLI, MCP server, workers)
+node_modules/
+dist/
+build/
+out/
+*.tsbuildinfo
+.npm/
+.pnpm-store/
+npm-debug.log*
+yarn-error.log*
+coverage/
+.turbo/
+
+# Rust (engine scenario runner, phase 2)
+target/
+**/*.rs.bk
+
+# Python (judge, later)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Android / Gradle (fixture apps, Appium)
+.gradle/
+local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Tauri (fixture apps under test)
+src-tauri/target/
+src-tauri/gen/
+
+# Test artifacts: traces, videos, screenshots and reports may show
+# confidential apps. They stay on the machine that ran them.
+.miqyas/
+.scratch/
+/bench/*-dry-run/
+/runs/
+/artifacts/
+/reports/
+/screenshots/
+/videos/
+/traces/
+/exports/
+/payload-log/
+/mutated-builds/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+*.trace.zip
+*.webm
+*.mp4
+dist-mock/
+appium.log
+wdio-logs/
+
+# Output of cloud testers (embeds code summaries; never commit)
+testsprite_tests/
+
+# Secrets
+.env
+.env.*
+!.env.example
+secrets.json
+*.secrets.json
+k.env.md
+storage-state*.json
+.auth/
+*.pem
+*.p12
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~

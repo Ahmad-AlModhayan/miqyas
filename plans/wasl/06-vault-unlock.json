@@ -1,0 +1,44 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "06-vault-unlock",
+  "name": "Unlocking a locked vault: wrong passphrase, then the right one",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "s1",
+      "type": "action",
+      "text": "Open the app's home page"
+    },
+    {
+      "id": "a1",
+      "type": "assertion",
+      "text": "The folder pair 'Private' shows 'Vault locked' and an 'Unlock vault' button"
+    },
+    {
+      "id": "s2",
+      "type": "action",
+      "text": "Click 'Unlock vault' in the 'Private' card"
+    },
+    {
+      "id": "s3",
+      "type": "action",
+      "text": "Type 'wrong passphrase' into the passphrase field and confirm"
+    },
+    {
+      "id": "a2",
+      "type": "assertion",
+      "text": "An error says the passphrase is wrong and the vault stays locked"
+    },
+    {
+      "id": "s4",
+      "type": "action",
+      "text": "Clear the passphrase field, type 'correct horse battery' and confirm"
+    },
+    {
+      "id": "a3",
+      "type": "assertion",
+      "text": "The 'Private' card no longer shows 'Vault locked' or the 'Unlock vault' button"
+    }
+  ]
+}
