@@ -275,7 +275,7 @@ These are targets, not results.
 
 ## 13. Sources
 
-- Research for map ticket 26: `docs/research/replay-2026-11.md`, `detectors-2026-11.md`, `agent-browser-2026-11.md`
+- Research for map ticket 26: `docs/research/replay-2026-11.md`, `detectors-2026-11.md`
 - Research for map ticket 50: `docs/research/grade1-incumbents-2026-11.md`, `vibe-failures-2026-11.md`,
   `blackbox-backend-2026-11.md`, `repo-checks-2026-11.md`
 - [Lovable security](https://docs.lovable.dev/features/security), [Supabase row level security](https://supabase.com/docs/guides/database/postgres/row-level-security), [Supabase API keys](https://supabase.com/docs/guides/api/api-keys)
