@@ -785,4 +785,42 @@ describe('CLI', () => {
     expect(r).toMatchObject({ outcome: 'ineffective' });
     expect(r.detail).toContain('probe failed');
   });
+
+  it('permits --no-model in non-TTY CI without a key at $0 and reports endpoint/host in doctor', async () => {
+    const planFile = path.join(tmp, 'no-model-code.json');
+    await writeFile(
+      planFile,
+      JSON.stringify({
+        format: 'miqyas-plan',
+        version: 1,
+        id: 'code-check',
+        steps: [{ id: 'a1', type: 'assertion', text: 'Folder pairs visible', check: { locator: { role: 'heading', name: 'Folder pairs' }, expect: 'visible' } }],
+      }),
+    );
+    const outDir = path.join(tmp, 'nomodel-cli');
+    const savedBase = process.env.ANTHROPIC_BASE_URL;
+    const savedKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_BASE_URL = 'https://llm-proxy.example.com:8443/v1';
+
+    const docOut: string[] = [];
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((c: string | Uint8Array) => (docOut.push(String(c)), true)) as typeof process.stdout.write;
+    try {
+      expect(await main(['run', planFile, '--url', server.url, '--no-model', '--json', '--out', outDir], { isTTY: false, spendDir: tmp })).toBe(0);
+      expect(await main(['doctor'])).toBe(0);
+    } finally {
+      process.stdout.write = write;
+      if (savedBase === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = savedBase;
+      if (savedKey !== undefined) process.env.ANTHROPIC_API_KEY = savedKey;
+    }
+
+    const report = JSON.parse(await readFile(path.join(outDir, 'report.json'), 'utf8'));
+    expect(report).toMatchObject({ dryRun: false, verdict: 'pass', spend: { actualUsd: 0, quote: { likelyUsd: 0, worstCaseUsd: 0 } } });
+    expect(schemaErrors('report', report)).toEqual([]);
+    const doctorText = docOut.join('');
+    expect(doctorText).toContain('model endpoint: https://llm-proxy.example.com:8443/v1');
+    expect(doctorText).toContain('custom host llm-proxy.example.com:8443');
+  });
 });

@@ -14,6 +14,7 @@
     "dryRun": { "type": "boolean" },
     "model": { "oneOf": [{ "type": "null" }, { "$ref": "report.schema.json#/$defs/modelInfo" }] },
     "usage": { "oneOf": [{ "type": "null" }, { "$ref": "report.schema.json#/$defs/usage" }] },
+    "spend": { "$ref": "report.schema.json#/$defs/spend" },
     "method": { "$ref": "report.schema.json#/$defs/method" },
     "screenshots": { "$ref": "report.schema.json#/$defs/screenshots" },
     "summary": {

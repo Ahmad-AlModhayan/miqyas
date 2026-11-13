@@ -6,6 +6,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runAdapters, type Adapter, type AdapterResult } from '../adapters/adapter.js';
 import type { ActTool, Agent, ModelInfo, StepHistory, ToolExecution, Usage } from '../agents/agent.js';
+import type { RunQuote, SpendGuard } from '../agents/spend.js';
 import { anyTerm, NO_SCRUB, ruleHits, scrubText, withSecrets, type ScrubRules } from '../scrub/scrub.js';
 import type { Observation, SnapNode, SurfaceDriver, SurfaceSession } from '../surfaces/session.js';
 import {
@@ -30,7 +31,19 @@ import {
   type MutationSummary,
 } from './mutate.js';
 import { resolveSecrets, secretNames, type Plan } from './plan.js';
-import { buildReport, environment, renderMarkdown, renderMethod, SCREENSHOTS, TOOL_VERSION, type Method, type RunReport } from './report.js';
+import {
+  buildReport,
+  buildSpendReport,
+  environment,
+  formatSpendSummary,
+  renderMarkdown,
+  renderMethod,
+  SCREENSHOTS,
+  TOOL_VERSION,
+  type Method,
+  type RunReport,
+  type SpendReport,
+} from './report.js';
 
 export interface RunSettings {
   concurrency?: number;
@@ -56,6 +69,7 @@ export interface ExecutePlansOptions extends RunSettings {
   url: string;
   driver: SurfaceDriver;
   agent?: Agent | null;
+  noModel?: boolean;
   runDir: string;
   scrub: ScrubRules;
   env?: NodeJS.ProcessEnv;
@@ -69,6 +83,9 @@ export interface VerificationRunOptions {
   runDir: string;
   driver: SurfaceDriver;
   agent: Agent | null;
+  noModel?: boolean;
+  spendGuard?: SpendGuard;
+  quote?: RunQuote;
   scrub: ScrubRules;
   scrubMethod: Method['scrub'];
   adapters?: Adapter[];
@@ -106,6 +123,9 @@ export interface MutationRunOptions {
   driver: SurfaceDriver;
   serve: (dir: string) => Promise<MutationServer>;
   agent: Agent | null;
+  noModel?: boolean;
+  spendGuard?: SpendGuard;
+  quote?: RunQuote;
   scrub: ScrubRules;
   scrubMethod: Method['scrub'];
   adapters?: Adapter[];
@@ -132,6 +152,7 @@ export interface MutationRunResult {
     dryRun: boolean;
     model: ModelInfo | null;
     usage: Usage | null;
+    spend?: SpendReport;
     method: Method;
     screenshots: typeof SCREENSHOTS;
     summary: MutationSummary;
@@ -240,7 +261,7 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
         hide,
       });
       let latest = await session.observe();
-      if (!opts.agent) {
+      if (!opts.agent && !opts.noModel) {
         ledger.fail(`dry run (${latest.nodes.length} rendered nodes observed at ${hide(latest.url)})`);
         return;
       }
@@ -252,6 +273,11 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
       for (const step of plan.steps) {
         const t0 = Date.now();
         if (step.type === 'action') {
+          if (!agent) {
+            ledger.recordAction({ stepId: step.id, status: 'blocked', summary: 'no model (--no-model)', actions: [] });
+            ledger.block('no model (--no-model)');
+            return;
+          }
           const missing = secretNames(step.text).filter((n) => env[`MIQYAS_SECRET_${n}`] === undefined).map((n) => `MIQYAS_SECRET_${n}`);
           if (missing.length) {
             ledger.recordAction({ stepId: step.id, status: 'blocked', summary: `missing secret(s): ${missing.join(', ')}`, actions: [] });
@@ -296,6 +322,12 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
           const evidence = await saveEvidence(opts.runDir, plan.id, step.id, current, r.nodes, hide);
           ledger.recordAssertion({ stepId: step.id, verdict: r.pass ? 'pass' : 'fail', method: 'code', observation: hide(r.observation), evidence, durationMs: Date.now() - t0 });
           history.push({ stepId: step.id, type: 'assertion', text: step.text, result: r.pass ? 'pass' : 'fail' });
+          continue;
+        }
+        if (!agent) {
+          const evidence = await saveEvidence(opts.runDir, plan.id, step.id, current, [], hide);
+          ledger.recordAssertion({ stepId: step.id, verdict: 'not_checked', method: 'none', observation: '', reason: 'no model (--no-model)', evidence, durationMs: Date.now() - t0 });
+          history.push({ stepId: step.id, type: 'assertion', text: step.text, result: 'not checked' });
           continue;
         }
         const captures = new Map<number, Observation>([[current.capture, current]]);
@@ -370,13 +402,14 @@ export async function executePlans(plans: Plan[], opts: ExecutePlansOptions): Pr
 /** Central Proof Core orchestrator: coordinates plans, SurfaceSession driver, Adapters, and Agent into one RunResult. */
 export async function runVerification(opts: VerificationRunOptions): Promise<RunResult> {
   const startedAt = opts.startedAt ?? new Date();
-  const dryRun = opts.agent === null;
+  const dryRun = opts.agent === null && !opts.noModel;
   await mkdir(opts.runDir, { recursive: true });
 
   const planResults = await executePlans(opts.plans, {
     url: opts.url,
     driver: opts.driver,
     agent: opts.agent,
+    ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
     runDir: opts.runDir,
     scrub: opts.scrub,
     ...pickRunSettings(opts.settings),
@@ -388,8 +421,18 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     ? await runAdapters(opts.adapters, { surface: opts.driver.surface, url: opts.url, runDir: opts.runDir })
     : [];
 
+  await opts.spendGuard?.flush();
   const finishedAt = new Date();
   const method = buildMethodMetadata(opts.agent, opts.driver, opts.scrubMethod, null, opts.settings);
+  const model = opts.agent?.info ?? null;
+  const usage = opts.agent?.usage ?? { calls: 0, inputTokens: 0, outputTokens: 0 };
+  const spend = buildSpendReport({
+    spendGuard: opts.spendGuard,
+    quote: opts.quote,
+    model,
+    usage,
+    noModel: Boolean(opts.noModel),
+  });
 
   const report = buildReport({
     runId: opts.runId,
@@ -397,8 +440,9 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     finishedAt,
     url: opts.url,
     dryRun,
-    model: opts.agent?.info ?? null,
-    usage: opts.agent?.usage ?? { calls: 0, inputTokens: 0, outputTokens: 0 },
+    model,
+    usage,
+    ...(spend ? { spend } : {}),
     method,
     plans: planResults,
   });
@@ -456,7 +500,7 @@ export async function runPlans(plans: Plan[], opts: RunOptions): Promise<PlanRes
 /** Proof Core mutation preset coordinator: proves mutation effectiveness before verifying detection through Proof Core. */
 export async function runMutations(opts: MutationRunOptions): Promise<MutationRunResult> {
   await mkdir(opts.runDir, { recursive: true });
-  const dryRun = opts.agent === null;
+  const dryRun = opts.agent === null && !opts.noModel;
   const concurrency = opts.concurrency ?? 3;
   const byId = new Map(opts.plans.map((p) => [p.id, p]));
   const results: MutationResult[] = [];
@@ -469,12 +513,13 @@ export async function runMutations(opts: MutationRunOptions): Promise<MutationRu
     try {
       // Baseline: the targeted plans must pass on the clean build, or a failure on a mutant proves nothing.
       let baseline: PlanResult[] = [];
-      if (opts.agent) {
+      if (opts.agent || opts.noModel) {
         say(`  baseline on the clean build (${clean.url})`);
         baseline = await executePlans(opts.plans, {
           url: clean.url,
           driver: opts.driver,
           agent: opts.agent,
+          ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
           runDir: path.join(opts.runDir, 'baseline'),
           scrub: opts.scrub,
           concurrency,
@@ -511,7 +556,7 @@ export async function runMutations(opts: MutationRunOptions): Promise<MutationRu
           } catch (e) {
             detail += `; probe failed: ${(e as Error).message.split('\n')[0]}`;
           }
-          if (!opts.agent) {
+          if (dryRun) {
             results.push({
               id: m.id,
               title: m.title,
@@ -531,6 +576,7 @@ export async function runMutations(opts: MutationRunOptions): Promise<MutationRu
                 url: served.url,
                 driver: opts.driver,
                 agent: opts.agent,
+                ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
                 runDir: path.join(opts.runDir, m.id),
                 scrub: opts.scrub,
                 ...(opts.env !== undefined ? { env: opts.env } : {}),
@@ -553,24 +599,41 @@ export async function runMutations(opts: MutationRunOptions): Promise<MutationRu
     ? await runAdapters(opts.adapters, { surface: opts.driver.surface, url: opts.buildDir, runDir: opts.runDir, buildDir: opts.buildDir })
     : [];
 
+  await opts.spendGuard?.flush();
   // The preset name is free text from the user: scrubbed like everything else that reaches a report.
   const presetName = scrubText(opts.preset.name, opts.scrub);
   const summary = summarize(presetName, results, opts.preset.baseline);
   const method = buildMethodMetadata(opts.agent, opts.driver, opts.scrubMethod, presetName, { concurrency, allowOtherOrigins: false, headed: false });
+  const model = opts.agent?.info ?? null;
+  const usage = opts.agent?.usage ?? null;
+  const spend = buildSpendReport({
+    spendGuard: opts.spendGuard,
+    quote: opts.quote,
+    model,
+    usage,
+    noModel: Boolean(opts.noModel),
+  });
   const report = {
     tool: 'miqyas' as const,
     mode: 'mutate' as const,
     version: TOOL_VERSION,
     runId: opts.runId,
     dryRun,
-    model: opts.agent?.info ?? null,
-    usage: opts.agent?.usage ?? null,
+    model,
+    usage,
+    ...(spend ? { spend } : {}),
     method,
     screenshots: SCREENSHOTS,
     summary,
     runs,
   };
-  const markdown = [renderMutationMarkdown(summary, { runId: opts.runId, dryRun }), `Screenshots: ${SCREENSHOTS.note}`, '', ...renderMethod(method)].join('\n');
+  const markdown = [
+    renderMutationMarkdown(summary, { runId: opts.runId, dryRun }),
+    ...(spend ? [`Spend: ${formatSpendSummary(spend)}`, ''] : []),
+    `Screenshots: ${SCREENSHOTS.note}`,
+    '',
+    ...renderMethod(method),
+  ].join('\n');
   if (opts.writeReports !== false) {
     await writeFile(path.join(opts.runDir, 'mutation-report.json'), JSON.stringify(report, null, 2) + '\n', 'utf8');
     await writeFile(path.join(opts.runDir, 'mutation-report.md'), markdown, 'utf8');

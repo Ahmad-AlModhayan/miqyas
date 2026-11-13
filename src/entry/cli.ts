@@ -8,9 +8,22 @@ import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, parseEnv } from 'node:util';
+import { createInterface } from 'node:readline/promises';
 import { buildApp, cloneState, exportTree, resolveCommit, SourceError } from '../adapters/bench-source.js';
 import type { Agent, PayloadEntry } from '../agents/agent.js';
 import { AnthropicAgent, DEFAULT_EFFORT, DEFAULT_MODEL } from '../agents/anthropic.js';
+import { resolveEndpoint, resolveModelChoice, type Tier } from '../agents/models.js';
+import {
+  BudgetError,
+  DAILY_CAP_USD,
+  SpendGuard,
+  defaultSpendDir,
+  formatQuote,
+  parseTypedCap,
+  quotePlans,
+  readDailySpend,
+  type RunQuote,
+} from '../agents/spend.js';
 import { BENCHES, buildBenchSummary, renderBenchMarkdown, type BenchSummary } from '../proof-core/bench.js';
 import { reportPath } from '../proof-core/ledger.js';
 import { BuildChangedError, parsePreset } from '../proof-core/mutate.js';
@@ -35,26 +48,30 @@ Usage:
   miqyas run <plans...> --url <url> [options]      run plans (files or folders) against a web app
   miqyas mutate <plans...> --build <dir> --preset <name|file> [options]
                                                    break copies of a build on purpose, report the detection rate
+  miqyas quote <plans...> [--tier <level>] [--model <id>] [--no-model] [--preset <name|file>]
+                                                   print a free offline cost quote and stop
   miqyas lint <plans...>                           check plans offline
   miqyas import testsprite <plans...> --out <dir>  convert TestSprite plans, assigning stable step ids
   miqyas scrub <dir> --rules <name|file> [--check] replace configured terms in a built app, then re-scan
   miqyas bench <name> [--repo <clone>] [--commit <ref>] [--dry-run]
                                                    export, build, scrub, run and mutate a pinned app; write
                                                    bench/<date>-<commit>/summary.md and summary.json (benches: ${Object.keys(BENCHES).join(', ')})
-  miqyas doctor                                    check Node, the browser and whether a model key is set
+  miqyas doctor                                    check Node, the browser, endpoint and whether a model key is set
 
 Options:
   --json                 print the JSON report instead of the summary
   --out <dir>            run folder (default .miqyas/runs/<id>)
   --dry-run              resolve plans, open pages and probe mutations; no model call
-  --model <id>           model (default ${DEFAULT_MODEL})
+  --no-model             run code-judged checks without calling a model ($0, works in CI)
+  --tier <level>         low | medium | high (default low -> ${DEFAULT_MODEL})
+  --model <id>           pin a specific model id (overrides --tier)
   --effort <level>       low | medium | high | xhigh | max (default ${DEFAULT_EFFORT})
   --concurrency <n>      plans in parallel (default 3)
   --scrub <name|file>    scrub rules applied to every text sent to the model
   --headed               show the browser
   --allow-other-origins  let the app load from other origins (blocked by default)
 
-Live runs need ANTHROPIC_API_KEY in your own environment. Secrets in plans are written \${secret.NAME} and read
+Live billed runs print a quote, require an interactive terminal cap <= $${DAILY_CAP_USD} daily cap, and need ANTHROPIC_API_KEY in your own environment. Secrets in plans are written \${secret.NAME} and read
 from MIQYAS_SECRET_NAME.`;
 
 const OPTIONS = {
@@ -62,6 +79,8 @@ const OPTIONS = {
   json: { type: 'boolean', default: false },
   out: { type: 'string' },
   'dry-run': { type: 'boolean', default: false },
+  'no-model': { type: 'boolean', default: false },
+  tier: { type: 'string' },
   model: { type: 'string' },
   effort: { type: 'string' },
   concurrency: { type: 'string' },
@@ -104,24 +123,125 @@ function hasCredentials(): boolean {
   return !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
 }
 
-/** Tests hand `main` a scripted agent; the CLI itself always builds the Anthropic one. */
+/** Tests hand `main` a scripted agent, TTY state, prompt stub, spend directory, or clock. */
 export interface Injected {
   agent?: Agent;
+  isTTY?: boolean;
+  promptCap?: (quote: RunQuote) => Promise<string>;
+  spendDir?: string;
+  now?: () => Date;
+  spendGuard?: SpendGuard;
+  quote?: RunQuote;
 }
 
-function makeAgent(o: Opts, runDir: string, inject: Injected): Agent | null {
-  if (o['dry-run']) return null;
-  if (inject.agent) return inject.agent;
-  if (!hasCredentials())
-    throw new EnvError('ANTHROPIC_API_KEY is not set. Set it in your own environment (Miqyas never asks for it), or use --dry-run.');
+function resolveTierAndEffort(o: Opts): { tier?: Tier; model: string; effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' } {
+  let chosen: { tier?: Tier; model: string };
+  try {
+    chosen = resolveModelChoice({
+      ...(o.tier !== undefined ? { tier: o.tier } : {}),
+      ...(o.model !== undefined ? { model: o.model } : {}),
+    });
+  } catch (e) {
+    throw new UsageError((e as Error).message);
+  }
   const effort = (o.effort ?? DEFAULT_EFFORT) as 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) throw new UsageError(`--effort must be low, medium, high, xhigh or max`);
+  return { ...chosen, effort };
+}
+
+async function promptTerminalCap(quote: RunQuote): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return await rl.question(`Type hard cap in USD (max $${quote.remainingDailyUsd.toFixed(2)} remaining today): `);
+  } finally {
+    rl.close();
+  }
+}
+
+async function prepareExecution(opts: {
+  o: Opts;
+  plans: Plan[];
+  runId: string;
+  runDir: string;
+  inject: Injected;
+  preset?: { mutations: readonly { plan: string }[] };
+}): Promise<{ agent: Agent | null; noModel: boolean; spendGuard?: SpendGuard; quote?: RunQuote }> {
+  const { o, plans, runId: id, runDir, inject, preset } = opts;
+  if (o['dry-run']) return { agent: null, noModel: false };
+  if (o['no-model']) {
+    const now = inject.now?.() ?? new Date();
+    const spendDir = inject.spendDir ?? defaultSpendDir();
+    const spentTodayUsd = await readDailySpend(spendDir, now);
+    const quote = quotePlans({ plans, model: null, noModel: true, ...(preset ? { preset } : {}), spentTodayUsd, now });
+    return { agent: null, noModel: true, quote };
+  }
+  if (inject.agent) {
+    return {
+      agent: inject.agent,
+      noModel: false,
+      ...(inject.spendGuard ? { spendGuard: inject.spendGuard } : {}),
+      ...(inject.quote ? { quote: inject.quote } : {}),
+    };
+  }
+
+  const chosen = resolveTierAndEffort(o);
+  if (!hasCredentials())
+    throw new EnvError('ANTHROPIC_API_KEY is not set. Set it in your own environment (Miqyas never asks for it), or use --dry-run / --no-model.');
+
+  const spendGuard = await confirmLiveSpend({ o, plans, preset, runId: id, inject, chosenModel: chosen.model });
+  let quote = inject.quote;
+  if (!quote) {
+    const now = inject.now?.() ?? new Date();
+    const spendDir = inject.spendDir ?? defaultSpendDir();
+    const spentTodayUsd = await readDailySpend(spendDir, now);
+    quote = quotePlans({ plans, model: chosen.model, ...(preset ? { preset } : {}), spentTodayUsd, now });
+  }
+
   const payloads = path.join(runDir, 'payloads.jsonl');
-  return new AnthropicAgent({
-    model: o.model ?? DEFAULT_MODEL,
-    effort,
+  const agent = new AnthropicAgent({
+    ...(chosen.tier ? { tier: chosen.tier } : {}),
+    model: chosen.model,
+    effort: chosen.effort,
+    spend: spendGuard,
     log: (e: PayloadEntry) => appendFileSync(payloads, JSON.stringify(e) + '\n', 'utf8'),
   });
+  return { agent, noModel: false, spendGuard, ...(quote ? { quote } : {}) };
+}
+
+async function confirmLiveSpend(opts: {
+  o: Opts;
+  plans: Plan[];
+  preset?: { mutations: readonly { plan: string }[] } | undefined;
+  runId: string;
+  inject: Injected;
+  chosenModel: string;
+}): Promise<SpendGuard> {
+  if (opts.inject.spendGuard) return opts.inject.spendGuard;
+  const now = opts.inject.now?.() ?? new Date();
+  const spendDir = opts.inject.spendDir ?? defaultSpendDir();
+  const spentTodayUsd = await readDailySpend(spendDir, now);
+  const quote = quotePlans({
+    plans: opts.plans,
+    model: opts.chosenModel,
+    ...(opts.preset ? { preset: opts.preset } : {}),
+    spentTodayUsd,
+    now,
+  });
+  process.stderr.write(formatQuote(quote) + '\n');
+  if (!quote.knownPrice) {
+    throw new EnvError(`unknown price for model "${opts.chosenModel}": billed cloud API runs fail closed without maintained pricing`);
+  }
+  if (quote.remainingDailyUsd <= 0) {
+    throw new EnvError(`$${DAILY_CAP_USD.toFixed(2)} daily cap reached on this device; try again tomorrow or use --no-model`);
+  }
+  const interactive = Boolean(opts.inject.promptCap) || (opts.inject.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY));
+  if (!interactive) {
+    throw new EnvError('billed live model runs require an interactive terminal; non-TTY CI allows --no-model or --dry-run');
+  }
+  const answer = opts.inject.promptCap ? await opts.inject.promptCap(quote) : await promptTerminalCap(quote);
+  const runCapUsd = parseTypedCap(answer, quote.remainingDailyUsd);
+  opts.inject.quote = quote;
+  return new SpendGuard({ runCapUsd, dailyCapUsd: DAILY_CAP_USD, spentTodayUsd, spendDir, runId: opts.runId, now });
 }
 
 function dryRunStatus(error?: string, verdict?: string): string {
@@ -150,11 +270,12 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
   checkLint(plans);
   const id = runId();
   const runDir = path.resolve(o.out ?? path.join('.miqyas', 'runs', id));
-  // The key is checked first, so a run that can't start leaves no empty folder.
-  const agent = makeAgent(o, runDir, inject);
-  const { rules: scrub, method: scrubMethod } = await scrubRules(o, 'scrub');
   const settings = { concurrency: concurrency(o), allowOtherOrigins: o['allow-other-origins'], headed: o.headed };
-  if (!o.json) process.stderr.write(`miqyas: ${plans.length} plan(s) against ${o.url}${agent ? ` with ${agent.info?.model}` : ' (dry run)'}; run folder ${runDir}\n`);
+  // Credentials, pricing, quote, and cap confirmation run first so a refused start leaves no empty folder.
+  const exec = await prepareExecution({ o, plans, runId: id, runDir, inject });
+  const { rules: scrub, method: scrubMethod } = await scrubRules(o, 'scrub');
+  const modeLabel = o['dry-run'] ? ' (dry run)' : exec.noModel ? ' (--no-model)' : ` with ${exec.agent?.info?.model}`;
+  if (!o.json) process.stderr.write(`miqyas: ${plans.length} plan(s) against ${o.url}${modeLabel}; run folder ${runDir}\n`);
 
   const driver = await openWebSurfaceDriver({ headed: settings.headed, allowOtherOrigins: settings.allowOtherOrigins });
   try {
@@ -164,7 +285,10 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
       plans,
       runDir,
       driver,
-      agent,
+      agent: exec.agent,
+      noModel: exec.noModel,
+      ...(exec.spendGuard ? { spendGuard: exec.spendGuard } : {}),
+      ...(exec.quote ? { quote: exec.quote } : {}),
       scrub,
       scrubMethod,
       settings,
@@ -242,7 +366,7 @@ async function cmdMutate(args: string[], o: Opts, inject: Injected): Promise<num
   const runConcurrency = concurrency(o);
   const id = runId();
   const runDir = path.resolve(o.out ?? path.join('.miqyas', 'runs', `${id}-mutate`));
-  const agent = makeAgent(o, runDir, inject);
+  const exec = await prepareExecution({ o, plans, runId: id, runDir, inject, preset });
   const { rules: scrub, method: scrubMethod } = await scrubRules(o, 'scrub');
   const say = (s: string) => !o.json && process.stderr.write(s + '\n');
   say(`miqyas mutate: preset ${preset.name}, ${preset.mutations.length} mutation(s), ${plans.length} plan(s); run folder ${runDir}`);
@@ -257,7 +381,10 @@ async function cmdMutate(args: string[], o: Opts, inject: Injected): Promise<num
       runDir,
       driver,
       serve: serveDir,
-      agent,
+      agent: exec.agent,
+      noModel: exec.noModel,
+      ...(exec.spendGuard ? { spendGuard: exec.spendGuard } : {}),
+      ...(exec.quote ? { quote: exec.quote } : {}),
       scrub,
       scrubMethod,
       concurrency: runConcurrency,
@@ -274,13 +401,23 @@ async function cmdBench(args: string[], o: Opts, inject: Injected): Promise<numb
   const bench = BENCHES[args[0] ?? ''];
   if (!bench || args.length > 1) throw new UsageError(`usage: miqyas bench <${Object.keys(BENCHES).join('|')}> [--repo <clone>] [--commit <ref>] [--dry-run]`);
   for (const k of ['url', 'build', 'preset', 'scrub', 'out'] as const) if (o[k]) throw new UsageError(`bench sets --${k} itself`);
+  const chosen = resolveTierAndEffort(o);
   // Stop before a long build when a live run can't start anyway.
-  if (!o['dry-run'] && !inject.agent && !hasCredentials())
-    throw new EnvError('ANTHROPIC_API_KEY is not set. Set it in your own environment (Miqyas never asks for it), or use --dry-run.');
+  if (!o['dry-run'] && !o['no-model'] && !inject.agent && !hasCredentials())
+    throw new EnvError('ANTHROPIC_API_KEY is not set. Set it in your own environment (Miqyas never asks for it), or use --dry-run / --no-model.');
   const repo = path.resolve(o.repo ?? bench.repo);
   if (!existsSync(path.join(repo, '.git'))) throw new UsageError(`${repo} is not a git clone; pass --repo <clone>`);
   const say = (s: string) => process.stderr.write(s + '\n');
   const startedAt = new Date();
+  const plans = path.join(ROOT, bench.plans);
+  let benchInject = inject;
+  if (!o['dry-run'] && !o['no-model'] && !inject.agent && !inject.spendGuard) {
+    const benchPlans = await loadPlans([plans]);
+    const preset = parsePreset(JSON.parse(await readFile(presetPath(bench.preset), 'utf8')), bench.preset);
+    const carrier: Injected = { ...inject };
+    const spendGuard = await confirmLiveSpend({ o, plans: benchPlans, preset, runId: `bench-${bench.name}`, inject: carrier, chosenModel: chosen.model });
+    benchInject = { ...carrier, spendGuard };
+  }
   const before = await cloneState(repo);
   const commit = await resolveCommit(repo, o.commit ?? bench.commit);
   const p2 = (n: number) => String(n).padStart(2, '0');
@@ -329,19 +466,18 @@ async function cmdBench(args: string[], o: Opts, inject: Injected): Promise<numb
   });
   say(`  scrubbed: ${scrubbed.replaced} replacement(s) in ${scrubbed.files} file(s); re-scan 0 hits`);
 
-  const plans = path.join(ROOT, bench.plans);
   const runDir = path.join(work, 'run');
   const mutateDir = path.join(work, 'mutate');
   const shared = { ...o, scrub: bench.scrub, json: false };
   const runCode = await timed('run', async () => {
     const served = await serveDir(dist);
     try {
-      return await cmdRun([plans], { ...shared, url: served.url, out: runDir }, inject);
+      return await cmdRun([plans], { ...shared, url: served.url, out: runDir }, benchInject);
     } finally {
       await served.close();
     }
   });
-  const mutateCode = await timed('mutate', () => cmdMutate([plans], { ...shared, build: dist, preset: bench.preset, out: mutateDir }, inject));
+  const mutateCode = await timed('mutate', () => cmdMutate([plans], { ...shared, build: dist, preset: bench.preset, out: mutateDir }, benchInject));
   const run = JSON.parse(await readFile(path.join(runDir, 'report.json'), 'utf8')) as RunReport;
   const mutation = JSON.parse(await readFile(path.join(mutateDir, 'mutation-report.json'), 'utf8'));
   const unchanged = (await cloneState(repo)) === before;
@@ -371,6 +507,27 @@ async function cmdBench(args: string[], o: Opts, inject: Injected): Promise<numb
   return Math.max(runCode, mutateCode);
 }
 
+async function cmdQuote(args: string[], o: Opts, inject: Injected): Promise<number> {
+  if (!args.length) throw new UsageError('usage: miqyas quote <plans...> [--tier <level>] [--model <id>] [--no-model] [--preset <name|file>]');
+  const plans = await loadPlans(args);
+  checkLint(plans);
+  const preset = o.preset ? parsePreset(JSON.parse(await readFile(presetPath(o.preset), 'utf8')), o.preset) : undefined;
+  const chosen = o['no-model'] ? null : resolveTierAndEffort(o);
+  const now = inject.now?.() ?? new Date();
+  const spendDir = inject.spendDir ?? defaultSpendDir();
+  const spentTodayUsd = await readDailySpend(spendDir, now);
+  const quote = quotePlans({
+    plans,
+    model: chosen?.model ?? null,
+    noModel: o['no-model'],
+    ...(preset ? { preset } : {}),
+    spentTodayUsd,
+    now,
+  });
+  process.stdout.write(o.json ? JSON.stringify(quote, null, 2) + '\n' : formatQuote(quote) + '\n');
+  return 0;
+}
+
 async function cmdDoctor(): Promise<number> {
   const major = Number(process.versions.node.split('.')[0]);
   process.stdout.write(`node ${process.versions.node}: ${major >= 20 ? 'ok' : 'needs 20+'}\n`);
@@ -383,7 +540,9 @@ async function cmdDoctor(): Promise<number> {
   } catch (e) {
     process.stdout.write(`chromium: missing (${(e as Error).message.split('\n')[0]}); run: npx playwright install chromium\n`);
   }
-  process.stdout.write(`model key: ${hasCredentials() ? 'set in the environment' : 'not set (live runs stop; --dry-run, lint, mutate --dry-run and tests work)'}\n`);
+  const ep = resolveEndpoint();
+  process.stdout.write(`model key: ${hasCredentials() ? 'set in the environment' : 'not set (live runs stop; --dry-run, --no-model, quote, lint and tests work)'}\n`);
+  process.stdout.write(`model endpoint: ${ep.endpoint}${ep.custom ? ` (custom host ${ep.host})` : ''}\n`);
   return major >= 20 && browserOk ? 0 : 3;
 }
 
@@ -407,6 +566,8 @@ export async function main(argv: string[], inject: Injected = {}): Promise<numbe
         return await cmdRun(args, o, inject);
       case 'mutate':
         return await cmdMutate(args, o, inject);
+      case 'quote':
+        return await cmdQuote(args, o, inject);
       case 'lint':
         return await cmdLint(args);
       case 'import':
@@ -431,7 +592,7 @@ export function errorExit(e: unknown): number {
     process.stderr.write(`miqyas: ${e.message}\n`);
     return 2;
   }
-  if (e instanceof EnvError || e instanceof BuildChangedError || e instanceof SourceError) {
+  if (e instanceof EnvError || e instanceof BudgetError || e instanceof BuildChangedError || e instanceof SourceError) {
     process.stderr.write(`miqyas: ${e.message}\n`);
     return 3;
   }
