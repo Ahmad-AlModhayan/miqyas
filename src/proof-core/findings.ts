@@ -2,6 +2,7 @@
 // Security & quality findings collected outside the assertion ledger (Layer 3: proof-core).
 // Includes always-on prompt-injection detection on rendered page content (#12) and shared Finding model for detectors (#13).
 
+import type { ProposedFinding } from '../agents/agent.js';
 import type { EvidenceNode, Observation, SnapNode, SurfaceFinding } from '../surfaces/session.js';
 import { toEvidenceNode } from '../surfaces/web/observe.js';
 
@@ -176,11 +177,65 @@ export function detectPromptInjection(
   return findings;
 }
 
-/** Deduplicate findings across observations/plans by category, severity, URL, and scrubbed evidence. */
+/** Stable screen key so model-proposed findings run at most once per distinct rendered view. */
+export function screenProposalKey(obs: Observation): string {
+  const sig = obs.nodes
+    .slice(0, 12)
+    .map((n) => `${n.role}:${n.name}`)
+    .join('|');
+  return `${obs.url}\n${obs.title}\n${sig}`;
+}
+
+/** Convert model-proposed findings into scrubbed Finding records, strictly keeping confirmed: false. */
+export function normalizeProposedFindings(
+  proposed: readonly ProposedFinding[],
+  obs: Observation,
+  hide: (t: string) => string,
+  context: { planId?: string; stepId?: string } = {},
+): Finding[] {
+  if (!proposed.length) return [];
+  const obsUrl = hide(obs.url);
+  return proposed.map((pf, i) => ({
+    id: `${pf.category}:${i + 1}`,
+    category: hide(pf.category),
+    title: hide(pf.title),
+    severity: pf.severity,
+    source: 'model',
+    confirmed: false,
+    url: pf.url !== undefined ? hide(pf.url) : obsUrl,
+    ...(context.planId ? { planId: context.planId } : {}),
+    ...(context.stepId ? { stepId: context.stepId } : {}),
+    evidence: hide(pf.evidence),
+    ...(pf.nodes.length
+      ? {
+          nodes: pf.nodes.map((n) => ({
+            ref: n.ref,
+            role: n.role,
+            name: hide(n.name),
+            ...(n.state !== undefined ? { state: hide(n.state) } : {}),
+            ...(n.testId !== undefined ? { testId: hide(n.testId) } : {}),
+            box: n.box,
+          })),
+        }
+      : {}),
+  }));
+}
+
+/** Deduplicate findings across observations/plans; model proposals stay unconfirmed unless corroborated by a code finding. */
 export function dedupeFindings(list: readonly Finding[]): Finding[] {
+  const confirmedCodeMaxRank = new Map<string, number>();
+  for (const f of list) {
+    if (f.source === 'code' && f.confirmed) {
+      const key = `${f.category}|${f.url ?? ''}`;
+      confirmedCodeMaxRank.set(key, Math.max(confirmedCodeMaxRank.get(key) ?? 0, SEVERITY_RANK[f.severity]));
+    }
+  }
   const seen = new Set<string>();
   const out: Finding[] = [];
-  for (const f of list) {
+  for (const raw of list) {
+    const maxRank = confirmedCodeMaxRank.get(`${raw.category}|${raw.url ?? ''}`) ?? 0;
+    const corroborated = raw.source === 'model' && !raw.confirmed && maxRank >= SEVERITY_RANK[raw.severity];
+    const f = corroborated ? { ...raw, confirmed: true } : raw;
     const k = `${f.category}|${f.severity}|${f.url ?? ''}|${f.evidence}`;
     if (seen.has(k)) continue;
     seen.add(k);

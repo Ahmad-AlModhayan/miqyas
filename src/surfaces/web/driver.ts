@@ -9,6 +9,8 @@ export const PLAYWRIGHT_VERSION: string = require('playwright/package.json').ver
 import type {
   ActTool,
   Check,
+  CrawlOptions,
+  CrawlResult,
   Locator,
   Observation,
   Probe,
@@ -20,8 +22,10 @@ import type {
   SurfaceSession,
   SurfaceSessionOptions,
 } from '../session.js';
+import { crawlWebApp, settleDom } from './crawler.js';
 import { attachWebDetectors } from './detectors.js';
 import { observeWithHandles, type ObserveOptions, type SnapshotWithHandles } from './observe.js';
+import { attachOriginIsolation } from './policy.js';
 import { originProxy } from './proxy.js';
 
 export const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
@@ -32,20 +36,7 @@ const QUIET_MS = 400;
 const OBSERVE_TRIES = 2;
 const MOVE_TOLERANCE_PX = 4;
 
-async function settle(page: Page, capMs = 2000, quietMs = QUIET_MS): Promise<void> {
-  await page.waitForLoadState('domcontentloaded').catch(() => {});
-  await page
-    .evaluate(
-      `new Promise((resolve) => {
-        let t = setTimeout(done, ${quietMs});
-        const cap = setTimeout(done, ${capMs});
-        const mo = new MutationObserver(() => { clearTimeout(t); t = setTimeout(done, ${quietMs}); });
-        mo.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
-        function done() { mo.disconnect(); clearTimeout(t); clearTimeout(cap); resolve(); }
-      })`,
-    )
-    .catch(() => {});
-}
+const settle = (page: Page, capMs = 2000, quietMs = QUIET_MS) => settleDom(page, capMs, quietMs);
 
 export interface NavTracker {
   idle(): Promise<string[]>;
@@ -123,33 +114,35 @@ export async function launch(headed = false, blockOtherOrigins = false): Promise
   return chromium.launch({ headless: !headed, ...(blockOtherOrigins ? { args: ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] } : {}) });
 }
 
-async function newContext(browser: Browser, opts: SurfaceSessionOptions): Promise<BrowserContext> {
+export async function createIsolatedContext(
+  browser: Browser,
+  opts: {
+    url: string;
+    viewport?: { width: number; height: number };
+    allowOtherOrigins?: boolean;
+    enforceSameOrigin?: boolean;
+  },
+): Promise<BrowserContext> {
   const base = { viewport: opts.viewport ?? DEFAULT_VIEWPORT, serviceWorkers: 'block' as const };
-  if (opts.allowOtherOrigins) return browser.newContext(base);
+  if (opts.allowOtherOrigins && !opts.enforceSameOrigin) return browser.newContext(base);
   const origin = new URL(opts.url).origin;
-  // The floor of the block. ctx.route and ctx.routeWebSocket hook the page, and a worker's WebSocket passes them
-  // both; a proxy sees every request the context makes, from the page, its frames and its workers. Chromium skips
-  // the proxy for loopback unless told '<-loopback>' (Playwright adds it too, unless an env var says not to).
+  // The floor of the block: proxy sits below pages, frames, and workers; route/routeWebSocket enforce the same policy above it.
   const proxy = await originProxy(origin);
   const ctx = await browser.newContext({ ...base, proxy: { server: proxy.server, bypass: '<-loopback>' } }).catch(async (e) => {
     await proxy.close();
     throw e;
   });
   ctx.on('close', () => void proxy.close());
-  await ctx.route('**/*', (route) => {
-    const u = route.request().url();
-    if (u.startsWith('data:') || u.startsWith('blob:') || new URL(u).origin === origin) return route.continue();
-    return route.abort('blockedbyclient');
-  });
-  // Above the proxy, the same rule in the page: a refused socket closes with 1008 and a reason. ws: and wss: are
-  // compared as http: and https:.
-  await ctx.routeWebSocket(/.*/, (ws) => {
-    const u = new URL(ws.url());
-    u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
-    if (u.origin === origin) return void ws.connectToServer();
-    return ws.close({ code: 1008, reason: `blocked: not ${origin}` });
-  });
+  await attachOriginIsolation(ctx, origin);
   return ctx;
+}
+
+async function newContext(browser: Browser, opts: SurfaceSessionOptions): Promise<BrowserContext> {
+  return createIsolatedContext(browser, {
+    url: opts.url,
+    ...(opts.viewport ? { viewport: opts.viewport } : {}),
+    ...(opts.allowOtherOrigins !== undefined ? { allowOtherOrigins: opts.allowOtherOrigins } : {}),
+  });
 }
 
 function playwrightLocator(page: Page, loc: Locator) {
@@ -209,9 +202,13 @@ async function evaluateCheck(
   return { pass: hit.length > 0, observation: hit.length ? `"${hit[0]!.name}" rendered` : `no rendered match of ${what} contains "${e.text}"`, nodes: hit.length ? hit : nodes };
 }
 
-/** Reach the probe's screen on a served build and measure it (mutation effectiveness check, SRS FR-M2). */
+/** Reach the probe's screen on a served build and measure it under full same-origin proxy isolation (FR-M2 / #14). */
 export async function measureProbe(browser: Browser, url: string, probe: Probe): Promise<Reading> {
-  const page = await browser.newPage();
+  const context = await createIsolatedContext(browser, { url, enforceSameOrigin: true });
+  const page = await context.newPage().catch(async (e) => {
+    await context.close().catch(() => {});
+    throw e;
+  });
   try {
     await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
     await settleLoad(page);
@@ -236,7 +233,8 @@ export async function measureProbe(browser: Browser, url: string, probe: Probe):
       { html: probe.html, rootAttrs: probe.rootAttrs, selector: probe.selector, measure: probe.measure },
     );
   } finally {
-    await page.close();
+    await page.close().catch(() => {});
+    await context.close().catch(() => {});
   }
 }
 
@@ -414,6 +412,19 @@ export async function openWebSurfaceDriver(opts: { headed?: boolean; allowOtherO
           await context.close().catch(() => {});
         },
       };
+    },
+    async crawl(crawlOpts: CrawlOptions): Promise<CrawlResult> {
+      return crawlWebApp(crawlOpts, {
+        openContext: (url, viewport) =>
+          createIsolatedContext(browser, {
+            url,
+            ...(viewport ? { viewport } : {}),
+            enforceSameOrigin: true,
+          }),
+        defaultViewport: DEFAULT_VIEWPORT,
+        navTimeoutMs: NAV_TIMEOUT_MS,
+        actionTimeoutMs: ACTION_TIMEOUT_MS,
+      });
     },
     async measureProbe(url: string, probe: Probe): Promise<Reading> {
       return measureProbe(browser, url, probe);

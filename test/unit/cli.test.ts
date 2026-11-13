@@ -315,4 +315,60 @@ describe('CLI exit codes', () => {
     ).toBe(2);
     expect(existsSync(badFailOnOut)).toBe(false);
   });
+
+  it('documents --crawl, --active, --allow-host, and --allow-writes in help text', async () => {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => {
+      chunks.push(String(c));
+      return true;
+    });
+    try {
+      expect(await main(['run', '--help'])).toBe(0);
+      const help = chunks.join('');
+      expect(help).toContain('--crawl');
+      expect(help).toContain('--active');
+      expect(help).toContain('--allow-host');
+      expect(help).toContain('--allow-writes');
+    } finally {
+      spy.mockRestore();
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    }
+  });
+
+  it('refuses --active on unverified non-test hosts and invalid crawl/write flag combinations with exit code 2 before creating --out', async () => {
+    const outPublic = path.join(tmp, 'out-public-active');
+    expect(await main(['run', good, '--url', 'https://victim.example/', '--active', '--no-model', '--out', outPublic])).toBe(2);
+    expect(existsSync(outPublic)).toBe(false);
+
+    const outBadToken = path.join(tmp, 'out-bad-token');
+    expect(
+      await main(
+        ['run', good, '--url', 'https://victim.example/', '--active', '--allow-host', 'victim.example', '--no-model', '--out', outBadToken],
+        {
+          hostPolicyDeps: {
+            spendDir: path.join(tmp, 'host-tokens-dir'),
+            fetchImpl: async () => new Response('not found', { status: 404 }),
+            resolveTxtImpl: async () => [],
+          },
+        },
+      ),
+    ).toBe(2);
+    expect(existsSync(outBadToken)).toBe(false);
+
+    const outWriteNoActive = path.join(tmp, 'out-write-no-active');
+    expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--allow-writes', '--no-model', '--out', outWriteNoActive])).toBe(2);
+    expect(existsSync(outWriteNoActive)).toBe(false);
+
+    const outCrawlOtherOrigin = path.join(tmp, 'out-crawl-other-origin');
+    expect(
+      await main(['run', '--crawl', '--url', 'http://127.0.0.1:9/', '--allow-other-origins', '--no-model', '--out', outCrawlOtherOrigin]),
+    ).toBe(2);
+    expect(existsSync(outCrawlOtherOrigin)).toBe(false);
+
+    const outBadMaxScreens = path.join(tmp, 'out-bad-max-screens');
+    expect(
+      await main(['run', '--crawl', '--max-screens', '0', '--url', 'http://127.0.0.1:9/', '--no-model', '--out', outBadMaxScreens]),
+    ).toBe(2);
+    expect(existsSync(outBadMaxScreens)).toBe(false);
+  });
 });

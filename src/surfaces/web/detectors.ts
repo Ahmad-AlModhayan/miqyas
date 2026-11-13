@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import type { BrowserContext, Page, Request, Response } from 'playwright';
 import type { SurfaceFinding, SurfaceFindingSeverity } from '../session.js';
+import { attachOriginIsolation } from './policy.js';
 
 const require = createRequire(import.meta.url);
 const AXE_MIN_JS = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
@@ -549,24 +550,19 @@ export function attachWebDetectors(
       if (!probePage) continue;
       let hitDetail = '';
       try {
-        await probePage.route('**/*', (route) => {
-          const reqUrl = route.request().url();
-          if (reqUrl.startsWith('data:') || reqUrl.startsWith('blob:')) return route.continue();
-          let targetHost = '';
-          let targetOrigin = '';
-          try {
-            const parsed = new URL(reqUrl);
-            targetHost = parsed.hostname;
-            targetOrigin = parsed.origin;
-          } catch {
-            return route.abort('blockedbyclient');
-          }
-          if (targetHost === CANARY_HOST) {
-            hitDetail = `navigated toward ${CANARY_HOST}`;
-            return route.abort('blockedbyclient');
-          }
-          if (targetOrigin === baseOrigin) return route.continue();
-          return route.abort('blockedbyclient');
+        await attachOriginIsolation(probePage, baseOrigin, {
+          onBeforeRequest: async (route, reqUrl) => {
+            try {
+              if (new URL(reqUrl).hostname === CANARY_HOST) {
+                hitDetail = `navigated toward ${CANARY_HOST}`;
+                await route.abort('blockedbyclient');
+                return true;
+              }
+            } catch {
+              // Let attachOriginIsolation fail closed on invalid URLs.
+            }
+            return false;
+          },
         });
         probePage.on('response', (res) => {
           if (hitDetail) return;

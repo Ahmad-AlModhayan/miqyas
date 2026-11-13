@@ -41,6 +41,8 @@ import { lintPlan, loadPlanFile, loadPlans, PlanError, resolvePlanFiles, seriali
 import { renderHuman, type Method, type RunReport } from '../proof-core/report.js';
 import { NO_SCRUB, parseScrubRules, scrubDir, scrubText, type ScrubRules } from '../scrub/scrub.js';
 import { openWebSurfaceDriver } from '../surfaces/web/driver.js';
+import { DEFAULT_CRAWL_DEPTH, DEFAULT_CRAWL_MAX_SCREENS, DEFAULT_CRAWL_RPS } from '../surfaces/web/crawler.js';
+import { HostPolicyError, verifyHostOwnership, type HostOwnershipOptions } from '../surfaces/web/policy.js';
 import { serveDir } from '../surfaces/web/server.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -54,7 +56,7 @@ class EnvError extends Error {}
 const HELP = `miqyas: AI testing that proves what it checked. PolyForm Shield 1.0.0.
 
 Usage:
-  miqyas run <plans...> --url <url> [options]      run plans (files or folders) against a web app
+  miqyas run [plans...] --url <url> [options]      run plans (and/or --crawl) against a web app
   miqyas mutate <plans...> --build <dir> --preset <name|file> [options]
                                                    break copies of a build on purpose, report the detection rate
   miqyas quote <plans...> [--tier <level>] [--model <id>] [--no-model] [--preset <name|file>]
@@ -83,6 +85,14 @@ Options:
   --scrub <name|file>    scrub rules applied to every text sent to the model
   --headed               show the browser
   --allow-other-origins  let the app load from other origins (blocked by default)
+  --crawl                explore same-origin reachable views safely (read-only, skips forms/destructive controls)
+  --max-screens <n>      maximum crawled screens (default ${DEFAULT_CRAWL_MAX_SCREENS})
+  --max-depth <n>        maximum crawl link depth (default ${DEFAULT_CRAWL_DEPTH})
+  --max-rps <n>          maximum crawl request rate (default ${DEFAULT_CRAWL_RPS} req/s)
+  --active               enable active probes (test hosts only, unless --allow-host + verified token)
+  --allow-host <host>    explicitly targeted non-test host requiring ownership token verification
+  --allow-writes         allow write/mutation active probes (requires --active and host authorization)
+  --host-token <token>   expected ownership token when verifying /.well-known/miqyas.txt or DNS _miqyas.<host>
   --strict               require cite/quoted-text match on every AI pass (reject model-only passes)
   --fail-on <severity>   fail run on confirmed findings >= severity (none | info | low | medium | high | critical; default none)
 
@@ -108,6 +118,14 @@ const OPTIONS = {
   check: { type: 'boolean', default: false },
   headed: { type: 'boolean', default: false },
   'allow-other-origins': { type: 'boolean', default: false },
+  crawl: { type: 'boolean', default: false },
+  'max-screens': { type: 'string' },
+  'max-depth': { type: 'string' },
+  'max-rps': { type: 'string' },
+  active: { type: 'boolean', default: false },
+  'allow-writes': { type: 'boolean', default: false },
+  'allow-host': { type: 'string' },
+  'host-token': { type: 'string' },
   strict: { type: 'boolean', default: false },
   'fail-on': { type: 'string' },
   build: { type: 'string' },
@@ -149,6 +167,7 @@ export interface Injected {
   now?: () => Date;
   spendGuard?: SpendGuard;
   quote?: RunQuote;
+  hostPolicyDeps?: Pick<HostOwnershipOptions, 'spendDir' | 'fetchImpl' | 'resolveTxtImpl'>;
 }
 
 function resolveCliRoute(o: Opts, requireReady: boolean): ResolvedRoute {
@@ -303,6 +322,27 @@ function failOnSetting(o: Opts): FailOnThreshold {
   }
 }
 
+function positiveIntOption(raw: string | undefined, fallback: number, flag: string): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new UsageError(`${flag} must be a positive integer`);
+  return n;
+}
+
+function nonNegativeIntOption(raw: string | undefined, fallback: number, flag: string): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) throw new UsageError(`${flag} must be a non-negative integer`);
+  return n;
+}
+
+function positiveNumberOption(raw: string | undefined, fallback: number, flag: string): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new UsageError(`${flag} must be a positive number`);
+  return n;
+}
+
 function checkLint(plans: Plan[]): void {
   const errors = plans.flatMap((p) => lintPlan(p).filter((i) => i.level === 'error').map((i) => `${p.source.file ?? p.id}: ${i.message}`));
   if (errors.length) throw new PlanError(errors.join('\n'));
@@ -315,12 +355,43 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
   } catch {
     throw new UsageError(`--url "${o.url}" is not a URL`);
   }
-  const plans = await loadPlans(args);
-  checkLint(plans);
+  if (o['allow-writes'] && !o.active) {
+    throw new UsageError('--allow-writes requires --active');
+  }
+  if ((o.crawl || o.active) && o['allow-other-origins']) {
+    throw new UsageError('--allow-other-origins cannot be used with --crawl or --active');
+  }
+  const maxScreens = positiveIntOption(o['max-screens'], DEFAULT_CRAWL_MAX_SCREENS, '--max-screens');
+  const maxDepth = nonNegativeIntOption(o['max-depth'], DEFAULT_CRAWL_DEPTH, '--max-depth');
+  const maxRps = positiveNumberOption(o['max-rps'], DEFAULT_CRAWL_RPS, '--max-rps');
+  if (o.active) {
+    await verifyHostOwnership({
+      url: o.url,
+      ...(o['allow-host'] ? { allowHost: o['allow-host'] } : {}),
+      active: true,
+      allowWrites: o['allow-writes'],
+      probeKind: o['allow-writes'] ? 'active-write' : 'active-read',
+      ...(o['host-token'] ? { expectedToken: o['host-token'] } : {}),
+      ...inject.hostPolicyDeps,
+    });
+  }
+  const plans = o.crawl && args.length === 0 ? [] : await loadPlans(args);
+  if (plans.length) checkLint(plans);
   const id = runId();
   const runDir = path.resolve(o.out ?? path.join('.miqyas', 'runs', id));
   const failOn = failOnSetting(o);
-  const settings = { concurrency: concurrency(o), allowOtherOrigins: o['allow-other-origins'], headed: o.headed, ...(o.strict ? { strict: true } : {}), ...(failOn !== 'none' ? { failOn } : {}) };
+  const settings = {
+    concurrency: concurrency(o),
+    allowOtherOrigins: o.crawl || o.active ? false : o['allow-other-origins'],
+    headed: o.headed,
+    ...(o.strict ? { strict: true } : {}),
+    ...(failOn !== 'none' ? { failOn } : {}),
+    ...(o.crawl ? { crawl: true, maxScreens, maxDepth, maxRps } : {}),
+    ...(o.active ? { active: true } : {}),
+    ...(o['allow-writes'] ? { allowWrites: true } : {}),
+    ...(o['allow-host'] ? { allowHost: o['allow-host'] } : {}),
+    ...(o['host-token'] ? { hostToken: o['host-token'] } : {}),
+  };
   // Credentials, pricing, quote, and cap confirmation run first so a refused start leaves no empty folder.
   const exec = await prepareExecution({ o, plans, runId: id, runDir, inject });
   const { rules: scrub, method: scrubMethod } = await scrubRules(o, 'scrub');
@@ -331,7 +402,7 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
       : o.replay
         ? ` (replay ${path.basename(o.replay)})`
         : ` with ${exec.agent?.info?.model}${exec.agent?.info?.endpointHost && exec.agent.info.provider !== 'anthropic' ? ` (${exec.agent.info.provider} @ ${exec.agent.info.endpointHost})` : ''}`;
-  if (!o.json) process.stderr.write(`miqyas: ${plans.length} plan(s) against ${o.url}${modeLabel}; run folder ${runDir}\n`);
+  if (!o.json) process.stderr.write(`miqyas: ${plans.length} plan(s)${o.crawl ? ' + crawl' : ''} against ${o.url}${modeLabel}; run folder ${runDir}\n`);
 
   const driver = await openWebSurfaceDriver({ headed: settings.headed, allowOtherOrigins: settings.allowOtherOrigins });
   try {
@@ -348,6 +419,7 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
       scrub,
       scrubMethod,
       settings,
+      ...(inject.hostPolicyDeps ? { hostPolicyDeps: inject.hostPolicyDeps } : {}),
       onPlan: (r) => !o.json && process.stderr.write(`  ${r.planId}: ${o['dry-run'] ? dryRunStatus(r.error, r.verdict) : r.verdict} (${(r.durationMs / 1000).toFixed(1)} s)\n`),
     });
     process.stdout.write(o.json ? JSON.stringify(result.report, null, 2) + '\n' : renderHuman(result.report) + `\nReport: ${path.join(runDir, 'report.md')}\n`);
@@ -662,7 +734,7 @@ export async function main(argv: string[], inject: Injected = {}): Promise<numbe
 
 /** Print a command's error and return its exit code: 2 for usage and plan errors, 3 for the environment and the rest. */
 export function errorExit(e: unknown): number {
-  if (e instanceof UsageError || e instanceof RouteUsageError || e instanceof PlanError) {
+  if (e instanceof UsageError || e instanceof RouteUsageError || e instanceof PlanError || e instanceof HostPolicyError) {
     process.stderr.write(`miqyas: ${e.message}\n`);
     return 2;
   }

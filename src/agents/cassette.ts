@@ -19,7 +19,10 @@ import {
   type JudgeContext,
   type JudgeOutcome,
   type ModelInfo,
+  type ProposeFindingsContext,
+  type ProposedFinding,
   type ReplayInfo,
+  type StepHistory,
   type Usage,
 } from './agent.js';
 import type { Tier } from './models.js';
@@ -28,10 +31,13 @@ import {
   ACT_TOOL_SPECS,
   JUDGE_SYSTEM,
   JUDGE_TOOL_SPECS,
+  PROPOSE_SYSTEM,
+  PROPOSE_TOOL_SPECS,
   actInitialText,
   captureText,
   isPlainObject,
   judgeInitialText,
+  proposeInitialText,
   selectActCandidates,
   selectJudgeCandidates,
 } from './protocol.js';
@@ -43,6 +49,7 @@ export const DEFAULT_MAX_DHASH_DISTANCE = 8;
 
 const ACT_PROMPT_DIGEST = sha256Hex(JSON.stringify({ system: ACT_SYSTEM, tools: ACT_TOOL_SPECS }));
 const JUDGE_PROMPT_DIGEST = sha256Hex(JSON.stringify({ system: JUDGE_SYSTEM, tools: JUDGE_TOOL_SPECS }));
+const PROPOSE_PROMPT_DIGEST = sha256Hex(JSON.stringify({ system: PROPOSE_SYSTEM, tools: PROPOSE_TOOL_SPECS }));
 const DHASH_RE = /^[0-9a-f]{16}$/i;
 
 export class ReplayMissError extends AgentError {}
@@ -68,13 +75,14 @@ export type CassetteResponse =
   | { type: 'execute'; action: ActTool }
   | { type: 'act_return'; outcome: ActOutcome }
   | { type: 'look_again'; seconds: number }
-  | { type: 'judge_return'; outcome: JudgeOutcome };
+  | { type: 'judge_return'; outcome: JudgeOutcome }
+  | { type: 'propose_return'; findings: ProposedFinding[] };
 
 export interface CassetteCallEntry {
   type: 'call';
   key: string;
   occurrence: number;
-  kind: 'act' | 'judge';
+  kind: 'act' | 'judge' | 'propose';
   tier: Tier | null;
   planId: string;
   stepId: string;
@@ -201,6 +209,34 @@ class RefNormalizer {
       evidenceRefs: outcome.evidenceRefs.map((r) => this.denormalizeRef(r)),
     };
   }
+
+  normalizeProposedFindings(list: ProposedFinding[], scrub: (s: string) => string): ProposedFinding[] {
+    return list.map((f) => ({
+      ...f,
+      category: this.normalizeText(f.category, scrub),
+      title: this.normalizeText(f.title, scrub),
+      ...(f.url !== undefined ? { url: this.normalizeText(f.url, scrub) } : {}),
+      evidence: this.normalizeText(f.evidence, scrub),
+      nodes: f.nodes.map((n) => ({
+        ...n,
+        ref: this.normalizeRef(n.ref),
+        name: this.normalizeText(n.name, scrub),
+        ...(n.state !== undefined ? { state: this.normalizeText(n.state, scrub) } : {}),
+        ...(n.testId !== undefined ? { testId: this.normalizeText(n.testId, scrub) } : {}),
+      })),
+    }));
+  }
+
+  denormalizeProposedFindings(list: ProposedFinding[], obs: Observation): ProposedFinding[] {
+    return list.map((f) => ({
+      ...f,
+      title: this.denormalizeText(f.title),
+      evidence: this.denormalizeText(f.evidence),
+      url: obs.url,
+      screenshotCapture: obs.capture,
+      nodes: f.nodes.map((n) => ({ ...n, ref: this.denormalizeRef(n.ref) })),
+    }));
+  }
 }
 
 interface NormalizedTurn {
@@ -270,19 +306,38 @@ function buildLookAgainTurn(seconds: number, obs: Observation, step: JudgeContex
   };
 }
 
+function buildProposeTurn(ctx: ProposeFindingsContext, norm: RefNormalizer): NormalizedTurn {
+  return {
+    obsTexts: [
+      norm.normalizeText(
+        captureText(`Capture ${ctx.observation.capture}, screen under review:`, ctx.observation, ctx.scrub, ctx.observation.nodes),
+        ctx.scrub,
+      ),
+    ],
+    images: [imageFingerprint(ctx.observation)],
+  };
+}
+
 function computeCanonicalKey(opts: {
-  kind: 'act' | 'judge';
+  kind: 'act' | 'judge' | 'propose';
   info: Pick<ModelInfo, 'provider' | 'model' | 'tier' | 'effort'> | null;
-  ctx: Pick<ActContext, 'plan' | 'step' | 'history' | 'scrub'>;
+  ctx: {
+    plan: { id: string; name: string };
+    step: { id: string; text: string; type?: string };
+    history?: StepHistory[];
+    scrub(text: string): string;
+  };
   norm: RefNormalizer;
   initialPrompt: string;
   turns: NormalizedTurn[];
 }): { key: string; requestText: string; images: ImageFingerprint[] } {
+  const promptDigest =
+    opts.kind === 'act' ? ACT_PROMPT_DIGEST : opts.kind === 'judge' ? JUDGE_PROMPT_DIGEST : PROPOSE_PROMPT_DIGEST;
   const payload = {
     cassetteSchema: CASSETTE_SCHEMA,
     normaliserVersion: NORMALISER_VERSION,
     kind: opts.kind,
-    promptDigest: opts.kind === 'act' ? ACT_PROMPT_DIGEST : JUDGE_PROMPT_DIGEST,
+    promptDigest,
     provider: opts.info?.provider ?? 'scripted',
     model: opts.info?.model ?? 'unknown',
     tier: opts.info?.tier ?? null,
@@ -290,9 +345,9 @@ function computeCanonicalKey(opts: {
     planId: opts.ctx.plan.id,
     planName: opts.norm.normalizeText(opts.ctx.plan.name, opts.ctx.scrub),
     stepId: opts.ctx.step.id,
-    stepType: opts.ctx.step.type,
+    stepType: opts.ctx.step.type ?? 'propose',
     stepText: opts.norm.normalizeText(opts.ctx.step.text, opts.ctx.scrub),
-    history: opts.ctx.history.map((h) => ({
+    history: (opts.ctx.history ?? []).map((h) => ({
       stepId: h.stepId,
       type: h.type,
       text: opts.norm.normalizeText(h.text, opts.ctx.scrub),
@@ -339,6 +394,21 @@ function isValidResponse(res: unknown): res is CassetteResponse {
       return typeof res.seconds === 'number' && Number.isFinite(res.seconds) && res.seconds > 0;
     case 'judge_return':
       return isPlainObject(res.outcome) && (res.outcome.verdict === 'pass' || res.outcome.verdict === 'fail' || res.outcome.verdict === 'none');
+    case 'propose_return':
+      return (
+        Array.isArray(res.findings) &&
+        res.findings.every(
+          (f) =>
+            isPlainObject(f) &&
+            typeof f.category === 'string' &&
+            typeof f.title === 'string' &&
+            typeof f.severity === 'string' &&
+            (f.url === undefined || typeof f.url === 'string') &&
+            typeof f.evidence === 'string' &&
+            Array.isArray(f.nodes) &&
+            typeof f.screenshotCapture === 'number',
+        )
+      );
     default:
       return false;
   }
@@ -354,7 +424,7 @@ function validateCallEntry(cassettePath: string, lineNo: number, raw: unknown): 
     typeof raw.occurrence !== 'number' ||
     !Number.isInteger(raw.occurrence) ||
     raw.occurrence < 0 ||
-    (raw.kind !== 'act' && raw.kind !== 'judge') ||
+    (raw.kind !== 'act' && raw.kind !== 'judge' && raw.kind !== 'propose') ||
     typeof raw.planId !== 'string' ||
     typeof raw.stepId !== 'string' ||
     typeof raw.turn !== 'number' ||
@@ -418,8 +488,8 @@ export class RecordingAgent implements Agent {
   }
 
   private recordTurn(opts: {
-    kind: 'act' | 'judge';
-    ctx: Pick<ActContext, 'plan' | 'step' | 'rescan'>;
+    kind: 'act' | 'judge' | 'propose';
+    ctx: { plan: { id: string }; step: { id: string }; rescan(text: string): string[] };
     turn: number;
     canonical: { key: string; requestText: string; images: ImageFingerprint[] };
     response: CassetteResponse;
@@ -488,6 +558,22 @@ export class RecordingAgent implements Agent {
 
     this.recordTurn({ kind: 'judge', ctx, turn, canonical: current, response: { type: 'judge_return', outcome: norm.normalizeJudgeOutcome(outcome, ctx.scrub) } });
     return outcome;
+  }
+
+  async proposeFindings(ctx: ProposeFindingsContext): Promise<ProposedFinding[]> {
+    const norm = new RefNormalizer();
+    const initialPrompt = norm.normalizeText(proposeInitialText(ctx), ctx.scrub);
+    const turns: NormalizedTurn[] = [buildProposeTurn(ctx, norm)];
+    const canonical = computeCanonicalKey({ kind: 'propose', info: this.inner.info, ctx, norm, initialPrompt, turns });
+    const findings = this.inner.proposeFindings ? await this.inner.proposeFindings(ctx) : [];
+    this.recordTurn({
+      kind: 'propose',
+      ctx,
+      turn: 0,
+      canonical,
+      response: { type: 'propose_return', findings: norm.normalizeProposedFindings(findings, ctx.scrub) },
+    });
+    return findings;
   }
 }
 
@@ -591,8 +677,8 @@ export class ReplayAgent implements Agent {
   }
 
   private lookup(opts: {
-    kind: 'act' | 'judge';
-    ctx: Pick<ActContext, 'plan' | 'step' | 'rescan'>;
+    kind: 'act' | 'judge' | 'propose';
+    ctx: { plan: { id: string }; step: { id: string }; rescan(text: string): string[] };
     turn: number;
     canonical: { key: string; requestText: string; images: ImageFingerprint[] };
   }): CassetteCallEntry {
@@ -684,5 +770,17 @@ export class ReplayAgent implements Agent {
       }
       throw new ReplayMissError(`unexpected cassette response type "${entry.response.type}" in judge`);
     }
+  }
+
+  async proposeFindings(ctx: ProposeFindingsContext): Promise<ProposedFinding[]> {
+    const norm = new RefNormalizer();
+    const initialPrompt = norm.normalizeText(proposeInitialText(ctx), ctx.scrub);
+    const turns: NormalizedTurn[] = [buildProposeTurn(ctx, norm)];
+    const canonical = computeCanonicalKey({ kind: 'propose', info: this.info, ctx, norm, initialPrompt, turns });
+    const entry = this.lookup({ kind: 'propose', ctx, turn: 0, canonical });
+    if (entry.response.type === 'propose_return') {
+      return norm.denormalizeProposedFindings(entry.response.findings, ctx.observation);
+    }
+    throw new ReplayMissError(`unexpected cassette response type "${entry.response.type}" in propose`);
   }
 }

@@ -145,6 +145,34 @@ export interface SurfaceSession {
   close(): Promise<void>;
 }
 
+export interface CrawlOptions {
+  url: string;
+  maxScreens?: number;
+  maxDepth?: number;
+  maxRps?: number;
+  viewport?: { width: number; height: number };
+  hide?: (text: string) => string;
+  knownSecrets?: RegExp;
+  navTimeoutMs?: number;
+  actionTimeoutMs?: number;
+  onScreen?: (observation: Observation) => Promise<void> | void;
+}
+
+export interface CrawlScreen {
+  url: string;
+  depth: number;
+  title: string;
+  trigger?: string;
+  observation: Observation;
+}
+
+export interface CrawlResult {
+  screens: CrawlScreen[];
+  skippedControls: number;
+  skippedOffOriginLinks: number;
+  haltedReason?: 'http-429' | 'http-503' | 'captcha-or-waf' | 'max-screens';
+}
+
 /** Pluggable surface driver (Web/Playwright, future CLI, desktop, API, industrial workers). */
 export interface SurfaceDriver {
   readonly surface: string;
@@ -156,6 +184,7 @@ export interface SurfaceDriver {
     actionTimeoutMs: number;
   };
   openSession(opts: SurfaceSessionOptions): Promise<SurfaceSession>;
+  crawl?(opts: CrawlOptions): Promise<CrawlResult>;
   measureProbe?(url: string, probe: Probe): Promise<Reading>;
   close(): Promise<void>;
 }

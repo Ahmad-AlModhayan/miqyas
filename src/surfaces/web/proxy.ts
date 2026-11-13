@@ -6,6 +6,7 @@
 import { createServer, request } from 'node:http';
 import { connect } from 'node:net';
 import type { Duplex } from 'node:stream';
+import { bareHost, isAllowedConnectHostPort, isAllowedHttpProxyUrl, tryParseUrl } from './policy.js';
 
 export interface OriginProxy {
   /** For Playwright's `proxy.server`. */
@@ -13,20 +14,6 @@ export interface OriginProxy {
   close: () => Promise<void>;
 }
 
-function parse(u: string): URL | null {
-  try {
-    return new URL(u);
-  } catch {
-    return null;
-  }
-}
-
-/** host:port, with the scheme's default port; ws: and wss: count as http: and https:. */
-function hostPort(u: URL): string {
-  return `${u.hostname.toLowerCase()}:${u.port || (u.protocol === 'https:' || u.protocol === 'wss:' ? '443' : '80')}`;
-}
-
-const bare = (host: string) => host.replace(/^\[|\]$/g, '');
 /** Hop-by-hop headers (RFC 9110 7.6.1), plus any the Connection header names: one hop's, never forwarded. */
 const HOP = ['connection', 'keep-alive', 'proxy-connection', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'];
 function endToEnd(raw: string[]): string[] {
@@ -47,10 +34,11 @@ export function originProxy(origin: string): Promise<OriginProxy> {
     s.on('close', () => socks.delete(s));
   };
   const srv = createServer((req, res) => {
-    const u = parse(req.url ?? '');
-    if (!u || u.origin !== allowed.origin) return void res.writeHead(403, { 'content-length': '0' }).end();
+    const rawUrl = req.url ?? '';
+    const u = tryParseUrl(rawUrl);
+    if (!u || !isAllowedHttpProxyUrl(rawUrl, allowed.origin)) return void res.writeHead(403, { 'content-length': '0' }).end();
     // agent: false, so each upstream socket closes after its response and none outlives close().
-    const up = request({ host: bare(u.hostname), port: u.port || 80, method: req.method, path: u.pathname + u.search, headers: endToEnd(req.rawHeaders), agent: false }, (r) => {
+    const up = request({ host: bareHost(u.hostname), port: u.port || 80, method: req.method, path: u.pathname + u.search, headers: endToEnd(req.rawHeaders), agent: false }, (r) => {
       res.writeHead(r.statusCode ?? 502, endToEnd(r.rawHeaders));
       r.pipe(res);
       // An upstream reset mid-body: drop the client's response too, or it waits for the rest forever.
@@ -64,9 +52,10 @@ export function originProxy(origin: string): Promise<OriginProxy> {
   });
   srv.on('connection', keep);
   srv.on('connect', (req, sock: Duplex, head: Buffer) => {
-    const u = parse(`http://${req.url ?? ''}`);
-    if (!u || hostPort(u) !== hostPort(allowed)) return refuse(sock);
-    const up = connect(Number(u.port || 80), bare(u.hostname), () => {
+    const authority = req.url ?? '';
+    const u = tryParseUrl(`http://${authority}`);
+    if (!u || !isAllowedConnectHostPort(authority, allowed.origin)) return refuse(sock);
+    const up = connect(Number(u.port || 80), bareHost(u.hostname), () => {
       sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       if (head.length) up.write(head);
       up.pipe(sock);
