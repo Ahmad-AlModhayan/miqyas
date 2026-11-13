@@ -36,6 +36,7 @@
     "spend": { "$ref": "#/$defs/spend" },
     "method": { "$ref": "#/$defs/method" },
     "screenshots": { "$ref": "#/$defs/screenshots" },
+    "crawl": { "$ref": "#/$defs/crawlSummary" },
     "plans": { "type": "array", "items": { "$ref": "#/$defs/planResult" } },
     "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
   },
@@ -176,7 +177,14 @@
             "allowOtherOrigins": { "type": "boolean" },
             "headed": { "type": "boolean" },
             "strict": { "type": "boolean" },
-            "failOn": { "enum": ["none", "info", "low", "medium", "high", "critical"] }
+            "failOn": { "enum": ["none", "info", "low", "medium", "high", "critical"] },
+            "crawl": { "type": "boolean" },
+            "maxScreens": { "type": "integer", "minimum": 1 },
+            "maxDepth": { "type": "integer", "minimum": 0 },
+            "maxRps": { "type": "number", "exclusiveMinimum": 0 },
+            "active": { "type": "boolean" },
+            "allowWrites": { "type": "boolean" },
+            "allowHost": { "type": "string" }
           }
         },
         "preset": { "description": "The mutation preset's name; null for a plain run.", "type": ["string", "null"] },
@@ -283,6 +291,17 @@
         "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
         "error": { "type": "string" },
         "durationMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "crawlSummary": {
+      "type": "object",
+      "required": ["screensVisited", "skippedControls", "skippedOffOriginLinks"],
+      "additionalProperties": false,
+      "properties": {
+        "screensVisited": { "$ref": "#/$defs/count" },
+        "skippedControls": { "$ref": "#/$defs/count" },
+        "skippedOffOriginLinks": { "$ref": "#/$defs/count" },
+        "haltedReason": { "enum": ["http-429", "http-503", "captcha-or-waf", "max-screens"] }
       }
     },
     "finding": {

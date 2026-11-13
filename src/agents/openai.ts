@@ -15,15 +15,19 @@ import {
   type ModelInfo,
   type Outgoing,
   type PayloadEntry,
+  type ProposeFindingsContext,
+  type ProposedFinding,
   type Usage,
 } from './agent.js';
 import { sanitizeEndpointUrl } from './models.js';
 import {
   ACT_SYSTEM,
   JUDGE_SYSTEM,
+  PROPOSE_SYSTEM,
   actInitialText,
   buildActToolSpecs,
   buildJudgeToolSpecs,
+  buildProposeToolSpecs,
   captureText,
   croppedPngBase64,
   isCandidateAction,
@@ -31,7 +35,9 @@ import {
   judgeInitialText,
   nonCandidateRefMessage,
   parseLookAgainSeconds,
+  parseProposedFindings,
   parseVerdictInput,
+  proposeInitialText,
   recordAgentUsage,
   restrictJudgeEvidence,
   selectActCandidates,
@@ -168,6 +174,7 @@ export class OpenAIAgent implements Agent {
   ): Promise<{ content: string | null; toolCalls: ChatToolCall[] }> {
     const newest = measureMessages(newestMessages);
     const total = measureMessages(messages);
+    const bucket = kind === 'propose' ? 'findings' : 'assert';
     gateCall(
       {
         kind,
@@ -175,7 +182,7 @@ export class OpenAIAgent implements Agent {
         info: this.info,
         log: this.opts.log,
         spend: this.opts.spend,
-        bucket: 'assert',
+        bucket,
         maxTokens: DEFAULT_MAX_TOKENS,
         promptChars: total.text.length,
         promptImages: total.images,
@@ -243,7 +250,7 @@ export class OpenAIAgent implements Agent {
       inputTokens: data.usage.prompt_tokens,
       outputTokens: data.usage.completion_tokens,
       spend: this.opts.spend,
-      bucket: 'assert',
+      bucket,
     });
 
     if (choice.finish_reason === 'content_filter') throw new AgentError('the model declined the request');
@@ -426,5 +433,29 @@ export class OpenAIAgent implements Agent {
       pendingNewest = added;
     }
     return { verdict: 'none', reason: 'the judge did not record a verdict' };
+  }
+
+  /** Inspect one screen capture with a single bounded call under the 25% findings budget bucket (FR-B10). */
+  async proposeFindings(ctx: ProposeFindingsContext): Promise<ProposedFinding[]> {
+    const shownRefs = new Set(ctx.observation.nodes.map((n) => n.ref));
+    const tools = toOpenAITools(buildProposeToolSpecs([...shownRefs]));
+    const userMsg: ChatMessage = {
+      role: 'user',
+      content: [
+        { type: 'text', text: proposeInitialText(ctx) },
+        ...captureParts(`Capture ${ctx.observation.capture}, screen under review:`, ctx.observation, ctx.scrub, ctx.observation.nodes),
+      ],
+    };
+    const messages: ChatMessage[] = [{ role: 'system', content: PROPOSE_SYSTEM }, userMsg];
+    const reply = await this.call('propose', ctx, tools, messages, [userMsg]);
+    const call = reply.toolCalls.find((tc) => tc.function.name === 'propose_findings');
+    if (!call) return [];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(call.function.arguments || '{}');
+    } catch {
+      return [];
+    }
+    return parseProposedFindings(parsed, ctx.observation, shownRefs, ctx.scrub);
   }
 }

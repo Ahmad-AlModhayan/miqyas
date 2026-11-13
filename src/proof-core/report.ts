@@ -42,6 +42,13 @@ export interface Method {
     headed: boolean;
     strict?: boolean;
     failOn?: FailOnThreshold;
+    crawl?: boolean;
+    maxScreens?: number;
+    maxDepth?: number;
+    maxRps?: number;
+    active?: boolean;
+    allowWrites?: boolean;
+    allowHost?: string;
   };
   /** The mutation preset; null for a plain run. */
   preset: string | null;
@@ -102,6 +109,13 @@ export function buildSpendReport(opts: {
   };
 }
 
+export interface CrawlReportSummary {
+  screensVisited: number;
+  skippedControls: number;
+  skippedOffOriginLinks: number;
+  haltedReason?: 'http-429' | 'http-503' | 'captcha-or-waf' | 'max-screens';
+}
+
 export interface RunReport {
   tool: 'miqyas';
   version: string;
@@ -118,6 +132,7 @@ export interface RunReport {
   spend?: SpendReport;
   method: Method;
   screenshots: typeof SCREENSHOTS;
+  crawl?: CrawlReportSummary;
   plans: PlanResult[];
   findings?: Finding[];
 }
@@ -133,6 +148,7 @@ export function buildReport(input: {
   spend?: SpendReport;
   method: Method;
   plans: PlanResult[];
+  crawl?: CrawlReportSummary;
   findings?: Finding[];
   failOn?: FailOnThreshold;
 }): RunReport {
@@ -148,7 +164,11 @@ export function buildReport(input: {
     totals.modelOnly = (totals.modelOnly ?? 0) + (p.counts.modelOnly ?? 0);
   }
   const failOn = input.failOn ?? input.method.settings.failOn;
-  const ledgerVerdict = runVerdict(input.plans);
+  const crawlHaltedEarly = Boolean(input.crawl?.haltedReason && input.crawl.haltedReason !== 'max-screens');
+  const ledgerVerdict =
+    input.plans.length === 0 && input.method.settings.crawl
+      ? (crawlHaltedEarly ? 'fail' : 'pass')
+      : runVerdict(input.plans);
   const failedByFindings =
     !input.dryRun &&
     ledgerVerdict === 'pass' &&
@@ -162,12 +182,13 @@ export function buildReport(input: {
     target: { url: input.url },
     dryRun: input.dryRun,
     model: input.model,
-    verdict: input.dryRun ? 'dry_run' : failedByFindings ? 'fail' : ledgerVerdict,
+    verdict: input.dryRun ? 'dry_run' : crawlHaltedEarly || failedByFindings ? 'fail' : ledgerVerdict,
     totals,
     usage: input.usage,
     ...(input.spend ? { spend: input.spend } : {}),
     method: input.method,
     screenshots: SCREENSHOTS,
+    ...(input.crawl ? { crawl: input.crawl } : {}),
     plans: input.plans,
     ...(input.findings?.length ? { findings: input.findings } : {}),
   };
@@ -255,10 +276,22 @@ export function renderMarkdown(r: RunReport): string {
     }
     lines.push('');
   }
+  if (r.crawl) {
+    lines.push(
+      '## Crawl',
+      '',
+      `- Screens visited: ${r.crawl.screensVisited}`,
+      `- Controls skipped (forms / destructive): ${r.crawl.skippedControls}`,
+      `- Off-origin links skipped: ${r.crawl.skippedOffOriginLinks}`,
+      ...(r.crawl.haltedReason ? [`- Halted: ${cell(r.crawl.haltedReason)}`] : []),
+      '',
+    );
+  }
   if (r.findings?.length) {
     lines.push('## Findings', '', '| ID | Severity | Category | Source | URL | Evidence |', '|---|---|---|---|---|---|');
     for (const f of r.findings) {
-      lines.push(`| ${cell(f.id)} | ${f.severity} | ${cell(f.category)} | ${f.source} | ${cell(f.url ?? '')} | ${cell(f.evidence)} |`);
+      const sourceLabel = `${f.source}${f.confirmed ? '' : ' (unconfirmed)'}`;
+      lines.push(`| ${cell(f.id)} | ${f.severity} | ${cell(f.category)} | ${sourceLabel} | ${cell(f.url ?? '')} | ${cell(f.evidence)} |`);
     }
     lines.push('');
   }
@@ -290,7 +323,7 @@ export function renderMethod(m: Method): string[] {
     `| Versions | Miqyas ${v.miqyas}, Node ${v.node}, Playwright ${v.playwright}, Chromium ${v.browser ?? 'not launched'} |`,
     `| OS | ${m.os.platform} ${m.os.release} (${m.os.arch}) |`,
     `| Model | ${m.model ? formatMethodModel(m.model) : 'none (dry run)'} |`,
-    `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'}${s.strict ? ', strict' : ''}${s.failOn && s.failOn !== 'none' ? `, fail-on ${s.failOn}` : ''} |`,
+    `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'}${s.strict ? ', strict' : ''}${s.failOn && s.failOn !== 'none' ? `, fail-on ${s.failOn}` : ''}${s.crawl ? `, crawl (screens ${s.maxScreens ?? 50}, depth ${s.maxDepth ?? 3}, ${s.maxRps ?? 2} req/s)` : ''}${s.active ? `, active${s.allowWrites ? ' + writes' : ''}${s.allowHost ? ` (allow-host ${cell(s.allowHost)})` : ''}` : ''} |`,
     `| Timeouts | plan ${t.planMs / 1000} s, navigation ${t.navigationMs / 1000} s, action ${t.actionMs / 1000} s |`,
     `| Preset | ${m.preset ? cell(m.preset) : 'none'} |`,
     `| Scrub rules | ${m.scrub.file ? `${cell(m.scrub.file)}, SHA-256 \`${m.scrub.sha256}\`, ${m.scrub.terms} term(s)` : 'none'} |`,
@@ -316,6 +349,9 @@ export function renderHuman(r: RunReport): string {
   }
   const t = r.totals;
   const modelOnlyNote = (t.modelOnly ?? 0) > 0 ? ` (${t.modelOnly} model-only)` : '';
+  const crawlNote = r.crawl
+    ? ` Crawl: ${r.crawl.screensVisited} screen(s)${r.crawl.haltedReason ? ` (halted: ${r.crawl.haltedReason})` : ''}.`
+    : '';
   const findingsCount = r.findings?.length ?? 0;
   const triggeredCount = findingsExceedThreshold(r.findings ?? [], r.method.settings.failOn).length;
   const findingsNote = findingsCount
@@ -325,7 +361,7 @@ export function renderHuman(r: RunReport): string {
   out.push(
     r.dryRun
       ? `DRY RUN: ${t.plans} plans, ${t.assertions} assertions resolved; nothing was judged.`
-      : `${MARK[r.verdict]}: ${t.plansPassed}/${t.plans} plans, ${t.passed}/${t.assertions} assertions with a recorded pass${modelOnlyNote}.${findingsNote}`,
+      : `${MARK[r.verdict]}: ${t.plansPassed}/${t.plans} plans, ${t.passed}/${t.assertions} assertions with a recorded pass${modelOnlyNote}.${crawlNote}${findingsNote}`,
   );
   return out.join('\n');
 }

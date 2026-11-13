@@ -2,7 +2,7 @@
 // The agent interface: a provider carries out action steps (act) and judges assertions (judge). Providers are
 // pluggable; Anthropic is the default. The runner owns the browser; agents only see observations and call tools.
 
-import type { ActTool, Check, Locator, Observation } from '../surfaces/session.js';
+import type { ActTool, Check, EvidenceNode, Locator, Observation } from '../surfaces/session.js';
 import { AgentError, type Tier } from './models.js';
 import type { SpendBucket, SpendGuard } from './spend.js';
 
@@ -94,18 +94,40 @@ export type JudgeOutcome =
   | { verdict: 'pass' | 'fail'; observation: string; evidenceRefs: string[] }
   | { verdict: 'none'; reason: string };
 
+export interface ProposeFindingsContext {
+  screenKey: string;
+  plan: { id: string; name: string };
+  step: { id: string; text: string };
+  observation: Observation;
+  scrub(text: string): string;
+  rescan(text: string): string[];
+  signal?: AbortSignal;
+}
+
+export interface ProposedFinding {
+  category: string;
+  title: string;
+  severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
+  confirmed: false;
+  url?: string;
+  evidence: string;
+  nodes: EvidenceNode[];
+  screenshotCapture: number;
+}
+
 export interface Agent {
   readonly info: ModelInfo | null;
   readonly usage: Usage;
   readonly limits?: { maxTokens: number; maxTurns: number };
   act(ctx: ActContext): Promise<ActOutcome>;
   judge(ctx: JudgeContext): Promise<JudgeOutcome>;
+  proposeFindings?(ctx: ProposeFindingsContext): Promise<ProposedFinding[]>;
 }
 
 /** One line of payloads.jsonl: what one model call sent. */
 export interface PayloadEntry {
   at: string;
-  kind: 'act' | 'judge';
+  kind: 'act' | 'judge' | 'propose';
   planId: string;
   stepId: string;
   provider: string;
@@ -127,8 +149,8 @@ export interface Outgoing {
 }
 
 export interface CallGate {
-  kind: 'act' | 'judge';
-  ctx: Pick<ActContext, 'plan' | 'step' | 'rescan' | 'signal'>;
+  kind: 'act' | 'judge' | 'propose';
+  ctx: { plan: { id: string; name: string }; step: { id: string }; rescan(text: string): string[]; signal?: AbortSignal };
   info: ModelInfo;
   log?: ((e: PayloadEntry) => void) | undefined;
   spend?: SpendGuard | undefined;

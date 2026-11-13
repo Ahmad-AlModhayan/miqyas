@@ -17,6 +17,8 @@ import {
   type ModelInfo,
   type Outgoing,
   type PayloadEntry,
+  type ProposeFindingsContext,
+  type ProposedFinding,
   type Usage,
 } from './agent.js';
 import {
@@ -31,16 +33,20 @@ import {
 import {
   ACT_SYSTEM,
   JUDGE_SYSTEM,
+  PROPOSE_SYSTEM,
   actInitialText,
   buildActToolSpecs,
   buildJudgeToolSpecs,
+  buildProposeToolSpecs,
   captureText,
   croppedPngBase64,
   isCandidateAction,
   judgeInitialText,
   nonCandidateRefMessage,
   parseLookAgainSeconds,
+  parseProposedFindings,
   parseVerdictInput,
+  proposeInitialText,
   recordAgentUsage,
   restrictJudgeEvidence,
   selectActCandidates,
@@ -143,6 +149,7 @@ export class AnthropicAgent implements Agent {
       promptChars += o.text.length;
       promptImages += o.images;
     }
+    const bucket = kind === 'propose' ? 'findings' : 'assert';
     // Re-scan, pessimistic spend check, and payload log BEFORE sending. Server-side fallback is disabled.
     gateCall(
       {
@@ -151,7 +158,7 @@ export class AnthropicAgent implements Agent {
         info: this.info,
         log: this.opts.log,
         spend: this.opts.spend,
-        bucket: 'assert',
+        bucket,
         maxTokens: MAX_TOKENS,
         promptChars,
         promptImages,
@@ -190,7 +197,7 @@ export class AnthropicAgent implements Agent {
       inputTokens: input,
       outputTokens: res.usage.output_tokens,
       spend: this.opts.spend,
-      bucket: 'assert',
+      bucket,
     });
     if (res.stop_reason === 'refusal') throw new AgentError('the model declined the request');
     if (res.stop_reason === 'max_tokens') throw new AgentError('the model reply hit max_tokens');
@@ -301,5 +308,25 @@ export class AnthropicAgent implements Agent {
       messages.push({ role: 'user', content: results });
     }
     return { verdict: 'none', reason: 'the judge did not record a verdict' };
+  }
+
+  /** Inspect one screen capture with a single bounded call under the 25% findings budget bucket (FR-B10). */
+  async proposeFindings(ctx: ProposeFindingsContext): Promise<ProposedFinding[]> {
+    const shownRefs = new Set(ctx.observation.nodes.map((n) => n.ref));
+    const tools = toAnthropicTools(buildProposeToolSpecs([...shownRefs]));
+    const messages: Msg[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: proposeInitialText(ctx) },
+          ...captureBlocks(`Capture ${ctx.observation.capture}, screen under review:`, ctx.observation, ctx.scrub, ctx.observation.nodes),
+        ],
+      },
+    ];
+    const res = await this.call('propose', ctx, PROPOSE_SYSTEM, tools, messages);
+    const uses = res.content.filter((b): b is Anthropic.Beta.Messages.BetaToolUseBlock => b.type === 'tool_use');
+    const call = uses.find((u) => u.name === 'propose_findings');
+    if (!call) return [];
+    return parseProposedFindings(call.input, ctx.observation, shownRefs, ctx.scrub);
   }
 }

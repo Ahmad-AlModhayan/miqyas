@@ -7,9 +7,9 @@ import path from 'node:path';
 import { runAdapters, type Adapter, type AdapterResult } from '../adapters/adapter.js';
 import type { ActTool, Agent, ModelInfo, StepHistory, ToolExecution, Usage } from '../agents/agent.js';
 import { isCandidateAction, nonCandidateRefMessage, selectActCandidates } from '../agents/protocol.js';
-import type { RunQuote, SpendGuard } from '../agents/spend.js';
+import { BudgetError, type RunQuote, type SpendGuard } from '../agents/spend.js';
 import { anyTerm, NO_SCRUB, ruleHits, scrubText, withSecrets, type ScrubRules } from '../scrub/scrub.js';
-import type { Observation, SnapNode, SurfaceDriver, SurfaceSession } from '../surfaces/session.js';
+import type { CrawlResult, Observation, SnapNode, SurfaceDriver, SurfaceSession } from '../surfaces/session.js';
 import {
   ACTION_TIMEOUT_MS,
   DEFAULT_VIEWPORT,
@@ -18,7 +18,19 @@ import {
   openWebSurfaceDriver,
 } from '../surfaces/web/driver.js';
 import { cropPng, toEvidenceNode } from '../surfaces/web/observe.js';
-import { dedupeFindings, detectPromptInjection, normalizeSurfaceFindings, type FailOnThreshold, type Finding } from './findings.js';
+import {
+  verifyHostOwnership,
+  type HostOwnershipOptions,
+} from '../surfaces/web/policy.js';
+import {
+  dedupeFindings,
+  detectPromptInjection,
+  normalizeProposedFindings,
+  normalizeSurfaceFindings,
+  screenProposalKey,
+  type FailOnThreshold,
+  type Finding,
+} from './findings.js';
 import { exitCodeFor, PlanLedger, settleJudgement, type ActionLog, type Evidence, type PlanResult } from './ledger.js';
 import {
   applyMutation,
@@ -53,6 +65,15 @@ export interface RunSettings {
   allowOtherOrigins?: boolean;
   strict?: boolean;
   failOn?: FailOnThreshold;
+  crawl?: boolean;
+  proposeFindings?: boolean;
+  maxScreens?: number;
+  maxDepth?: number;
+  maxRps?: number;
+  active?: boolean;
+  allowWrites?: boolean;
+  allowHost?: string;
+  hostToken?: string;
   viewport?: { width: number; height: number };
   planTimeoutMs?: number;
   navTimeoutMs?: number;
@@ -70,6 +91,11 @@ export interface RunOptions extends RunSettings {
   onFinding?: (finding: Finding) => void;
 }
 
+export interface ProposeState {
+  seenScreens: Set<string>;
+  exhausted: boolean;
+}
+
 export interface ExecutePlansOptions extends RunSettings {
   url: string;
   driver: SurfaceDriver;
@@ -78,6 +104,7 @@ export interface ExecutePlansOptions extends RunSettings {
   runDir: string;
   scrub: ScrubRules;
   env?: NodeJS.ProcessEnv;
+  proposeState?: ProposeState;
   onPlan?: (result: PlanResult) => void;
   onFinding?: (finding: Finding) => void;
 }
@@ -97,6 +124,7 @@ export interface VerificationRunOptions {
   adapters?: Adapter[];
   settings?: RunSettings;
   env?: NodeJS.ProcessEnv;
+  hostPolicyDeps?: Pick<HostOwnershipOptions, 'spendDir' | 'fetchImpl' | 'resolveTxtImpl'>;
   writeReports?: boolean;
   startedAt?: Date;
   onPlan?: (result: PlanResult) => void;
@@ -113,6 +141,7 @@ export interface RunResult {
   plans: PlanResult[];
   adapters: AdapterResult[];
   findings?: Finding[];
+  crawl?: CrawlResult;
   report: RunReport;
   durationMs: number;
 }
@@ -182,12 +211,21 @@ const DEFAULT_LIMITS = { maxTokens: 16000, maxTurns: 12 };
 
 function pickRunSettings(s?: RunSettings): RunSettings {
   if (!s) return {};
+  const forceSameOrigin = Boolean(s.crawl || s.active);
   return {
     ...(s.concurrency !== undefined ? { concurrency: s.concurrency } : {}),
     ...(s.headed !== undefined ? { headed: s.headed } : {}),
-    ...(s.allowOtherOrigins !== undefined ? { allowOtherOrigins: s.allowOtherOrigins } : {}),
+    ...(forceSameOrigin ? { allowOtherOrigins: false } : s.allowOtherOrigins !== undefined ? { allowOtherOrigins: s.allowOtherOrigins } : {}),
     ...(s.strict !== undefined ? { strict: s.strict } : {}),
     ...(s.failOn !== undefined ? { failOn: s.failOn } : {}),
+    ...(s.crawl !== undefined ? { crawl: s.crawl } : {}),
+    ...(s.proposeFindings !== undefined ? { proposeFindings: s.proposeFindings } : {}),
+    ...(s.maxScreens !== undefined ? { maxScreens: s.maxScreens } : {}),
+    ...(s.maxDepth !== undefined ? { maxDepth: s.maxDepth } : {}),
+    ...(s.maxRps !== undefined ? { maxRps: s.maxRps } : {}),
+    ...(s.active !== undefined ? { active: s.active } : {}),
+    ...(s.allowWrites !== undefined ? { allowWrites: s.allowWrites } : {}),
+    ...(s.allowHost !== undefined ? { allowHost: s.allowHost } : {}),
     ...(s.viewport !== undefined ? { viewport: s.viewport } : {}),
     ...(s.planTimeoutMs !== undefined ? { planTimeoutMs: s.planTimeoutMs } : {}),
     ...(s.navTimeoutMs !== undefined ? { navTimeoutMs: s.navTimeoutMs } : {}),
@@ -207,15 +245,23 @@ export function buildMethodMetadata(
     navTimeoutMs: NAV_TIMEOUT_MS,
     actionTimeoutMs: ACTION_TIMEOUT_MS,
   };
+  const forceSameOrigin = Boolean(settings.crawl || settings.active);
   return {
     ...environment(driver.version),
     model: agent?.info ? { ...agent.info, ...(agent.limits ?? DEFAULT_LIMITS) } : null,
     settings: {
       concurrency: settings.concurrency ?? 3,
-      allowOtherOrigins: settings.allowOtherOrigins ?? false,
+      allowOtherOrigins: forceSameOrigin ? false : (settings.allowOtherOrigins ?? false),
       headed: settings.headed ?? false,
       ...(settings.strict ? { strict: true } : {}),
       ...(settings.failOn && settings.failOn !== 'none' ? { failOn: settings.failOn } : {}),
+      ...(settings.crawl ? { crawl: true } : {}),
+      ...(settings.crawl && settings.maxScreens !== undefined ? { maxScreens: settings.maxScreens } : {}),
+      ...(settings.crawl && settings.maxDepth !== undefined ? { maxDepth: settings.maxDepth } : {}),
+      ...(settings.crawl && settings.maxRps !== undefined ? { maxRps: settings.maxRps } : {}),
+      ...(settings.active ? { active: true } : {}),
+      ...(settings.allowWrites ? { allowWrites: true } : {}),
+      ...(settings.allowHost ? { allowHost: settings.allowHost } : {}),
       viewport: settings.viewport ?? defaults.viewport,
       timeouts: {
         planMs: settings.planTimeoutMs ?? defaults.planTimeoutMs,
@@ -252,10 +298,51 @@ async function saveEvidence(runDir: string, planId: string, stepId: string, obs:
   return ev;
 }
 
+async function proposeForScreen(opts: {
+  agent: Agent | null | undefined;
+  noModel?: boolean | undefined;
+  state: ProposeState;
+  obs: Observation;
+  planId: string;
+  planName: string;
+  stepId: string;
+  scrub: (text: string) => string;
+  rescan: (text: string) => string[];
+  hide: (text: string) => string;
+  signal?: AbortSignal | undefined;
+  onFinding?: ((finding: Finding) => void) | undefined;
+}): Promise<void> {
+  if (!opts.agent?.proposeFindings || opts.noModel || opts.state.exhausted) return;
+  const screenKey = screenProposalKey(opts.obs);
+  if (opts.state.seenScreens.has(screenKey)) return;
+  opts.state.seenScreens.add(screenKey);
+  try {
+    const proposed = await opts.agent.proposeFindings({
+      screenKey,
+      plan: { id: opts.planId, name: opts.planName },
+      step: { id: opts.stepId, text: `Propose findings on capture ${opts.obs.capture}` },
+      observation: opts.obs,
+      scrub: opts.scrub,
+      rescan: opts.rescan,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+    for (const f of normalizeProposedFindings(proposed, opts.obs, opts.hide, { planId: opts.planId, stepId: opts.stepId })) {
+      opts.onFinding?.(f);
+    }
+  } catch (e) {
+    if (e instanceof BudgetError) {
+      opts.state.exhausted = true;
+      return;
+    }
+    throw e;
+  }
+}
+
 async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePlansOptions): Promise<PlanResult> {
   const started = Date.now();
   const ledger = new PlanLedger(plan);
   const env = opts.env ?? process.env;
+  const proposeState = opts.proposeState ?? { seenScreens: new Set<string>(), exhausted: false };
   // Secret values are scrubbed back to their placeholders before any text reaches the model.
   const names = plan.steps.flatMap((s) => secretNames(s.text));
   const rules = withSecrets(opts.scrub, names, env);
@@ -288,9 +375,28 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
         for (const h of injHits) opts.onFinding?.(h);
         for (const sf of normalizeSurfaceFindings(obs, hide, ctx)) opts.onFinding?.(sf);
       };
+      const proposeEnabled = Boolean(opts.proposeFindings || opts.crawl);
+      const scanAndPropose = async (obs: Observation, stepId = 'observe'): Promise<void> => {
+        scanObs(obs, stepId === 'observe' ? undefined : stepId);
+        if (!proposeEnabled) return;
+        await proposeForScreen({
+          agent: opts.agent,
+          noModel: opts.noModel,
+          state: proposeState,
+          obs,
+          planId: plan.id,
+          planName: plan.name,
+          stepId,
+          scrub,
+          rescan,
+          hide,
+          signal: abort.signal,
+          onFinding: opts.onFinding,
+        });
+      };
 
       let latest = await session.observe();
-      scanObs(latest);
+      await scanAndPropose(latest);
       if (!opts.agent && !opts.noModel) {
         ledger.fail(`dry run (${latest.nodes.length} rendered nodes observed at ${hide(latest.url)})`);
         return;
@@ -340,7 +446,7 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
             if (res.unmasked) entry.unmasked = res.unmasked;
             log.push(entry);
             latest = res.observation;
-            scanObs(latest, step.id);
+            await scanAndPropose(latest, step.id);
             if (a.tool !== 'wait' || !postAction) postAction = latest;
             return { ok: res.ok, message: res.message, observation: latest };
           };
@@ -354,7 +460,7 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
 
         // Assertion: judged now, at its position, before the next action.
         const current = await session!.observe();
-        scanObs(current, step.id);
+        await scanAndPropose(current, step.id);
         latest = current;
         if (step.check) {
           const r = await session!.check(step.check, current);
@@ -373,7 +479,7 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
         if (postAction) captures.set(postAction.capture, postAction);
         const lookAgain = async (seconds: number) => {
           latest = await session!.wait(seconds);
-          scanObs(latest, step.id);
+          await scanAndPropose(latest, step.id);
           captures.set(latest.capture, latest);
           return latest;
         };
@@ -443,12 +549,14 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
 /** Run normalized plans against any SurfaceDriver + Agent with bounded concurrency. */
 export async function executePlans(plans: Plan[], opts: ExecutePlansOptions): Promise<PlanResult[]> {
   await mkdir(opts.runDir, { recursive: true });
+  const proposeState = opts.proposeState ?? { seenScreens: new Set<string>(), exhausted: false };
+  const sharedOpts: ExecutePlansOptions = { ...opts, proposeState };
   const results: PlanResult[] = new Array(plans.length);
   let next = 0;
   const worker = async () => {
     while (next < plans.length) {
       const i = next++;
-      const r = await runSinglePlan(opts.driver, plans[i]!, opts);
+      const r = await runSinglePlan(opts.driver, plans[i]!, sharedOpts);
       results[i] = r;
       opts.onPlan?.(r);
     }
@@ -459,11 +567,66 @@ export async function executePlans(plans: Plan[], opts: ExecutePlansOptions): Pr
 
 /** Central Proof Core orchestrator: coordinates plans, SurfaceSession driver, Adapters, and Agent into one RunResult. */
 export async function runVerification(opts: VerificationRunOptions): Promise<RunResult> {
+  if (opts.settings?.active) {
+    await verifyHostOwnership({
+      url: opts.url,
+      ...(opts.settings.allowHost ? { allowHost: opts.settings.allowHost } : {}),
+      active: true,
+      allowWrites: Boolean(opts.settings.allowWrites),
+      probeKind: opts.settings.allowWrites ? 'active-write' : 'active-read',
+      ...(opts.settings.hostToken ? { expectedToken: opts.settings.hostToken } : {}),
+      ...(opts.env ? { env: opts.env } : {}),
+      ...opts.hostPolicyDeps,
+    });
+  }
+
   const startedAt = opts.startedAt ?? new Date();
   const dryRun = opts.agent === null && !opts.noModel;
   await mkdir(opts.runDir, { recursive: true });
 
+  const proposeState: ProposeState = { seenScreens: new Set<string>(), exhausted: false };
   const rawFindings: Finding[] = [];
+  const pushFinding = (f: Finding) => {
+    rawFindings.push(f);
+    opts.onFinding?.(f);
+  };
+
+  let crawlResult: CrawlResult | undefined;
+  if (opts.settings?.crawl && opts.driver.crawl) {
+    const crawlRules = withSecrets(opts.scrub, [], opts.env ?? process.env);
+    const crawlScrub = (t: string) => scrubText(t, crawlRules);
+    const crawlRescan = (t: string) => ruleHits(t, crawlRules);
+    const crawlHide = (t: string) => scrubText(t, NO_SCRUB);
+    crawlResult = await opts.driver.crawl({
+      url: opts.url,
+      ...(opts.settings.maxScreens !== undefined ? { maxScreens: opts.settings.maxScreens } : {}),
+      ...(opts.settings.maxDepth !== undefined ? { maxDepth: opts.settings.maxDepth } : {}),
+      ...(opts.settings.maxRps !== undefined ? { maxRps: opts.settings.maxRps } : {}),
+      viewport: opts.settings.viewport ?? DEFAULT_VIEWPORT,
+      navTimeoutMs: opts.settings.navTimeoutMs ?? NAV_TIMEOUT_MS,
+      hide: crawlHide,
+      onScreen: async (obs) => {
+        const stepId = `crawl-c${obs.capture}`;
+        const ctx = { planId: 'crawl', stepId };
+        for (const h of detectPromptInjection(obs, crawlHide, ctx)) pushFinding(h);
+        for (const sf of normalizeSurfaceFindings(obs, crawlHide, ctx)) pushFinding(sf);
+        await proposeForScreen({
+          agent: opts.agent,
+          ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
+          state: proposeState,
+          obs,
+          planId: 'crawl',
+          planName: 'Crawl',
+          stepId,
+          scrub: crawlScrub,
+          rescan: crawlRescan,
+          hide: crawlHide,
+          onFinding: pushFinding,
+        });
+      },
+    });
+  }
+
   const planResults = await executePlans(opts.plans, {
     url: opts.url,
     driver: opts.driver,
@@ -471,13 +634,11 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
     runDir: opts.runDir,
     scrub: opts.scrub,
+    proposeState,
     ...pickRunSettings(opts.settings),
     ...(opts.env !== undefined ? { env: opts.env } : {}),
     ...(opts.onPlan !== undefined ? { onPlan: opts.onPlan } : {}),
-    onFinding: (f) => {
-      rawFindings.push(f);
-      opts.onFinding?.(f);
-    },
+    onFinding: pushFinding,
   });
   const findings = dedupeFindings(rawFindings);
 
@@ -498,6 +659,15 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     noModel: Boolean(opts.noModel),
   });
 
+  const crawlSummary = crawlResult
+    ? {
+        screensVisited: crawlResult.screens.length,
+        skippedControls: crawlResult.skippedControls,
+        skippedOffOriginLinks: crawlResult.skippedOffOriginLinks,
+        ...(crawlResult.haltedReason ? { haltedReason: crawlResult.haltedReason } : {}),
+      }
+    : undefined;
+
   const report = buildReport({
     runId: opts.runId,
     startedAt,
@@ -509,6 +679,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     ...(spend ? { spend } : {}),
     method,
     plans: planResults,
+    ...(crawlSummary ? { crawl: crawlSummary } : {}),
     ...(findings.length ? { findings } : {}),
     ...(opts.settings?.failOn ? { failOn: opts.settings.failOn } : {}),
   });
@@ -535,6 +706,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     exitCode,
     plans: planResults,
     adapters: adapterOutputs,
+    ...(crawlResult ? { crawl: crawlResult } : {}),
     ...(findings.length ? { findings } : {}),
     report,
     durationMs: finishedAt.getTime() - startedAt.getTime(),
@@ -543,9 +715,21 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
 
 /** Web-driver convenience wrapper: opens a Playwright SurfaceDriver, runs plans via Proof Core, and closes it. */
 export async function runPlans(plans: Plan[], opts: RunOptions): Promise<PlanResult[]> {
+  if (opts.active) {
+    await verifyHostOwnership({
+      url: opts.url,
+      ...(opts.allowHost ? { allowHost: opts.allowHost } : {}),
+      active: true,
+      allowWrites: Boolean(opts.allowWrites),
+      probeKind: opts.allowWrites ? 'active-write' : 'active-read',
+      ...(opts.hostToken ? { expectedToken: opts.hostToken } : {}),
+      ...(opts.env ? { env: opts.env } : {}),
+    });
+  }
+  const forceSameOrigin = Boolean(opts.crawl || opts.active);
   const driver = await openWebSurfaceDriver({
     ...(opts.headed !== undefined ? { headed: opts.headed } : {}),
-    ...(opts.allowOtherOrigins !== undefined ? { allowOtherOrigins: opts.allowOtherOrigins } : {}),
+    allowOtherOrigins: forceSameOrigin ? false : (opts.allowOtherOrigins ?? false),
   });
   if (driver.version) opts.onBrowser?.(driver.version);
   try {
