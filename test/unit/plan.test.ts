@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Shield-1.0.0
 import { describe, expect, it } from 'vitest';
-import { lintPlan, parsePlan, PlanError, resolveSecrets, serializePlan } from '../../src/core/plan.js';
+import { lintPlan, parsePlan, PlanError, resolveSecrets, serializePlan } from '../../src/proof-core/plan.js';
 
 const testsprite = {
   projectId: 'PROJECT_ID',

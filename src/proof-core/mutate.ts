@@ -5,8 +5,11 @@
 import { createHash } from 'node:crypto';
 import { cp, readFile, readdir, readlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { Probe, Reading } from '../surfaces/session.js';
 import type { PlanResult } from './ledger.js';
 import { cell } from './report.js';
+
+export type { Probe, Reading } from '../surfaces/session.js';
 
 interface MutationBase {
   id: string;
@@ -25,26 +28,6 @@ export interface StringSwap extends MutationBase {
   /** File extensions to edit (default .js). */
   extensions?: string[];
 }
-
-/**
- * How a mutation is shown effective before the run, measured on the rendered page (SRS FR-M2). The probe opens the
- * build, clicks `steps` (Playwright selectors) in order to reach the target screen, sets `rootAttrs` on <html> and
- * appends `html` to <body> (both optional), then measures:
- * - `height`: `selector`'s box is 0 px high (or absent) on the mutated build and not on the clean one (CSS hide);
- * - `left`: `selector`'s left edge is at x=0 on the mutated build and not on the clean one (RTL flip);
- * - `text`: the screen shows the swap's new text and not the old one, and the clean build shows the old one.
- */
-export interface Probe {
-  steps?: string[];
-  rootAttrs?: Record<string, string>;
-  html?: string;
-  measure: 'height' | 'left' | 'text';
-  /** Element to measure (`height`, `left`). */
-  selector?: string;
-}
-
-/** What a probe read on one build: px for `height` and `left`, null when the element is absent; the rendered text for `text`. */
-export type Reading = number | string | null;
 
 export interface CssMutation extends MutationBase {
   kind: 'css';

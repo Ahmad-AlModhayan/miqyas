@@ -6,7 +6,12 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import type { Bench } from '../core/bench.js';
+export interface BuildSpec {
+  install: string[];
+  vite: string[];
+  env: Record<string, string>;
+  outDir: string;
+}
 
 export class SourceError extends Error {}
 
@@ -66,7 +71,7 @@ export async function exportTree(repo: string, commit: string, subdir: string, d
 }
 
 /** `npm ci`, then Vite through Node itself with the bench's env: no shell syntax, so Windows cmd runs it too. */
-export async function buildApp(appDir: string, build: Bench['build'], log: (s: string) => void): Promise<string> {
+export async function buildApp(appDir: string, build: BuildSpec, log: (s: string) => void): Promise<string> {
   const win = process.platform === 'win32';
   // On Windows npm is a .cmd shim, which Node only starts through a shell; the arguments are the bench's constants.
   const npm = spawn(win ? 'npm.cmd' : 'npm', build.install, { cwd: appDir, stdio: ['ignore', 'ignore', 'pipe'], env: childEnv(), shell: win });

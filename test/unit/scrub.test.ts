@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { anyTerm, findTerms, jsonQuote, loadScrubRules, NO_SCRUB, parseScrubRules, ruleHits, scrubDir, scrubText, withSecrets } from '../../src/core/scrub.js';
+import { anyTerm, findTerms, jsonQuote, loadScrubRules, NO_SCRUB, parseScrubRules, ruleHits, scrubDir, scrubText, withSecrets } from '../../src/scrub/scrub.js';
 
 const rules = await loadScrubRules(new URL('../../presets/wasl-scrub.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 

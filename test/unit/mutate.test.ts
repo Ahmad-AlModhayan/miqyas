@@ -3,10 +3,10 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { PlanLedger, type PlanResult } from '../../src/core/ledger.js';
+import { PlanLedger, type PlanResult } from '../../src/proof-core/ledger.js';
 import { errorExit } from '../../src/cli.js';
-import { applyMutation, BuildChangedError, classify, cssMarker, hashDir, judgeProbe, keepUnchanged, MutationError, parsePreset, renderMutationMarkdown, summarize, type Mutation } from '../../src/core/mutate.js';
-import { parsePlan } from '../../src/core/plan.js';
+import { applyMutation, BuildChangedError, classify, cssMarker, hashDir, judgeProbe, keepUnchanged, MutationError, parsePreset, renderMutationMarkdown, summarize, type Mutation } from '../../src/proof-core/mutate.js';
+import { parsePlan } from '../../src/proof-core/plan.js';
 
 let tmp: string;
 let build: string;

@@ -1,27 +1,16 @@
 // SPDX-License-Identifier: PolyForm-Shield-1.0.0
 // Run reports: JSON (the ledger, machine-readable) and Markdown (for people). Same data, two renderings.
 
-import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
+import type { ModelInfo, Usage } from '../agents/agent.js';
+import { PLAYWRIGHT_VERSION } from '../surfaces/web/driver.js';
 import { countEntries, runVerdict, type PlanCounts, type PlanResult, type RunVerdict } from './ledger.js';
 
-const require = createRequire(import.meta.url);
-/** From package.json: src/core and dist/core both sit two levels below it. */
-export const TOOL_VERSION: string = require('../../package.json').version;
+export type { ModelInfo, Usage } from '../agents/agent.js';
 
-export interface ModelInfo {
-  provider: string;
-  model: string;
-  effort?: string;
-}
-
-export interface Usage {
-  calls: number;
-  inputTokens: number;
-  outputTokens: number;
-  /** By the model that answered (`res.model`): a server-side fallback can answer on another model than the one asked. */
-  byModel?: Record<string, Omit<Usage, 'byModel'>>;
-}
+/** From package.json: src/proof-core and dist/proof-core both sit two levels below it. */
+export const TOOL_VERSION: string = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 
 /** "answered by claude-opus-5-5 3, claude-sonnet-5-5 1", or '' when no call recorded its model. */
 export function answeredBy(u: Usage): string {
@@ -56,7 +45,7 @@ export interface Method {
 /** The parts of the method block that come from this machine. */
 export function environment(browser: string | null): Pick<Method, 'versions' | 'os'> {
   return {
-    versions: { miqyas: TOOL_VERSION, node: process.versions.node, playwright: require('playwright/package.json').version, browser },
+    versions: { miqyas: TOOL_VERSION, node: process.versions.node, playwright: PLAYWRIGHT_VERSION, browser },
     os: { platform: process.platform, release: os.release(), arch: process.arch },
   };
 }

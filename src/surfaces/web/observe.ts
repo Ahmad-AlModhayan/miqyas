@@ -5,34 +5,10 @@
 
 import type { Page } from 'playwright';
 import { PNG } from 'pngjs';
-import type { Box, EvidenceNode } from '../core/ledger.js';
-import { jsonQuote } from '../core/scrub.js';
+import { jsonQuote } from '../../scrub/scrub.js';
+import type { Box, EvidenceNode, Observation, ObserveOptions, SnapNode } from '../session.js';
 
-export interface SnapNode {
-  ref: string;
-  role: string;
-  name: string;
-  depth: number;
-  box: Box;
-  state: string;
-  /** Playwright locator by role and accessible name (or text), for exports and the action log. */
-  locator: string;
-}
-
-export interface Observation {
-  capture: number;
-  url: string;
-  title: string;
-  lang: string;
-  dir: string;
-  viewport: { width: number; height: number };
-  nodes: SnapNode[];
-  truncated: boolean;
-  png: Buffer;
-  capturedAt: Date;
-  /** Set when the screenshot may show a secret that could not be masked (a canvas, an embed, a frame not read). */
-  unmasked?: string;
-}
+export type { Observation, ObserveOptions, SnapNode } from '../session.js';
 
 // Runs in the page. Kept as a string so test transforms can't inject helpers into it.
 const SNAPSHOT_FN = String.raw`(arg) => {
@@ -233,15 +209,6 @@ export function locatorFor(role: string, name: string): string {
   if (ARIA_ROLES.has(role)) return `getByRole(${q(role)})`;
   if (name) return `getByText(${q(name)})`;
   return '';
-}
-
-export interface ObserveOptions {
-  maxNodes?: number;
-  /** Secret values (see `anyTerm`) to mask on the page before the screenshot. Masking doesn't touch the snapshot
-   * text: `hide` scrubs a textbox's value, and the runner scrubs the rest before it reaches the model. */
-  secrets?: RegExp;
-  /** Scrubs secret values from a textbox's whole value, before it is cut to fit the prompt. */
-  hide?: (t: string) => string;
 }
 
 let captureCounter = 0;

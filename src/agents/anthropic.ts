@@ -4,8 +4,8 @@
 // passes gateCall (re-scan, then one payload log entry) just before it is sent.
 
 import Anthropic from '@anthropic-ai/sdk';
-import type { ModelInfo, Usage } from '../core/report.js';
-import { cropPng, snapshotText, type Observation } from '../web/observe.js';
+import type { Observation } from '../surfaces/session.js';
+import { cropPng, snapshotText } from '../surfaces/web/observe.js';
 import {
   AgentError,
   gateCall,
@@ -16,9 +16,11 @@ import {
   type CallGate,
   type JudgeContext,
   type JudgeOutcome,
+  type ModelInfo,
   type Outgoing,
   type PayloadEntry,
   type StepHistory,
+  type Usage,
 } from './agent.js';
 
 type Msg = Anthropic.Beta.Messages.BetaMessageParam;
@@ -135,6 +137,7 @@ function captureBlocks(label: string, o: Observation, scrub: (s: string) => stri
 export class AnthropicAgent implements Agent {
   readonly info: ModelInfo;
   readonly usage: Usage = { calls: 0, inputTokens: 0, outputTokens: 0 };
+  readonly limits: { maxTokens: number; maxTurns: number };
   private readonly client: Anthropic;
   private readonly maxActTurns: number;
 
@@ -142,6 +145,7 @@ export class AnthropicAgent implements Agent {
     this.client = opts.client ?? new Anthropic();
     this.info = { provider: 'anthropic', model: opts.model ?? DEFAULT_MODEL, effort: opts.effort ?? DEFAULT_EFFORT };
     this.maxActTurns = opts.maxActTurns ?? DEFAULT_MAX_ACT_TURNS;
+    this.limits = { maxTokens: MAX_TOKENS, maxTurns: this.maxActTurns };
   }
 
   /** Text and images of the newest message; tool results are opened up. Image data is counted, never scanned. */

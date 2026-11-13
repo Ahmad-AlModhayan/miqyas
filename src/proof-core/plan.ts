@@ -3,22 +3,10 @@
 
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+import type { Check, Locator } from '../surfaces/session.js';
 
+export type { Check, Locator } from '../surfaces/session.js';
 export type StepType = 'action' | 'assertion';
-
-export interface Locator {
-  role?: string;
-  name?: string;
-  text?: string;
-  label?: string;
-  testId?: string;
-}
-
-/** Deterministic check, run by code before (instead of) the model. */
-export interface Check {
-  locator: Locator;
-  expect: 'visible' | 'hidden' | { text: string } | { count: number };
-}
 
 export interface Step {
   id: string;

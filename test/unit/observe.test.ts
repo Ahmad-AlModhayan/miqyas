@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Shield-1.0.0
 import { describe, expect, it } from 'vitest';
-import { snapshotText, type Observation, type SnapNode } from '../../src/web/observe.js';
+import { snapshotText, type Observation, type SnapNode } from '../../src/surfaces/web/observe.js';
 
 const node = (ref: string, name: string, state = ''): SnapNode => ({ ref, role: 'button', name, depth: 1, box: { x: 10, y: 20, width: 30, height: 40 }, state, locator: '' });
 const obs = (title: string, nodes: SnapNode[], lang = 'en'): Observation => ({

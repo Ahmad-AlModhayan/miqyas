@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Shield-1.0.0
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { exitCodeFor, PlanLedger, reportPath, runVerdict, settleJudgement, type EvidenceNode, type PlanResult } from '../../src/core/ledger.js';
-import { parsePlan } from '../../src/core/plan.js';
+import { exitCodeFor, PlanLedger, reportPath, runVerdict, settleJudgement, type EvidenceNode, type PlanResult } from '../../src/proof-core/ledger.js';
+import { parsePlan } from '../../src/proof-core/plan.js';
 
 const plan = parsePlan(
   {

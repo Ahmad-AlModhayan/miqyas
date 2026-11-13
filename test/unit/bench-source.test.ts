@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { childEnv, cloneState, exportTree, resolveCommit, SourceError } from '../../src/bench/source.js';
+import { childEnv, cloneState, exportTree, resolveCommit, SourceError } from '../../src/adapters/bench-source.js';
 
 function repo(): { dir: string; sha: string } {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'miqyas-clone-'));
