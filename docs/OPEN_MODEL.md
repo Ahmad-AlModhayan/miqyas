@@ -18,7 +18,7 @@ planned as an Apache-2.0 package, `miqyas-drivers`.
 
 | Part | Money | Code | Licence |
 |---|---|---|---|
-| Miqyas: ledger, verdict judging, the 13 Grade 1 checks, mutation self-check, agent, reports, CLI, MCP server | Free during early access, paid later, for developers | Open code | PolyForm Shield 1.0.0 |
+| Miqyas: proof core (ledger, verdict judging, readiness profiles including the 13 Grade 1 checks, mutation self-check, reports), agent team, CLI, CI gate, MCP server | Free during early access, paid later, for developers | Open code | PolyForm Shield 1.0.0 |
 | `miqyas-drivers` (planned): the `miqyas-worker/1` protocol, surface drivers, RTL checks, scrubbers, fault presets | Free | Open | Apache-2.0 |
 
 ## 3. Plans for the package

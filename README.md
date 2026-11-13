@@ -1,16 +1,23 @@
 # Miqyas (مقياس)
 
-Miqyas checks whether your web app is ready to launch, and proves every check it made, from your own machine.
+Miqyas is a **verification platform**: the place any software passes through before anyone trusts it — web, mobile,
+desktop, servers, and industrial or factory systems. It is not an MCP server and not a standalone agent.
 
-It runs the tools you already trust (Playwright, axe-core, gitleaks, osv-scanner), judges what they found by code, and
-puts every check in one ledger with its evidence and coverage. The Grade 1 profile, for indie and vibe-coded launches,
-runs 13 readiness checks (open tables, leaked keys, one user reading another's data, routes that spend money with no
-session, dead buttons and more), 12 of them with no model call. On top, an AI agent carries out written plans on the
-real app, every assertion gets its own verdict, and a mutation self-check tests the tests. Only the model calls you
-configure leave your machine, each one scrubbed and logged, and your source code never reaches a model.
+Miqyas brings three parts together so every check leaves proof:
 
-**Status:** phase 1 (web) works: CLI, Playwright runner, assertion ledger, reports, mutate mode and scrubber. The
-Grade 1 readiness profile is being built. Expect rough edges and changing interfaces.
+- **Proof core**: every check, from any source, ends in one verdict in the ledger with evidence and coverage.
+- **Agent team**: agents that understand the software, author plans, explore states, run active checks, and inject
+  faults on any surface.
+- **Existing tools as adapters**: the runners, drivers and scanners you already trust (Playwright, axe-core, gitleaks,
+  osv-scanner, and more) plugged behind adapters rather than rebuilt.
+
+Four ways in: one CLI command for a solo developer, a CI gate blocking release before `ready`, an MCP interface for a
+coding agent to verify what it built, and self-hosted runs where source code and data never leave your network.
+
+**What works today (Phase 1, web):** CLI, Playwright runner, assertion ledger, reports, mutate mode, and scrubber. The
+Grade 1 web readiness profile (13 checks, 12 of them with no model call) is being built first to prove the proof core
+and adapter layer end to end. Only the model calls you configure leave your machine, each one scrubbed and logged, and
+source code never reaches a model. Expect rough edges and changing interfaces.
 
 ## Install and build
 
