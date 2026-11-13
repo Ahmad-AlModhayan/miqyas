@@ -146,6 +146,13 @@ export interface SurfaceSession {
   close(): Promise<void>;
 }
 
+export interface ServedArtifact {
+  kind: 'bundle' | 'source-map' | 'response' | 'dom' | 'url' | 'storage';
+  name: string;
+  url: string;
+  text: string;
+}
+
 export interface CrawlOptions {
   url: string;
   maxScreens?: number;
@@ -154,6 +161,7 @@ export interface CrawlOptions {
   viewport?: { width: number; height: number };
   hide?: (text: string) => string;
   knownSecrets?: RegExp;
+  collectServedArtifacts?: boolean;
   navTimeoutMs?: number;
   actionTimeoutMs?: number;
   onScreen?: (observation: Observation) => Promise<void> | void;
@@ -172,6 +180,8 @@ export interface CrawlResult {
   skippedControls: number;
   skippedOffOriginLinks: number;
   haltedReason?: 'http-429' | 'http-503' | 'captcha-or-waf' | 'max-screens';
+  servedArtifacts?: ServedArtifact[];
+  truncatedArtifacts?: number;
 }
 
 /** Pluggable surface driver (Web/Playwright, future CLI, desktop, API, industrial workers). */

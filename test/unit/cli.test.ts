@@ -418,4 +418,61 @@ describe('CLI exit codes', () => {
     expect(await main(['lint', '--corpus', path.join(tmp, 'nonexistent-corpus')])).toBe(2);
     expect(await main(['run', good, '--corpus', 'corpus/mini-shop', '--url', 'http://127.0.0.1:9/', '--dry-run'])).toBe(2);
   });
+
+  it('rejects unknown --profile, invalid --repo, and --profile grade-1 + --allow-other-origins with exit code 2 before creating --out', async () => {
+    const outBadProfile = path.join(tmp, 'out-bad-profile');
+    expect(
+      await main(['run', '--profile', 'grade-9', '--url', 'http://127.0.0.1:9/', '--no-model', '--out', outBadProfile]),
+    ).toBe(2);
+    expect(existsSync(outBadProfile)).toBe(false);
+
+    const outBadRepo = path.join(tmp, 'out-bad-repo');
+    expect(
+      await main([
+        'run',
+        '--profile',
+        'grade-1',
+        '--url',
+        'http://127.0.0.1:9/',
+        '--repo',
+        path.join(tmp, 'does-not-exist'),
+        '--no-model',
+        '--out',
+        outBadRepo,
+      ]),
+    ).toBe(2);
+    expect(existsSync(outBadRepo)).toBe(false);
+
+    const outOtherOrigins = path.join(tmp, 'out-grade1-other-origins');
+    expect(
+      await main([
+        'run',
+        '--profile',
+        'grade-1',
+        '--url',
+        'http://127.0.0.1:9/',
+        '--allow-other-origins',
+        '--no-model',
+        '--out',
+        outOtherOrigins,
+      ]),
+    ).toBe(2);
+    expect(existsSync(outOtherOrigins)).toBe(false);
+  });
+
+  it('doctor lists gitleaks binary status on stdout', async () => {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => {
+      chunks.push(String(c));
+      return true;
+    });
+    try {
+      const code = await main(['doctor']);
+      expect([0, 3]).toContain(code);
+      expect(chunks.join('')).toContain('gitleaks');
+    } finally {
+      spy.mockRestore();
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    }
+  });
 });
