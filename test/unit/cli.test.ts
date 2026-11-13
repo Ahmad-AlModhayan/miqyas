@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { recordDailySpend } from '../../src/agents/spend.js';
-import { main } from '../../src/cli.js';
+import { main, loadCliEnv } from '../../src/cli.js';
 
 let tmp: string;
 let good: string;
@@ -139,6 +139,107 @@ describe('CLI exit codes', () => {
       }
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
+  it('rejects invalid provider / missing OpenAI model (exit 2) and blocks missing OpenAI endpoint or public OpenAI credentials (exit 3)', async () => {
+    expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--provider', 'bedrock'])).toBe(2);
+    expect(
+      await main(['run', good, '--url', 'http://127.0.0.1:9/', '--provider', 'openai', '--endpoint', 'http://127.0.0.1:11434/v1']),
+    ).toBe(2);
+    expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--provider', 'openai', '--model', 'qwen2.5-vl'])).toBe(3);
+    expect(
+      await main([
+        'run',
+        good,
+        '--url',
+        'http://127.0.0.1:9/',
+        '--provider',
+        'openai',
+        '--endpoint',
+        'https://llm.example.com/v1',
+        '--model',
+        'Qwen2.5-VL',
+        '--out',
+        path.join(tmp, 'pub-openai-nokey'),
+      ]),
+    ).toBe(3);
+    expect(existsSync(path.join(tmp, 'pub-openai-nokey'))).toBe(false);
+
+    // Public OpenAI-compatible endpoint even with key still refuses non-TTY CI runs.
+    process.env.OPENAI_API_KEY = 'sk-public';
+    try {
+      expect(
+        await main(
+          [
+            'run',
+            good,
+            '--url',
+            'http://127.0.0.1:9/',
+            '--provider',
+            'openai',
+            '--endpoint',
+            'https://llm.example.com/v1',
+            '--model',
+            'Qwen2.5-VL',
+            '--out',
+            path.join(tmp, 'pub-openai-nontty'),
+          ],
+          { isTTY: false, spendDir: tmp },
+        ),
+      ).toBe(3);
+      expect(existsSync(path.join(tmp, 'pub-openai-nontty'))).toBe(false);
+    } finally {
+      delete process.env.OPENAI_API_KEY;
+    }
+  });
+
+  it('loadCliEnv imports only provider keys and MIQYAS_SECRET_* from .env without overriding shell or loading endpoint URLs', async () => {
+    const envDir = path.join(tmp, 'env-wd');
+    const prevCwd = process.cwd();
+    const savedKeys = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+      ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
+      MIQYAS_PROVIDER: process.env.MIQYAS_PROVIDER,
+      MIQYAS_SECRET_TOKEN: process.env.MIQYAS_SECRET_TOKEN,
+    };
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.ANTHROPIC_BASE_URL;
+    delete process.env.MIQYAS_PROVIDER;
+    delete process.env.MIQYAS_SECRET_TOKEN;
+    process.env.ANTHROPIC_API_KEY = 'shell-wins';
+
+    try {
+      const { mkdir: mk } = await import('node:fs/promises');
+      await mk(envDir, { recursive: true });
+      await writeFile(
+        path.join(envDir, '.env'),
+        [
+          'OPENAI_API_KEY=sk-from-dotenv',
+          'ANTHROPIC_API_KEY=should-not-override',
+          'MIQYAS_SECRET_TOKEN=tok-123',
+          'OPENAI_BASE_URL=https://evil.example.com/v1',
+          'ANTHROPIC_BASE_URL=https://evil.example.com',
+          'MIQYAS_PROVIDER=openai',
+        ].join('\n'),
+      );
+      process.chdir(envDir);
+      loadCliEnv();
+      expect(process.env.OPENAI_API_KEY).toBe('sk-from-dotenv');
+      expect(process.env.ANTHROPIC_API_KEY).toBe('shell-wins');
+      expect(process.env.MIQYAS_SECRET_TOKEN).toBe('tok-123');
+      expect(process.env.OPENAI_BASE_URL).toBeUndefined();
+      expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+      expect(process.env.MIQYAS_PROVIDER).toBeUndefined();
+    } finally {
+      process.chdir(prevCwd);
+      for (const [k, v] of Object.entries(savedKeys)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
   });
 });
