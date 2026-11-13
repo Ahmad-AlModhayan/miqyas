@@ -60,26 +60,70 @@ export function isPriceTableStale(now = new Date()): { stale: boolean; ageDays: 
   return { stale: ageDays > PRICE_TABLE_MAX_AGE_DAYS, ageDays, date: PRICE_TABLE_DATE };
 }
 
-export function resolveModelChoice(opts: { tier?: string; model?: string }): { tier?: Tier; model: string } {
-  if (opts.tier !== undefined) {
-    if (opts.tier !== 'low' && opts.tier !== 'medium' && opts.tier !== 'high') {
-      throw new Error(`--tier must be low, medium or high (got "${opts.tier}")`);
-    }
+export type ProviderName = 'anthropic' | 'openai';
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export const DEFAULT_EFFORT: EffortLevel = 'medium';
+export const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+export function sanitizeEndpointUrl(raw: string): { endpoint: string; host: string; protocol: 'http:' | 'https:'; hostname: string } {
+  const u = new URL(raw.trim());
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    throw new Error(`endpoint must use http or https (got "${u.protocol}")`);
   }
+  u.username = '';
+  u.password = '';
+  const rawHref = u.href;
+  const endpoint = rawHref.endsWith('/') ? rawHref.slice(0, -1) : rawHref;
+  return { endpoint, host: u.host, protocol: u.protocol, hostname: u.hostname };
+}
+
+/**
+ * True only for loopback, RFC1918 IPv4, ULA IPv6 (fc00::/7), or explicit `.local` / `.internal` names.
+ * Excludes link-local metadata ranges (`169.254.0.0/16`) and all public hosts.
+ */
+export function isLocalOrPrivateHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (!host) return false;
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1') return true;
+  if (host.endsWith('.local') || host.endsWith('.internal')) return true;
+  if (/^f[cd][0-9a-f]{2}:/i.test(host) || /^f[cd]00::/i.test(host)) return true;
+
+  const parts = host.split('.');
+  if (parts.length === 4 && parts.every((p) => /^\d+$/.test(p) && Number(p) >= 0 && Number(p) <= 255)) {
+    const a = Number(parts[0]);
+    const b = Number(parts[1]);
+    if (a === 127 || a === 10) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+  }
+  return false;
+}
+
+export function validateTier(tier?: string): Tier | undefined {
+  if (tier === undefined) return undefined;
+  if (tier !== 'low' && tier !== 'medium' && tier !== 'high') {
+    throw new Error(`--tier must be low, medium or high (got "${tier}")`);
+  }
+  return tier;
+}
+
+export function resolveModelChoice(opts: { tier?: string; model?: string }): { tier?: Tier; model: string } {
+  const validTier = validateTier(opts.tier);
   if (opts.model) return { model: opts.model };
-  const tier = (opts.tier as Tier | undefined) ?? DEFAULT_TIER;
+  const tier = validTier ?? DEFAULT_TIER;
   return { tier, model: MODEL_TIERS[tier] };
 }
 
 export function resolveEndpoint(env: NodeJS.ProcessEnv = process.env): { endpoint: string; host: string; custom: boolean } {
   const raw = env.ANTHROPIC_BASE_URL?.trim();
-  const endpoint = raw && raw.length > 0 ? raw : DEFAULT_ENDPOINT;
+  const candidate = raw && raw.length > 0 ? raw : DEFAULT_ENDPOINT;
   const custom = Boolean(raw && raw.replace(/\/+$/, '') !== DEFAULT_ENDPOINT);
   try {
-    const u = new URL(endpoint);
-    return { endpoint, host: u.host || endpoint, custom };
+    const clean = sanitizeEndpointUrl(candidate);
+    return { endpoint: clean.endpoint, host: clean.host, custom };
   } catch {
-    return { endpoint, host: endpoint, custom: true };
+    return { endpoint: candidate, host: candidate, custom: true };
   }
 }
 

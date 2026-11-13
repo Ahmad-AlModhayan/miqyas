@@ -823,4 +823,130 @@ describe('CLI', () => {
     expect(doctorText).toContain('model endpoint: https://llm-proxy.example.com:8443/v1');
     expect(doctorText).toContain('custom host llm-proxy.example.com:8443');
   });
+
+  it('runs non-TTY CI gate against a configured local OpenAI-compatible mock HTTP server with zero API keys', async () => {
+    const mockServer = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+          model?: string;
+          messages?: Array<{ role: string; content: unknown }>;
+        };
+        const userText = JSON.stringify(body.messages ?? []);
+        const isJudge = userText.includes('Assertion to judge');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        if (!isJudge) {
+          res.end(
+            JSON.stringify({
+              model: body.model ?? 'qwen2.5-vl:7b',
+              choices: [
+                {
+                  finish_reason: 'tool_calls',
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [{ id: 'tc_done', type: 'function', function: { name: 'step_done', arguments: JSON.stringify({ summary: 'Verified on home' }) } }],
+                  },
+                },
+              ],
+              usage: { prompt_tokens: 40, completion_tokens: 6 },
+            }),
+          );
+          return;
+        }
+        const refMatch = userText.match(/(c\d+e\d+)\s+heading\s+\\"Folder pairs\\"/);
+        const evidenceRefs = refMatch ? [refMatch[1]!] : ['c2e1'];
+        res.end(
+          JSON.stringify({
+            model: body.model ?? 'qwen2.5-vl:7b',
+            choices: [
+              {
+                finish_reason: 'tool_calls',
+                message: {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: 'tc_judge',
+                      type: 'function',
+                      function: {
+                        name: 'record_verdict',
+                        arguments: JSON.stringify({ verdict: 'pass', observation: 'Folder pairs heading visible', evidence_refs: evidenceRefs }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+            usage: { prompt_tokens: 55, completion_tokens: 9 },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => mockServer.listen(0, '127.0.0.1', () => resolve()));
+    const addr = mockServer.address() as { port: number };
+    const mockEndpoint = `http://127.0.0.1:${addr.port}/v1`;
+
+    const planFile = path.join(tmp, 'openai-local.json');
+    await writeFile(
+      planFile,
+      JSON.stringify({
+        format: 'miqyas-plan',
+        version: 1,
+        id: 'local-llm',
+        steps: [
+          { id: 's1', type: 'action', text: 'Verify the page is open' },
+          { id: 'a1', type: 'assertion', text: "'Folder pairs' heading is visible" },
+        ],
+      }),
+    );
+
+    const outDir = path.join(tmp, 'openai-local-run');
+    const savedOpenAiKey = process.env.OPENAI_API_KEY;
+    const savedAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+
+    const docOut: string[] = [];
+    const write = process.stdout.write.bind(process.stdout);
+    try {
+      expect(
+        await main(
+          ['run', planFile, '--url', server.url, '--provider', 'openai', '--endpoint', mockEndpoint, '--model', 'qwen2.5-vl:7b', '--out', outDir],
+          { isTTY: false, spendDir: tmp },
+        ),
+      ).toBe(0);
+
+      process.stdout.write = ((c: string | Uint8Array) => (docOut.push(String(c)), true)) as typeof process.stdout.write;
+      expect(await main(['doctor', '--provider', 'openai', '--endpoint', mockEndpoint])).toBe(0);
+    } finally {
+      process.stdout.write = write;
+      await new Promise<void>((resolve) => mockServer.close(() => resolve()));
+      if (savedOpenAiKey !== undefined) process.env.OPENAI_API_KEY = savedOpenAiKey;
+      if (savedAnthropicKey !== undefined) process.env.ANTHROPIC_API_KEY = savedAnthropicKey;
+    }
+
+    const report = JSON.parse(await readFile(path.join(outDir, 'report.json'), 'utf8')) as RunReport;
+    expect(report).toMatchObject({
+      dryRun: false,
+      verdict: 'pass',
+      method: {
+        model: {
+          provider: 'openai',
+          model: 'qwen2.5-vl:7b',
+          endpoint: mockEndpoint,
+          endpointHost: `127.0.0.1:${addr.port}`,
+        },
+      },
+      usage: { calls: 2, inputTokens: 95, outputTokens: 15 },
+    });
+    expect(schemaErrors('report', report)).toEqual([]);
+    expect(existsSync(path.join(outDir, 'payloads.jsonl'))).toBe(true);
+
+    const docText = docOut.join('');
+    expect(docText).toContain('model provider: openai');
+    expect(docText).toContain(`model endpoint: ${mockEndpoint}`);
+    expect(docText).toContain(`custom host 127.0.0.1:${addr.port}`);
+  });
 });
