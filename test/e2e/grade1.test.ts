@@ -133,7 +133,7 @@ describe('Grade 1 readiness profile e2e (#16)', () => {
     const srv = await startFixtureServer({
       '/': {
         type: 'text/html',
-        body: '<!doctype html><html><body><h1>Notes</h1><script src="/app.js"></script></body></html>',
+        body: '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Notes</title></head><body><main><h1>Notes</h1></main><script src="/app.js"></script></body></html>',
       },
       '/app.js': {
         type: 'application/javascript',
@@ -164,7 +164,7 @@ describe('Grade 1 readiness profile e2e (#16)', () => {
 
     try {
       const code = await main(['run', '--profile', 'grade-1', '--url', srv.url, '--repo', repoDir, '--no-model', '--out', outDir]);
-      expect(code).toBe(1); // remaining 11 checks are not_checked until #17-#20
+      expect(code).toBe(1); // remaining 8 checks stay not_checked until #19-#21
     } finally {
       process.env.PATH = prevPath;
       if (prevAntUrl === undefined) delete process.env.ANTHROPIC_BASE_URL;
@@ -183,14 +183,14 @@ describe('Grade 1 readiness profile e2e (#16)', () => {
     expect(report.usage).toEqual({ calls: 0, inputTokens: 0, outputTokens: 0 });
     expect(report.spend?.actualUsd).toBe(0);
     expect(report.method.adapters?.[0]).toMatchObject({ id: 'gitleaks', version: '8.30.1', status: 'ok' });
-    expect(report.readiness?.counts).toEqual({ total: 13, passed: 2, failed: 0, notChecked: 11 });
-    expect(report.readiness?.summary).toBe('Grade 1: not ready (2 of 13 pass, 0 fail, 11 not checked)');
+    expect(report.readiness?.counts).toEqual({ total: 13, passed: 5, failed: 0, notChecked: 8 });
+    expect(report.readiness?.summary).toBe('Grade 1: not ready (5 of 13 pass, 0 fail, 8 not checked)');
     expect(report.readiness?.checks.find((c) => c.number === 5)?.verdict).toBe('pass');
     expect(report.readiness?.checks.find((c) => c.number === 6)?.verdict).toBe('pass');
     expect(report.findings?.some((f) => f.title.includes('generic gitleaks match'))).toBe(true);
 
     const md = readFileSync(path.join(outDir, 'report.md'), 'utf8');
-    expect(md).toContain('Grade 1: not ready (2 of 13 pass, 0 fail, 11 not checked)');
+    expect(md).toContain('Grade 1: not ready (5 of 13 pass, 0 fail, 8 not checked)');
     expect(md).toContain('gitleaks 8.30.1');
     expect(md).toContain('not a penetration test');
     expect(md).not.toMatch(/\/100\b|out of 100/i);

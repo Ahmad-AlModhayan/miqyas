@@ -4,8 +4,16 @@
 // Never submits forms, skips English & Arabic destructive controls, enforces same-origin isolation, and halts on 429/503.
 
 import type { BrowserContext, Page } from 'playwright';
-import type { CrawlOptions, CrawlResult, CrawlScreen, Observation, ServedArtifact } from '../session.js';
-import { attachWebDetectors } from './detectors.js';
+import type {
+  CrawledControlRecord,
+  CrawlOptions,
+  CrawlResult,
+  CrawlScreen,
+  Observation,
+  ServedArtifact,
+  SurfaceFinding,
+} from '../session.js';
+import { AXE_CORE_VERSION, attachWebDetectors } from './detectors.js';
 import { observe, type ObserveOptions } from './observe.js';
 import { hasCaptchaOrWafSignal, isDestructiveControl, type ControlDescriptor } from './policy.js';
 
@@ -14,7 +22,7 @@ export const DEFAULT_CRAWL_DEPTH = 3;
 export const DEFAULT_CRAWL_RPS = 2;
 
 const CONTROL_SELECTOR =
-  'button:not([disabled]), [role="tab"]:not([aria-disabled="true"]), [role="menuitem"]:not([aria-disabled="true"]), [aria-haspopup]:not([disabled]), summary';
+  'button:not([disabled]):not([aria-disabled="true"]), [role="tab"]:not([aria-disabled="true"]), [role="menuitem"]:not([aria-disabled="true"]), [aria-haspopup]:not([disabled]):not([aria-disabled="true"]), summary';
 
 export interface DiscoveredLink extends ControlDescriptor {
   href: string;
@@ -34,6 +42,15 @@ export interface FilteredCrawlTargets {
   controlIndices: number[];
   skippedOffOriginLinks: number;
   skippedControls: number;
+  skippedControlDetails: { tagName: string; label: string }[];
+}
+
+function describeControl(ctrl: ControlDescriptor): string {
+  const candidates = [ctrl.label, ctrl.ariaLabel, ctrl.title, ctrl.name, ctrl.href];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim()) return c.trim().slice(0, 80);
+  }
+  return ctrl.tagName || 'control';
 }
 
 /** Normalize a candidate anchor href within `baseOrigin`; returns null for off-origin or non-HTTP(S) URLs. */
@@ -87,9 +104,13 @@ export function filterCrawlTargets(raw: RawCrawlDiscovery, currentUrl: string, b
   let skippedOffOriginLinks = 0;
   let skippedControls = 0;
 
+  const controlIndices: number[] = [];
+  const skippedControlDetails: { tagName: string; label: string }[] = [];
+
   for (const link of raw.links) {
     if (isDestructiveControl({ ...link, tagName: link.tagName ?? 'a' })) {
       skippedControls++;
+      skippedControlDetails.push({ tagName: link.tagName ?? 'a', label: describeControl(link) });
       continue;
     }
     const normalized = normalizeCrawlUrl(link.href, currentUrl, baseOrigin);
@@ -103,16 +124,95 @@ export function filterCrawlTargets(raw: RawCrawlDiscovery, currentUrl: string, b
     }
   }
 
-  const controlIndices: number[] = [];
   for (const ctrl of raw.controls) {
     if (isDestructiveControl(ctrl)) {
       skippedControls++;
+      skippedControlDetails.push({ tagName: ctrl.tagName ?? 'button', label: describeControl(ctrl) });
       continue;
     }
     controlIndices.push(ctrl.selectorIndex);
   }
 
-  return { links, controlIndices, skippedOffOriginLinks, skippedControls };
+  return { links, controlIndices, skippedOffOriginLinks, skippedControls, skippedControlDetails };
+}
+
+interface ClickSnapshot {
+  href: string;
+  title: string;
+  text: string;
+  stateSig: string;
+  htmlLen: number;
+  mutCount?: number;
+}
+
+const CLICK_SNAPSHOT_BODY = `(() => {
+  const els = document.querySelectorAll('[aria-expanded],[aria-selected],[aria-checked],[aria-pressed],details,dialog');
+  const states = [];
+  for (let i = 0; i < Math.min(els.length, 60); i++) {
+    const el = els[i];
+    states.push([
+      el.tagName,
+      el.getAttribute('aria-expanded') || '',
+      el.getAttribute('aria-selected') || '',
+      el.getAttribute('aria-checked') || '',
+      el.getAttribute('aria-pressed') || '',
+      el.hasAttribute('open') ? '1' : '0',
+      el.hasAttribute('hidden') ? '1' : '0'
+    ].join(':'));
+  }
+  return {
+    href: location.href,
+    title: document.title,
+    text: (document.body && document.body.innerText ? document.body.innerText : '').replace(/\\s+/g, ' ').trim().slice(0, 32000),
+    stateSig: states.join('|'),
+    htmlLen: document.documentElement ? document.documentElement.innerHTML.length : 0
+  };
+})`;
+
+async function beginClickProbe(page: Page): Promise<ClickSnapshot | null> {
+  return page
+    .evaluate(`(() => {
+      window.__miqyasClickMut = 0;
+      if (window.__miqyasClickMo) {
+        try { window.__miqyasClickMo.disconnect(); } catch {}
+      }
+      if (document.documentElement) {
+        const mo = new MutationObserver((list) => { window.__miqyasClickMut += list.length; });
+        mo.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+        window.__miqyasClickMo = mo;
+      }
+      return ${CLICK_SNAPSHOT_BODY}();
+    })()`)
+    .then((v) => v as ClickSnapshot)
+    .catch(() => null);
+}
+
+async function disconnectClickObserver(page: Page): Promise<void> {
+  await page
+    .evaluate(`(() => {
+      if (window.__miqyasClickMo) {
+        try { window.__miqyasClickMo.disconnect(); } catch {}
+        window.__miqyasClickMo = null;
+      }
+    })()`)
+    .catch(() => {});
+}
+
+async function finishClickProbe(page: Page): Promise<ClickSnapshot | null> {
+  await settleDom(page, 800, 150);
+  return page
+    .evaluate(`(() => {
+      const mutCount = Number(window.__miqyasClickMut || 0);
+      if (window.__miqyasClickMo) {
+        try { window.__miqyasClickMo.disconnect(); } catch {}
+        window.__miqyasClickMo = null;
+      }
+      const snap = ${CLICK_SNAPSHOT_BODY}();
+      snap.mutCount = mutCount;
+      return snap;
+    })()`)
+    .then((v) => v as ClickSnapshot)
+    .catch(() => null);
 }
 
 /** Wait until DOM mutations settle or `capMs` elapses. */
@@ -195,6 +295,7 @@ export interface RunCrawlerDeps {
   defaultViewport?: { width: number; height: number };
   navTimeoutMs?: number;
   actionTimeoutMs?: number;
+  playwrightVersion?: string;
 }
 
 interface QueueItem {
@@ -286,6 +387,21 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
   const screens: CrawlScreen[] = [];
   let skippedControls = 0;
   let skippedOffOriginLinks = 0;
+  const controlChecks: CrawledControlRecord[] = [];
+  const seenSkippedKeys = new Set<string>();
+  const crawlErrors: SurfaceFinding[] = [];
+
+  const recordSkippedControl = (screenUrl: string, detail: { tagName: string; label: string }) => {
+    const key = `${screenUrl}|${detail.tagName}|${detail.label}`;
+    if (seenSkippedKeys.has(key)) return;
+    seenSkippedKeys.add(key);
+    controlChecks.push({
+      screenUrl,
+      tagName: detail.tagName,
+      label: detail.label,
+      status: 'skipped-destructive',
+    });
+  };
 
   const servedArtifacts: ServedArtifact[] = [];
   const seenArtifactKeys = new Set<string>();
@@ -419,10 +535,14 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
       }
 
       const baseObs = await observe(page, look);
+      const key = screenFingerprint(baseObs);
+      if (seenScreenKeys.has(key)) {
+        // Preserve any runtime errors/responses or post-action detector findings even if the screen fingerprint matched an earlier state.
+        if (!haltedReason) crawlErrors.push(...(await detectors.collect()));
+        return null;
+      }
       const findings = haltedReason ? [] : await detectors.collect();
       const obs: Observation = findings.length ? { ...baseObs, findings } : baseObs;
-      const key = screenFingerprint(obs);
-      if (seenScreenKeys.has(key)) return null;
       seenScreenKeys.add(key);
 
       if (opts.collectServedArtifacts && !haltedReason) {
@@ -456,9 +576,12 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
       return obs;
     };
 
-    const enqueueDiscovered = (filtered: FilteredCrawlTargets, nextDepth: number) => {
+    const enqueueDiscovered = (filtered: FilteredCrawlTargets, nextDepth: number, sourceUrl: string) => {
       skippedOffOriginLinks += filtered.skippedOffOriginLinks;
       skippedControls += filtered.skippedControls;
+      for (const detail of filtered.skippedControlDetails) {
+        recordSkippedControl(sourceUrl, detail);
+      }
       if (nextDepth > maxDepth) return;
       for (const nextUrl of filtered.links) {
         if (!visitedUrls.has(nextUrl) && !queuedUrls.has(nextUrl)) {
@@ -488,9 +611,10 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
       if (haltedReason || !obs || screens.length >= maxScreens) break;
       if (item.depth >= maxDepth) continue;
 
+      const curScreenUrl = page.url() || item.url;
       const raw = await inspectPageTargets(page, CONTROL_SELECTOR);
-      const filtered = filterCrawlTargets(raw, page.url() || item.url, baseOrigin);
-      enqueueDiscovered(filtered, item.depth + 1);
+      const filtered = filterCrawlTargets(raw, curScreenUrl, baseOrigin);
+      enqueueDiscovered(filtered, item.depth + 1, curScreenUrl);
 
       // Probe safe non-destructive interactive controls (tabs/menus/dialogs) at this depth without submitting forms.
       for (const idx of filtered.controlIndices) {
@@ -515,7 +639,7 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
               type: (el.getAttribute('type') ?? '').toLowerCase(),
               formMethod: (el.getAttribute('formmethod') ?? form?.getAttribute('method') ?? '').toLowerCase(),
               inForm: Boolean(form),
-              label: (el.textContent ?? '').trim().slice(0, 120),
+              label: ((el as HTMLElement).innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120),
               ariaLabel: el.getAttribute('aria-label') ?? '',
               title: el.getAttribute('title') ?? '',
               name: el.getAttribute('name') ?? '',
@@ -524,26 +648,66 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
           })
           .catch(() => null);
         if (!liveCtrl || isDestructiveControl(liveCtrl)) {
-          if (liveCtrl) skippedControls++;
+          if (liveCtrl) {
+            skippedControls++;
+            recordSkippedControl(curScreenUrl, {
+              tagName: liveCtrl.tagName || 'button',
+              label: describeControl(liveCtrl),
+            });
+          }
           continue;
         }
         await limiter.acquire();
         if (haltedReason) break;
-        await ctrl.click({ timeout: actionTimeoutMs }).catch(() => {});
+        const beforeClick = await beginClickProbe(page);
+        let clickedOk = true;
+        let afterClick: ClickSnapshot | null = null;
+        try {
+          await ctrl.click({ timeout: actionTimeoutMs }).catch(() => {
+            clickedOk = false;
+          });
+          if (clickedOk) {
+            afterClick = await finishClickProbe(page);
+          }
+        } finally {
+          if (!clickedOk || !afterClick) await disconnectClickObserver(page);
+        }
+        if (clickedOk && beforeClick) {
+          const postUrl = page.url();
+          const changed = afterClick
+            ? afterClick.href !== beforeClick.href ||
+              afterClick.title !== beforeClick.title ||
+              afterClick.text !== beforeClick.text ||
+              afterClick.stateSig !== beforeClick.stateSig ||
+              afterClick.htmlLen !== beforeClick.htmlLen ||
+              (afterClick.mutCount ?? 0) > 0
+            : postUrl !== beforeClick.href;
+          if (afterClick || changed) {
+            controlChecks.push({
+              screenUrl: curScreenUrl,
+              tagName: liveCtrl.tagName || 'button',
+              label: describeControl(liveCtrl),
+              status: changed ? 'changed' : 'unchanged',
+              ...(!changed ? { detail: 'click produced no observable URL, DOM, text, or interactive-state change' } : {}),
+            });
+          }
+        }
         if (haltedReason) break;
 
         const subObs = await captureScreen(item.depth + 1, `control:${idx}`);
         if (haltedReason || screens.length >= maxScreens) break;
         if (subObs && item.depth + 1 < maxDepth) {
+          const afterUrl = page.url() || item.url;
           const afterRaw = await inspectPageTargets(page, CONTROL_SELECTOR);
-          const afterFiltered = filterCrawlTargets(afterRaw, page.url() || item.url, baseOrigin);
-          enqueueDiscovered(afterFiltered, item.depth + 2);
+          const afterFiltered = filterCrawlTargets(afterRaw, afterUrl, baseOrigin);
+          enqueueDiscovered(afterFiltered, item.depth + 2, afterUrl);
         }
       }
     }
     if (pendingArtifactTasks.size > 0) {
       await Promise.allSettled([...pendingArtifactTasks]);
     }
+    crawlErrors.push(...detectors.drainEvents());
   } finally {
     await page.close().catch(() => {});
     await context.close().catch(() => {});
@@ -553,6 +717,10 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
     screens,
     skippedControls,
     skippedOffOriginLinks,
+    controlChecks,
+    ...(crawlErrors.length > 0 ? { crawlErrors } : {}),
+    axeVersion: AXE_CORE_VERSION,
+    ...(deps.playwrightVersion ? { playwrightVersion: deps.playwrightVersion } : {}),
     ...(haltedReason ? { haltedReason } : {}),
     ...(opts.collectServedArtifacts ? { servedArtifacts } : {}),
     ...(truncatedArtifacts > 0 ? { truncatedArtifacts } : {}),

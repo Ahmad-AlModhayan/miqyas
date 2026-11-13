@@ -425,6 +425,7 @@ export async function openWebSurfaceDriver(opts: { headed?: boolean; allowOtherO
         defaultViewport: DEFAULT_VIEWPORT,
         navTimeoutMs: NAV_TIMEOUT_MS,
         actionTimeoutMs: ACTION_TIMEOUT_MS,
+        playwrightVersion: PLAYWRIGHT_VERSION,
       });
     },
     async measureProbe(url: string, probe: Probe): Promise<Reading> {

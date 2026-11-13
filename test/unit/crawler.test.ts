@@ -71,5 +71,13 @@ describe('code-driven crawler helpers', () => {
     expect(filtered.skippedOffOriginLinks).toBe(1);
     expect(filtered.controlIndices).toEqual([0]);
     expect(filtered.skippedControls).toBe(6);
+    expect(filtered.skippedControlDetails.map((d) => d.label)).toEqual([
+      'Log out',
+      'حذف الحساب',
+      'Search',
+      'Save',
+      'Pay now',
+      'إرسال الطلب',
+    ]);
   });
 });

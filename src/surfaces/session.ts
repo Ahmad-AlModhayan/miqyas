@@ -175,6 +175,14 @@ export interface CrawlScreen {
   observation: Observation;
 }
 
+export interface CrawledControlRecord {
+  screenUrl: string;
+  label: string;
+  tagName: string;
+  status: 'changed' | 'unchanged' | 'skipped-destructive';
+  detail?: string;
+}
+
 export interface CrawlResult {
   screens: CrawlScreen[];
   skippedControls: number;
@@ -182,6 +190,10 @@ export interface CrawlResult {
   haltedReason?: 'http-429' | 'http-503' | 'captcha-or-waf' | 'max-screens';
   servedArtifacts?: ServedArtifact[];
   truncatedArtifacts?: number;
+  controlChecks?: CrawledControlRecord[];
+  crawlErrors?: SurfaceFinding[];
+  axeVersion?: string;
+  playwrightVersion?: string;
 }
 
 /** Pluggable surface driver (Web/Playwright, future CLI, desktop, API, industrial workers). */

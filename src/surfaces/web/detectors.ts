@@ -7,11 +7,12 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import type { BrowserContext, Page, Request, Response } from 'playwright';
-import type { SurfaceFinding, SurfaceFindingSeverity } from '../session.js';
+import type { EvidenceNode, SurfaceFinding, SurfaceFindingSeverity } from '../session.js';
 import { attachOriginIsolation } from './policy.js';
 
 const require = createRequire(import.meta.url);
 const AXE_MIN_JS = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+export const AXE_CORE_VERSION: string = require('axe-core/package.json').version;
 
 export const CANARY_HOST = 'canary.miqyas-probe.invalid';
 const MAX_SCAN_BODY_BYTES = 512 * 1024;
@@ -309,6 +310,10 @@ interface AxeViolation {
   nodes?: { target?: string[]; html?: string }[];
 }
 
+interface ResolvedAxeViolation extends AxeViolation {
+  resolvedNodes?: EvidenceNode[];
+}
+
 function axeSeverity(impact?: string | null): SurfaceFindingSeverity {
   if (impact === 'critical') return 'critical';
   if (impact === 'serious') return 'high';
@@ -323,6 +328,8 @@ const isTextContentType = (ct: string | undefined): boolean =>
 export interface WebDetectorCollector {
   /** Run all active screen checks (secrets, clipping, axe-core, focus trap, open redirects) and drain pending event findings. */
   collect(): Promise<SurfaceFinding[]>;
+  /** Drain passive listener findings (`pageerror`, `console`, `http-error`, `requestfailed`) without running DOM probes. */
+  drainEvents(): SurfaceFinding[];
 }
 
 /** Attach passive network/runtime listeners to `page` and provide on-capture active screen scanning. */
@@ -466,15 +473,49 @@ export function attachWebDetectors(
     try {
       const hasAxe = await page.evaluate('typeof window.axe?.run === "function"').catch(() => false);
       if (!hasAxe) await page.addScriptTag({ content: AXE_MIN_JS });
-      const res = (await page.evaluate(
-        'window.axe.run(document, { resultTypes: ["violations"] })',
-      )) as { violations?: AxeViolation[] };
+      const res = (await page.evaluate(`(async () => {
+        const raw = await window.axe.run(document, { resultTypes: ["violations"] });
+        const violations = (raw && raw.violations ? raw.violations : []).map((v) => {
+          const resolvedNodes = [];
+          for (const n of (v.nodes || []).slice(0, 3)) {
+            const sel = Array.isArray(n.target) && n.target.length ? String(n.target[0]) : '';
+            let box = { x: 0, y: 0, width: 0, height: 0 };
+            let role = 'element';
+            let name = sel;
+            try {
+              const el = sel ? document.querySelector(sel) : null;
+              if (el) {
+                const r = el.getBoundingClientRect();
+                box = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+                role = el.getAttribute('role') || el.tagName.toLowerCase();
+                const txt = (el.getAttribute('aria-label') || el.getAttribute('alt') || el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                name = txt ? sel + ' (' + txt.slice(0, 60) + ')' : sel;
+              }
+            } catch {}
+            resolvedNodes.push({ ref: sel || 'element', role, name, box });
+          }
+          return {
+            id: v.id,
+            impact: v.impact,
+            help: v.help,
+            nodes: (v.nodes || []).slice(0, 3).map((n) => ({ target: n.target })),
+            resolvedNodes,
+          };
+        });
+        return { violations };
+      })()`)) as { violations?: ResolvedAxeViolation[] };
       for (const v of res.violations ?? []) {
         const targets = (v.nodes ?? [])
           .slice(0, 3)
           .map((n) => (n.target ?? []).join(' '))
           .filter(Boolean)
           .join(', ');
+        const evidenceNodes = (v.resolvedNodes ?? []).map((n) => ({
+          ref: hide(n.ref),
+          role: hide(n.role),
+          name: hide(n.name),
+          box: n.box,
+        }));
         pushQueued({
           category: 'a11y',
           title: `axe ${v.id}: ${hide(v.help ?? v.id)}`,
@@ -482,6 +523,7 @@ export function attachWebDetectors(
           confirmed: true,
           url: hide(curUrl),
           evidence: `impact=${v.impact ?? 'moderate'}${targets ? `; targets=${hide(targets)}` : ''}`,
+          ...(evidenceNodes.length ? { nodes: evidenceNodes } : {}),
         });
       }
     } catch {
@@ -603,6 +645,9 @@ export function attachWebDetectors(
       if (!page.isClosed()) await scanAxe(url);
       if (!page.isClosed()) await scanFocusTrap(url);
       if (!page.isClosed()) await scanOpenRedirects([url, ...links]);
+      return queued.splice(0, queued.length);
+    },
+    drainEvents(): SurfaceFinding[] {
       return queued.splice(0, queued.length);
     },
   };
