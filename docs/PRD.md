@@ -2,25 +2,49 @@
 
 | | |
 |---|---|
-| Product | Miqyas checks whether your web app is ready to launch, and proves every check it made, from your own machine. An AI tester that proves what it checked, for web first, then desktop, Android and command-line apps. |
+| Product | Miqyas is a verification platform: the place any software passes through before anyone trusts it — across web, mobile, desktop, servers and industrial/factory systems. Phase 1 proves the proof core and adapter model first on Grade 1 web launch readiness. |
 | Owner | Kahf Labs |
 | Status | Building. Milestone 1 (hardening, then the live Wasl run) is under way; Grade 1 public early access follows. |
-| Version | 0.3 (2026-11-03) |
-| Changes | 0.3: the readiness hub. Grade 1 readiness for indie and vibe-coded launches comes first, on the web. The incumbent is Lovable's built-in Security checks. Miqyas orchestrates existing runners instead of rebuilding them (ADR 0005). The hardening decisions of map ticket 26 are folded in. 0.2: Miqyas becomes Kahf's testing platform, built on an evaluation of TestSprite on 2026-10-28. |
+| Version | 0.4 (2026-11-13) |
+| Changes | 0.4: define the verification-platform vision (proof core, agent team, adapters; five surfaces; CLI, CI gate, MCP and self-hosted entry points) above Phase 1 web Grade 1 readiness. 0.3: the readiness hub. Grade 1 readiness for indie and vibe-coded launches comes first, on the web. The incumbent is Lovable's built-in Security checks. Miqyas orchestrates existing runners instead of rebuilding them (ADR 0005). The hardening decisions of map ticket 26 are folded in. 0.2: Miqyas becomes Kahf's testing platform, built on an evaluation of TestSprite on 2026-10-28. |
 | License | Open code: PolyForm Shield 1.0.0 (`LICENSE`, `NOTICE.md`). Source-available, not open source by the OSI definition. |
 | Related | SRS `docs/SRS.md`, charter `docs/CHARTER.md`, threat model `docs/threat-model.md`, ADRs `docs/adr/`, glossary `CONTEXT.md`.  |
 
+## Vision
+
+Miqyas is a **verification platform**: the place any software passes through before anyone trusts it — web, mobile,
+desktop, servers, and industrial or factory systems. It is not an MCP server and not a standalone agent.
+
+There is no single, strong, trustworthy, integrated system to rely on for proving any software is sound; today's tools
+each check one angle and leave proof scattered. Miqyas brings verification together in three parts:
+
+- **Proof core**: every check, from any source, ends in one verdict in the ledger with evidence and coverage.
+- **Agent team**: agents that understand the target software, author plans, crawl states, run active checks, and inject
+  faults on any surface.
+- **Existing tools as adapters**: the world's runners, drivers and scanners plugged in behind adapters, never rebuilt
+  (ADR 0005).
+
+Four entry points meet teams where they work:
+
+1. **CLI**: a solo developer runs one command locally.
+2. **CI gate**: a team gates every release before `ready`.
+3. **MCP**: a coding agent builds, then asks Miqyas to verify.
+4. **Self-hosted**: a company or factory runs Miqyas on-premises so source code and data never leave.
+
+Phase 1 starts by proving the proof core and adapter layer on Grade 1 web launch readiness before expanding across
+surfaces and the full agent team.
+
 ## 1. Summary
 
-Miqyas answers three questions about an app, and keeps evidence for every answer:
+Within that platform, Miqyas answers three questions about a target, and keeps evidence for every answer:
 - **Verification**: did we build it right?
 - **Validation**: did we build the right thing?
 - **Readiness**: can it survive the real world?
 
-It is the orchestration and proof layer over the tools developers already trust (Playwright, axe-core, gitleaks,
-osv-scanner, later the app's own test runner, Stryker, ZAP and others). Miqyas runs them and turns their output into
-code-judged verdicts with evidence and coverage, in one ledger and one report. An AI agent fills only the gaps code
-can't: driving a flow and judging what code can't see.
+Its proof core runs over the tools developers already trust (Playwright, axe-core, gitleaks, osv-scanner, later the
+target's own test runner, Stryker, ZAP and others), turns their output into code-judged verdicts with evidence and
+coverage, and stores everything in one ledger and one report. An agent fills only the gaps code can't: driving a flow
+and judging what code can't see while full agent-team capabilities are phased in.
 
 The first product is the **Grade 1 profile**, for indie and vibe-coded launches. Its goal: don't get hacked, don't lose
 data, don't run up a $10k bill, and make sure every button works. One command runs 13 readiness checks against the
@@ -35,6 +59,11 @@ Everything runs on the person's machine. Only the model calls they configure lea
 code never reaches a model.
 
 ## 2. Problem
+
+**There is no single, trustworthy, integrated system for proving software is sound.** Teams stitch together unit runners,
+browser drivers, static scanners, SAST tools and AI testers. Each tool inspects one angle and lists only what it
+flagged; none unifies checks across web, mobile, desktop, servers and industrial systems into one ledger of proved
+verdicts, coverage and evidence.
 
 **Vibe-coded apps ship with holes nobody checked.** Research for ticket 52 (`docs/research/vibe-failures-2026-11.md`)
 ranks what actually hurt these apps in 2025–2026:
@@ -97,10 +126,10 @@ $0.02, and a 50-case plan took 23 s. It fell short where a tester must be strict
 
 | User | Job to be done |
 |---|---|
-| Indie developer or vibe-coder (early access) | "I built it with Lovable. Before launch, tell me whether anyone can read my users' data or run up my bill, and show me what you checked." |
-| Developer building with AI agents | "The agent says sign-up works. Show me which checks ran, and hand the failures back to it with proof." |
-| Company with a confidential app | «نبي نختبر النظام الداخلي بدون ما يطلع منه شي برا الشركة» |
-| QA or engineering lead | "Show me each assertion behind a PASS, and give me tests I can keep in CI." |
+| Solo developer or vibe-coder (early access) | "I built it with Lovable. Run one command before launch: tell me whether anyone can read my users' data or run up my bill, and show me what you checked." |
+| Team using a CI release gate | "Block any release that isn't `ready`, keep regressions out, and prove every assertion behind a PASS." |
+| Developer building with AI agents | "The agent built the feature over MCP. Ask Miqyas to verify it, show which checks ran, and hand back failures with proof." |
+| Company or factory self-hosting | «نبي نختبر النظام الداخلي بدون ما يطلع منه شي برا الشركة» (run against internal apps, servers or industrial systems on-premises so code and data never leave). |
 | Kahf Labs | "Gate every Wasl release, then Qasd and Mizwala, and produce the numbers behind every comparison table." |
 
 ## 5. Goals and non-goals
@@ -112,10 +141,14 @@ $0.02, and a 50-case plan took 23 s. It fell short where a tester must be strict
    replay, and the seeded corpus with its score. The live Wasl run clears ticket 33's bar.
 4. **Every check proven on the corpus**: at least 3 seeds and a clean twin per check.
 
-**Goals for v1.0**: the seven principles of the charter: the assertion ledger; the mutation self-check;
-exported tests that are real regression tests; one CLI and MCP across web, Android, Tauri desktop, command-line programs
-and engine scenarios; harness contract checks; local-first with pluggable models; Arabic and RTL built in. Plans stay a
-superset of TestSprite's steps.
+**Goals for v1.0**: the seven principles of the charter: the proof core (assertion ledger); the mutation self-check;
+exported tests that are real regression tests; one CLI, CI gate and MCP across web, Android, Tauri desktop,
+command-line programs and engine scenarios; harness contract checks; local-first and self-hosted operation with
+pluggable models; Arabic and RTL built in. Plans stay a superset of TestSprite's steps.
+
+**Platform horizon (beyond v1.0)**: expand the agent team (understanding the software, drafting plans, crawling states,
+running active checks and injecting faults) and surface adapters to cover servers and industrial/factory systems alongside
+web, mobile and desktop.
 
 **Non-goals**
 - Not a penetration test, a security audit or a certification. Every security check says so.

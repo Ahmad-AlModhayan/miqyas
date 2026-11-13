@@ -2,30 +2,46 @@
 
 | | |
 |---|---|
-| Version | 0.3 (2026-11-03): hardening and Grade 1 readiness; spec ticket 61 |
+| Version | 0.4 (2026-11-13): align platform scope (proof core, agent team, adapters; entry points and future surfaces) with PRD 0.4 |
 | Status | Building. M1 hardening from 2026-11-09; Grade 1 early access next. |
 | PRD | `docs/PRD.md` |
 
 ## 1. Introduction
 
 ### 1.1 Purpose
-Specifies Miqyas's plan format, assertion ledger, mutate mode, exporter, harness contract checks, surface workers, engine scenario runner, Arabic and RTL checks, model router and scrubber, CLI, MCP server and reports, and the P1 and P2 features that follow v1.0.
+Specifies Miqyas's proof core (plan format, assertion ledger, mutate mode, readiness checks, exporter, harness contract
+checks), surface workers, adapters, Arabic and RTL checks, model router and scrubber, CLI, CI gate hooks, MCP server
+and reports, along with the P1 and P2 features that follow v1.0.
 
 ### 1.2 Scope
-In scope for early access (M1–M2): web apps in Chromium, the hardening of §3.11 and the Grade 1 readiness profile of §3.12, judged by code, with existing tools behind adapters (ADR 0005). In scope for v1.0: web apps in Chromium, Android apps on an emulator or device, Tauri desktop apps on Windows, Linux and macOS, command-line programs, and engine scenarios for Wasl's `wasld`. Out of scope for v1.0: iOS (P2), load testing, penetration testing, hosted runs. After v1.0 (P1): recorder, persona runs, fix loop, PDF reports, GitHub check. The security checks once planned for P1 (FR-S1–S4) come earlier, in §3.11 and §3.12.
+Miqyas is a verification platform built around a proof core, an agent team, and existing tools plugged in as adapters
+(PRD Vision). Within that platform:
+
+- **In scope for early access (M1–M2):** web targets in Chromium, the hardening of §3.11 and the Grade 1 readiness
+  profile of §3.12, judged by code, with existing tools behind adapters (ADR 0005).
+- **In scope for v1.0:** web apps in Chromium, Android apps on an emulator or device, Tauri desktop apps on Windows,
+  Linux and macOS, command-line programs, and engine scenarios for Wasl's `wasld`, across CLI, CI gate, MCP and
+  self-hosted runs.
+- **Beyond v1.0 (P1, P2 and platform horizon):** recorder, persona runs, fix loop, PDF reports, GitHub check (P1); iOS
+  and the Python judge on `kahf-agent-harness` (P2); broader server and industrial/factory surface workers and full
+  autonomous agent-team workflows (understanding software, drafting plans, exploring, running active checks and fault
+  injection across surfaces).
+- **Out of scope:** load testing, full penetration testing, and Kahf-hosted runs where customers' software runs on
+  Kahf's cloud. The security checks once planned for P1 (FR-S1–S4) come earlier, in §3.11 and §3.12.
 
 ### 1.3 Definitions
 | Term | Meaning |
 |---|---|
-| Plan | A JSON file of steps for one flow on one surface |
+| Plan | A JSON file of steps or faults for one flow on one surface, authored by a person or drafted by the agent team |
 | Step | An `action` or an `assertion`, each with a stable `id` |
 | Ledger | Every assertion in a run with exactly one verdict and its evidence |
 | Verdict | `pass`, `fail`, `blocked` (a needed input is missing) or `not_checked` |
 | Evidence | Screenshot crop, the DOM, accessibility or UI-hierarchy node read, observation, check method |
 | Worker | A process that drives one surface over the worker protocol (§5.2) |
+| Adapter | The module that runs an existing tool and reports its version and coverage |
 | Detection rate | Mutations whose targeted assertion failed, divided by mutations applied |
-| Contract check | Calling a mock with every command the app can send; silence fails |
-| Scenario | A seeded engine test: devices, steps, injected faults, invariants |
+| Contract check | Calling a mock with every command the target can send; silence fails |
+| Scenario | A seeded engine or server test: devices, steps, injected faults, invariants |
 | False failure | A failed run not traced to a product, harness or plan defect |
 
 ## 2. Overall description
@@ -49,7 +65,8 @@ In scope for early access (M1–M2): web apps in Chromium, the hardening of §3.
 ```
 
 ### 2.2 User classes
-Plan authors (developers, QA), coding agents over MCP, report readers (no install), self-hosting admins, Kahf maintainers.
+Solo developers (CLI), release teams (CI gate blocking before `ready`), coding agents (over MCP), plan authors
+(developers, QA), report readers (no install), self-hosting admins (companies and factories), Kahf maintainers.
 
 ### 2.3 Operating environment
 macOS, Linux or Windows with Node 20+; Playwright's Chromium; Android platform tools with an emulator or device; for macOS Tauri runs, an app build with `tauri-plugin-wdio-webdriver`; a Rust toolchain for the engine worker. Models through the Anthropic API (`ANTHROPIC_API_KEY` from the environment) or an OpenAI-compatible endpoint such as vLLM or Ollama.

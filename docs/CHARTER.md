@@ -1,21 +1,38 @@
 # Miqyas charter
 
+## Vision
+
+Miqyas is a **verification platform**: the place any software passes through before anyone trusts it — across web,
+mobile, desktop, servers and industrial or factory systems. It is not an MCP server and not a standalone agent.
+
+Today there is no single, strong, trustworthy, integrated system for proving any software is sound; existing tools each
+check one angle and leave teams without unified proof. Miqyas solves that in three parts:
+
+- **Proof core**: every check, from any source, ends in one recorded verdict with evidence and coverage.
+- **Agent team**: agents that understand the target software, author plans, crawl states, run active checks, and inject
+  faults on any surface.
+- **Existing tools as adapters**: the world's runners, drivers and scanners plugged in behind adapters, never rebuilt
+  (ADR 0005).
+
+Teams reach it through four entry points: one CLI command for a solo developer, a CI gate that blocks release before
+`ready`, an MCP interface for coding agents after building, and self-hosted deployment so a company's or factory's
+code and data never leave.
+
 ## Goal
 
-Miqyas checks whether your web app is ready to launch, and proves every check it made, from your own machine. It
-answers three questions with evidence:
+Built on that vision, Miqyas answers three questions about a target with evidence:
 - **Verification**: did we build it right?
 - **Validation**: did we build the right thing?
 - **Readiness**: can it survive the real world?
 
-Miqyas doesn't replace your test runners. It runs them, judges what they found, and proves what they checked
-(ADR 0005). The verdict is computed, not judged: every assertion, whether a person wrote it or a readiness check
-did, gets exactly one recorded verdict with evidence. A run passes only when all of them are recorded passes, and a
-profile is ready only when every check in it is. Miqyas measures itself by breaking apps on purpose, and sends nothing
-off the machine except the model calls the person configures.
+Miqyas doesn't replace your test runners. Its proof core runs them, judges what they found, and proves what they
+checked (ADR 0005). The verdict is computed, not assumed: every assertion — whether authored by a person, drafted by
+the agent team, or defined by a readiness check — gets exactly one recorded verdict with evidence. A run passes only
+when all assertions pass, and a profile is `ready` only when every check in it has a recorded pass. Miqyas measures
+itself by breaking targets on purpose, and sends nothing off the machine except the model calls the person configures.
 
-First Grade 1 on the web, for indie and vibe-coded launches. Wasl stays the first app proven end to end. Details:
-[PRD](PRD.md), [SRS](SRS.md), [threat model](threat-model.md), [ADRs](adr/).
+Phase 1 proves the proof core and adapter model first on Grade 1 web launch readiness, with Wasl as the first target
+proven end to end. Details: [PRD](PRD.md), [SRS](SRS.md), [threat model](threat-model.md), [ADRs](adr/).
 
 ## What to beat
 
@@ -72,8 +89,9 @@ These were first called the "seven pillars"; they're renamed so that "pillar" ke
    assertion caught each one.
 3. **Exports that are real regression tests.** Role/name locators recorded for every action from day one; export
    replays each assertion against the final state and refuses tests without assertions (phase 1b).
-4. **One CLI and MCP across surfaces.** Web first; Tauri via WebdriverIO's Tauri service (macOS through
-   `tauri-plugin-wdio-webdriver`), Android via Appium, CLI programs, and a scenario runner for engines.
+4. **One proof core, four entry points, many surfaces.** CLI, CI gate, MCP and self-hosted runs over one ledger;
+   web first, then Tauri desktop (macOS through `tauri-plugin-wdio-webdriver`), Android via Appium, CLI programs,
+   server/engine scenarios with fault injection, and later industrial/factory systems.
 5. **Harness contract checks.** For a mocked target, check that the mock answers every command the app can send
    before running a plan.
 6. **Local-first.** Pluggable model providers, Anthropic Claude by default with the key from the environment only; a
@@ -83,6 +101,9 @@ These were first called the "seven pillars"; they're renamed so that "pillar" ke
 
 ## Architecture
 
+Phase 1 implements the proof core, the first surface worker (web), and the first adapters behind a clean boundary so
+additional surfaces, fault-injection workers, and coordinated agent-team roles plug into the same ledger:
+
 ```
 plans (miqyas-plan/1) + profiles (grade-1) ──> core (TypeScript, Node 20+)
         plan parser + lint, ledger + readiness, reports, quote + cap, mutate, scrubber, payload log, corpus score
@@ -90,7 +111,7 @@ plans (miqyas-plan/1) + profiles (grade-1) ──> core (TypeScript, Node 20+)
         ▼                                 ▼                           ▼
   model provider (Anthropic default;  web: Playwright Chromium,  axe-core (in page), gitleaks,
   scripted and replay agents)         crawl + detectors + probes osv-scanner (user-installed)
-                                      later workers over miqyas-worker/1: Tauri, Android, engine
+                                      later workers over miqyas-worker/1: Tauri, Android, CLI, engine/server, industrial
 ```
 
 - **Adapters**: each existing tool runs behind an adapter that reports what it covered and its version; Miqyas writes
