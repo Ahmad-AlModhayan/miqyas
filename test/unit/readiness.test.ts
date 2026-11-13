@@ -9,6 +9,8 @@ import {
   buildReadinessReport,
   evaluateCheck5ServedSecrets,
   evaluateCheck6RepoSecrets,
+  evaluateCheck7MigrationRls,
+  evaluateCheck13Dependencies,
   evaluateGrade1Profile,
   GRADE_1_CHECKS,
   linkReadinessEvidenceIds,
@@ -278,4 +280,139 @@ describe('readiness profile core', () => {
     expect(c5.evidenceIds).toEqual(deduped.map((f) => f.id));
     expect(deduped[0]?.id).toMatch(/^secret-exposure-/);
   });
+
+  it('evaluates Check 7 (SQL migration RLS via libpg-query): not_checked, pass, and fail with missing-rls finding', async () => {
+    expect((await evaluateCheck7MigrationRls({})).check.verdict).toBe('not_checked');
+
+    const dir = makeTmpDir();
+    const emptyRepo = path.join(dir, 'empty');
+    mkdirSync(emptyRepo, { recursive: true });
+    expect((await evaluateCheck7MigrationRls({ repoPath: emptyRepo })).check.verdict).toBe('not_checked');
+
+    const cleanRepo = path.join(dir, 'clean');
+    mkdirSync(path.join(cleanRepo, 'supabase/migrations'), { recursive: true });
+    writeFileSync(
+      path.join(cleanRepo, 'supabase/migrations/001_init.sql'),
+      'CREATE TABLE public.orders (id uuid primary key);\nALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;\n',
+    );
+    const passRes = await evaluateCheck7MigrationRls({ repoPath: cleanRepo });
+    expect(passRes.check.verdict).toBe('pass');
+    expect(passRes.check.adapter).toBe('libpg-query');
+    expect(passRes.check.coverage).toContain('1 public table(s) parsed');
+    expect(passRes.findings).toHaveLength(0);
+
+    const leakyRepo = path.join(dir, 'leaky');
+    mkdirSync(path.join(leakyRepo, 'supabase/migrations'), { recursive: true });
+    writeFileSync(
+      path.join(leakyRepo, 'supabase/migrations/001_init.sql'),
+      'CREATE TABLE public.orders (id uuid primary key);\nALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;\nCREATE TABLE public.secrets (id serial primary key, val text);\n',
+    );
+    const failRes = await evaluateCheck7MigrationRls({ repoPath: leakyRepo });
+    expect(failRes.check.verdict).toBe('fail');
+    expect(failRes.findings).toHaveLength(1);
+    expect(failRes.findings[0]).toMatchObject({ category: 'missing-rls', severity: 'high' });
+    expect(failRes.findings[0]?.evidence).toContain('secrets');
+  });
+
+  it('evaluates Check 13 (osv-scanner): fails on critical/high/MAL-, records medium/low on pass, not_checked when unavailable', async () => {
+    expect((await evaluateCheck13Dependencies({})).check.verdict).toBe('not_checked');
+
+    const dir = makeTmpDir();
+    const repoDir = path.join(dir, 'repo');
+    mkdirSync(repoDir, { recursive: true });
+    writeFileSync(
+      path.join(repoDir, 'package-lock.json'),
+      JSON.stringify({
+        name: 'app',
+        lockfileVersion: 3,
+        packages: { '': { name: 'app' }, 'node_modules/badpkg': { version: '1.0.0' } },
+      }),
+    );
+
+    const noBinEnv = { ...process.env, PATH: dir };
+    expect((await evaluateCheck13Dependencies({ repoPath: repoDir, osv: { env: noBinEnv } })).check.verdict).toBe('not_checked');
+
+    const makeOsvEnv = (vulns: Array<{ id: string; severity: string }>, exitCode = 1, stderr = '') => {
+      const binDir = path.join(dir, `bin-${Math.random().toString(36).slice(2, 8)}`);
+      mkdirSync(binDir, { recursive: true });
+      const shim = path.join(binDir, 'osv-scanner');
+      const report = vulns.length
+        ? {
+            results: [
+              {
+                source: { path: path.join(repoDir, 'package-lock.json'), type: 'lockfile' },
+                packages: [
+                  {
+                    package: { name: 'badpkg', version: '1.0.0', ecosystem: 'npm' },
+                    vulnerabilities: vulns.map((v) => ({
+                      id: v.id,
+                      summary: `${v.id} issue`,
+                      database_specific: { severity: v.severity },
+                    })),
+                  },
+                ],
+              },
+            ],
+          }
+        : { results: [] };
+      writeFileSync(
+        shim,
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('2.7.0'); process.exit(0); }
+const stderr = ${JSON.stringify(stderr)};
+if (stderr) process.stderr.write(stderr);
+process.stdout.write(${JSON.stringify(JSON.stringify(report))});
+process.exit(${exitCode});
+`,
+      );
+      chmodSync(shim, 0o755);
+      return { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` };
+    };
+
+    const dbMiss = await evaluateCheck13Dependencies({
+      repoPath: repoDir,
+      osv: { env: makeOsvEnv([], 127, 'no local databases found') },
+    });
+    expect(dbMiss.check.verdict).toBe('not_checked');
+
+    const medOnly = await evaluateCheck13Dependencies({
+      repoPath: repoDir,
+      osv: { env: makeOsvEnv([{ id: 'GHSA-med-1', severity: 'MODERATE' }], 1) },
+    });
+    expect(medOnly.check.verdict).toBe('pass');
+    expect(medOnly.findings).toHaveLength(1);
+    expect(medOnly.findings[0]?.severity).toBe('medium');
+
+    const malFail = await evaluateCheck13Dependencies({
+      repoPath: repoDir,
+      osv: { env: makeOsvEnv([{ id: 'MAL-2026-0001', severity: 'LOW' }], 1) },
+    });
+    expect(malFail.check.verdict).toBe('fail');
+    expect(malFail.findings[0]?.category).toBe('vulnerable-dependency');
+    expect(malFail.findings[0]?.severity).toBe('critical');
+
+    // Full grade-1 profile wires Check 7 and Check 13 adapters into method.adapters
+    const profileRes = await evaluateGrade1Profile({
+      dryRun: false,
+      noModel: true,
+      repoPath: cleanRepoWithLock(dir),
+      crawl: makeFakeCrawl(),
+      osv: { env: makeOsvEnv([], 0) },
+    });
+    expect(profileRes.adapters.map((a) => a.id)).toEqual(expect.arrayContaining(['libpg-query', 'osv-scanner']));
+    expect(profileRes.readiness.checks.find((c) => c.number === 7)?.verdict).toBe('pass');
+    expect(profileRes.readiness.checks.find((c) => c.number === 13)?.verdict).toBe('pass');
+  });
 });
+
+function cleanRepoWithLock(dir: string): string {
+  const repo = path.join(dir, 'full-clean-repo');
+  mkdirSync(path.join(repo, 'supabase/migrations'), { recursive: true });
+  writeFileSync(
+    path.join(repo, 'supabase/migrations/001.sql'),
+    'CREATE TABLE public.items (id uuid primary key);\nALTER TABLE public.items ENABLE ROW LEVEL SECURITY;\n',
+  );
+  writeFileSync(path.join(repo, 'package-lock.json'), JSON.stringify({ name: 'ok', lockfileVersion: 3, packages: { '': {} } }));
+  return repo;
+}

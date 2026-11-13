@@ -2,8 +2,9 @@
 // CLI exit codes that need no browser (SRS FR-C1): 2 for a plan or usage error, 3 for a missing model key.
 // Codes 0, 1 and 3 for a blocked run are in test/e2e/runner.test.ts, with a scripted agent.
 
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -460,7 +461,7 @@ describe('CLI exit codes', () => {
     expect(existsSync(outOtherOrigins)).toBe(false);
   });
 
-  it('doctor lists gitleaks binary status on stdout', async () => {
+  it('doctor lists gitleaks and osv-scanner status on stdout', async () => {
     const chunks: string[] = [];
     const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => {
       chunks.push(String(c));
@@ -469,10 +470,70 @@ describe('CLI exit codes', () => {
     try {
       const code = await main(['doctor']);
       expect([0, 3]).toContain(code);
-      expect(chunks.join('')).toContain('gitleaks');
+      const out = chunks.join('');
+      expect(out).toContain('gitleaks');
+      expect(out).toContain('osv-scanner');
+      expect(out).toContain('offline DB');
+      expect(out).toContain('update-db');
     } finally {
       spy.mockRestore();
       vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    }
+  });
+
+  it('update-db downloads OSV zips from fixture server, logs contacted URLs, and exits 3 on server failure', async () => {
+    let status = 200;
+    const requested: string[] = [];
+    const server = http.createServer((req, res) => {
+      requested.push(req.url ?? '');
+      if (status !== 200) {
+        res.statusCode = status;
+        res.end('fail');
+        return;
+      }
+      res.statusCode = 200;
+      res.end(Buffer.from('PK\x03\x04dummy-osv-zip'));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const baseUrl = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
+    const dbDir = path.join(tmp, 'osv-cache');
+    mkdirSync(dbDir, { recursive: true });
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => {
+      chunks.push(String(c));
+      return true;
+    });
+
+    try {
+      const codeOk = await main(
+        ['update-db', '--ecosystems', 'npm', '--db-dir', dbDir, '--json'],
+        { osvBaseUrl: baseUrl },
+      );
+      expect(codeOk).toBe(0);
+      expect(requested).toEqual(['/npm/all.zip']);
+      const parsed = JSON.parse(chunks.join('')) as {
+        logFile: string;
+        entries: Array<{ ecosystem: string; url: string; destination: string; status: string }>;
+      };
+      expect(parsed.entries.map((e) => e.url)).toEqual([`${baseUrl}/npm/all.zip`]);
+      expect(parsed.entries[0]?.status).toBe('ok');
+      expect(existsSync(parsed.entries[0]!.destination)).toBe(true);
+      expect(readFileSync(parsed.logFile, 'utf8')).toContain(`${baseUrl}/npm/all.zip`);
+
+      expect(await main(['update-db', '--ecosystems', '..', '--db-dir', dbDir], { osvBaseUrl: baseUrl })).toBe(2);
+      expect(await main(['update-db', '--db-dir', '   '], { osvBaseUrl: baseUrl })).toBe(2);
+
+      status = 500;
+      const codeFail = await main(
+        ['update-db', '--ecosystems', 'npm', '--db-dir', dbDir],
+        { osvBaseUrl: baseUrl },
+      );
+      expect(codeFail).toBe(3);
+    } finally {
+      spy.mockRestore();
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 });

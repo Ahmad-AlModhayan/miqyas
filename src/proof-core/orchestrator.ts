@@ -6,6 +6,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runAdapters, type Adapter, type AdapterResult } from '../adapters/adapter.js';
 import type { GitleaksExecOptions } from '../adapters/gitleaks.js';
+import type { OsvExecOptions } from '../adapters/osv.js';
 import type { ActTool, Agent, ModelInfo, StepHistory, ToolExecution, Usage } from '../agents/agent.js';
 import { isCandidateAction, nonCandidateRefMessage, selectActCandidates } from '../agents/protocol.js';
 import { BudgetError, type RunQuote, type SpendGuard } from '../agents/spend.js';
@@ -131,6 +132,7 @@ export interface VerificationRunOptions {
   settings?: RunSettings;
   repoPath?: string;
   gitleaksOpts?: GitleaksExecOptions;
+  osvOpts?: OsvExecOptions;
   env?: NodeJS.ProcessEnv;
   hostPolicyDeps?: Pick<HostOwnershipOptions, 'spendDir' | 'fetchImpl' | 'resolveTxtImpl'>;
   writeReports?: boolean;
@@ -682,6 +684,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
       ...(opts.settings.active ? { active: true } : {}),
       hide: evalHide,
       ...(opts.gitleaksOpts ? { gitleaks: opts.gitleaksOpts } : opts.env ? { gitleaks: { env: opts.env } } : {}),
+      ...(opts.osvOpts ? { osv: opts.osvOpts } : opts.env ? { osv: { env: opts.env } } : {}),
     });
     readinessReport = readinessRes.readiness;
     readinessCheckFindingKeys = readinessRes.checkFindingKeys;

@@ -14,6 +14,8 @@ import {
   type GitleaksExecOptions,
   type SecretHit,
 } from '../adapters/gitleaks.js';
+import { analyzeMigrationsRls, LIBPG_QUERY_VERSION } from '../adapters/migrations.js';
+import { runOsvScannerOffline, type OsvExecOptions } from '../adapters/osv.js';
 import type { CrawlResult, ServedArtifact } from '../surfaces/session.js';
 import { findingDedupeKey, type Finding } from './findings.js';
 import { PlanLedger, type PlanResult } from './ledger.js';
@@ -439,6 +441,7 @@ function secretCheckNotChecked(
     coverage: string;
     reason: string;
     whatToAdd: string;
+    adapter?: string;
     adapterVersion?: string | null;
     adapterInfo?: AdapterMethodInfo;
   },
@@ -453,13 +456,13 @@ function secretCheckNotChecked(
       mode: spec.mode,
       verdict: 'not_checked',
       method: 'none',
-      adapter: 'gitleaks',
+      adapter: opts.adapter ?? 'gitleaks',
       ...(opts.adapterVersion !== undefined ? { adapterVersion: opts.adapterVersion } : {}),
       coverage: opts.coverage,
       observation: '',
       reason: opts.reason,
       whatToAdd: opts.whatToAdd,
-      securityNotice: SECURITY_NOTICE,
+      ...(spec.securityCheck ? { securityNotice: SECURITY_NOTICE } : {}),
     },
     findings: [],
     ...(opts.adapterInfo ? { adapterInfo: opts.adapterInfo } : {}),
@@ -798,6 +801,275 @@ export async function evaluateCheck6RepoSecrets(opts: {
   };
 }
 
+/** Check 7: Every permanent table in public migrations has RLS enabled (libpg-query). */
+export async function evaluateCheck7MigrationRls(opts: {
+  repoPath?: string;
+  hide?: (t: string) => string;
+}): Promise<{
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  adapterInfo?: AdapterMethodInfo;
+}> {
+  const spec = GRADE_1_CHECKS[6]!;
+  const hide = opts.hide ?? ((t: string) => t);
+  if (!opts.repoPath) {
+    return secretCheckNotChecked(spec, {
+      adapter: 'libpg-query',
+      adapterVersion: LIBPG_QUERY_VERSION,
+      coverage: 'no --repo provided',
+      reason: '--repo was not provided',
+      whatToAdd: 'Pass --repo <path> containing SQL migrations to verify public-table RLS',
+    });
+  }
+
+  const resolvedRepo = path.resolve(opts.repoPath);
+  const repoStat = await stat(resolvedRepo).catch(() => null);
+  if (!repoStat || !repoStat.isDirectory()) {
+    return secretCheckNotChecked(spec, {
+      adapter: 'libpg-query',
+      adapterVersion: LIBPG_QUERY_VERSION,
+      coverage: 'invalid --repo directory',
+      reason: '--repo directory does not exist',
+      whatToAdd: 'Pass a valid directory path to --repo <path>',
+    });
+  }
+
+  const analysis = await analyzeMigrationsRls(resolvedRepo);
+  if (analysis.status === 'no_migrations') {
+    return secretCheckNotChecked(spec, {
+      adapter: 'libpg-query',
+      adapterVersion: analysis.version,
+      coverage: analysis.coverage,
+      reason: 'no SQL migration files found under --repo',
+      whatToAdd: 'Place SQL migrations under supabase/migrations/ or migrations/ in --repo',
+      adapterInfo: {
+        id: 'libpg-query',
+        version: analysis.version,
+        coverage: analysis.coverage,
+        status: 'skipped',
+        detail: 'no SQL migration files found',
+      },
+    });
+  }
+
+  if (analysis.status === 'error') {
+    return secretCheckNotChecked(spec, {
+      adapter: 'libpg-query',
+      adapterVersion: analysis.version,
+      coverage: analysis.coverage,
+      reason: `SQL migration parse failed (${hide(analysis.error ?? 'unknown syntax error')})`,
+      whatToAdd: 'Fix invalid PostgreSQL syntax in repository SQL migrations',
+      adapterInfo: {
+        id: 'libpg-query',
+        version: analysis.version,
+        coverage: analysis.coverage,
+        status: 'error',
+        ...(analysis.error ? { detail: hide(analysis.error) } : {}),
+      },
+    });
+  }
+
+  const findings: Finding[] = analysis.missingRlsTables.map((t, i) => ({
+    id: `libpg-query-check7:${i + 1}`,
+    category: 'missing-rls',
+    title: `Check 7: public table "${hide(`${t.schema}.${t.table}`)}" has RLS disabled`,
+    severity: 'high',
+    source: 'code',
+    confirmed: true,
+    evidence: hide(`${t.createdInFile}: CREATE TABLE ${t.schema}.${t.table} lacks active ENABLE ROW LEVEL SECURITY`),
+  }));
+
+  if (findings.length > 0) {
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'fail',
+        method: 'code',
+        adapter: 'libpg-query',
+        adapterVersion: analysis.version,
+        coverage: analysis.coverage,
+        observation: `${findings.length} of ${analysis.publicTables.length} public table(s) lack RLS`,
+        evidenceIds: findings.map((f) => f.id),
+      },
+      findings,
+      adapterInfo: { id: 'libpg-query', version: analysis.version, coverage: analysis.coverage, status: 'ok' },
+    };
+  }
+
+  return {
+    check: {
+      number: spec.number,
+      id: spec.id,
+      stepId: spec.stepId,
+      pillar: spec.pillar,
+      title: spec.title,
+      mode: spec.mode,
+      verdict: 'pass',
+      method: 'code',
+      adapter: 'libpg-query',
+      adapterVersion: analysis.version,
+      coverage: analysis.coverage,
+      observation:
+        analysis.publicTables.length > 0
+          ? `${analysis.publicTables.length} public table(s) across ${analysis.files.length} migration file(s) all enable RLS`
+          : `${analysis.files.length} migration file(s) parsed; 0 public tables created`,
+    },
+    findings: [],
+    adapterInfo: { id: 'libpg-query', version: analysis.version, coverage: analysis.coverage, status: 'ok' },
+  };
+}
+
+/** Check 13: No critical, high, or `MAL-` malicious package in repository lockfiles (`osv-scanner --offline`). */
+export async function evaluateCheck13Dependencies(opts: {
+  repoPath?: string;
+  hide?: (t: string) => string;
+  osv?: OsvExecOptions;
+}): Promise<{
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  adapterInfo?: AdapterMethodInfo;
+}> {
+  const spec = GRADE_1_CHECKS[12]!;
+  const hide = opts.hide ?? ((t: string) => t);
+
+  if (!opts.repoPath) {
+    return secretCheckNotChecked(spec, {
+      adapter: 'osv-scanner',
+      coverage: 'no --repo provided',
+      reason: '--repo was not provided',
+      whatToAdd: 'Pass --repo <path> and run `miqyas update-db` to scan lockfiles offline',
+    });
+  }
+
+  const resolvedRepo = path.resolve(opts.repoPath);
+  const repoStat = await stat(resolvedRepo).catch(() => null);
+  if (!repoStat || !repoStat.isDirectory()) {
+    return secretCheckNotChecked(spec, {
+      adapter: 'osv-scanner',
+      coverage: 'invalid --repo directory',
+      reason: '--repo directory does not exist',
+      whatToAdd: 'Pass a valid directory path to --repo <path>',
+    });
+  }
+
+  const osvOpts: OsvExecOptions = { hide, ...opts.osv };
+  const scan = await runOsvScannerOffline(resolvedRepo, osvOpts);
+
+  if (scan.status === 'no_lockfiles') {
+    return secretCheckNotChecked(spec, {
+      adapter: 'osv-scanner',
+      coverage: scan.coverage,
+      reason: 'no supported lockfiles found in --repo',
+      whatToAdd: 'Commit a supported lockfile (e.g. package-lock.json, pnpm-lock.yaml, requirements.txt) in --repo',
+      adapterInfo: { id: 'osv-scanner', version: null, coverage: scan.coverage, status: 'skipped', detail: 'no lockfiles found' },
+    });
+  }
+
+  if (scan.status === 'missing') {
+    return secretCheckNotChecked(spec, {
+      adapter: 'osv-scanner',
+      adapterVersion: null,
+      coverage: scan.coverage,
+      reason: 'osv-scanner binary not found on PATH',
+      whatToAdd: 'Install osv-scanner (https://github.com/google/osv-scanner) and run `miqyas update-db`',
+      adapterInfo: { id: 'osv-scanner', version: null, coverage: scan.coverage, status: 'skipped', detail: 'osv-scanner binary missing' },
+    });
+  }
+
+  if (scan.status === 'db_missing') {
+    return secretCheckNotChecked(spec, {
+      adapter: 'osv-scanner',
+      adapterVersion: scan.version,
+      coverage: scan.coverage,
+      reason: 'offline OSV vulnerability database is not populated',
+      whatToAdd: 'Run `miqyas update-db` to download offline OSV databases',
+      adapterInfo: { id: 'osv-scanner', version: scan.version, coverage: scan.coverage, status: 'skipped', detail: 'offline DB not populated' },
+    });
+  }
+
+  if (scan.status === 'error') {
+    return secretCheckNotChecked(spec, {
+      adapter: 'osv-scanner',
+      adapterVersion: scan.version,
+      coverage: scan.coverage,
+      reason: scan.error ?? 'osv-scanner offline scan failed',
+      whatToAdd: 'Run `miqyas update-db` and ensure `osv-scanner --offline` completes cleanly on --repo',
+      adapterInfo: {
+        id: 'osv-scanner',
+        version: scan.version,
+        coverage: scan.coverage,
+        status: 'error',
+        ...(scan.error ? { detail: scan.error } : {}),
+      },
+    });
+  }
+
+  const findings: Finding[] = scan.hits.map((h, i) => ({
+    id: `osv-check13:${i + 1}`,
+    category: 'vulnerable-dependency',
+    title: `Check 13: ${h.id} in ${hide(h.packageName)}@${h.packageVersion} (${h.ecosystem})`,
+    severity: h.severity,
+    source: 'code',
+    confirmed: true,
+    evidence: hide(
+      `${h.sourcePath}: ${h.packageName}@${h.packageVersion} (${h.id})${h.fixedVersions.length ? ` — fixed in ${h.fixedVersions.join(', ')}` : ''}: ${h.summary}`,
+    ),
+  }));
+
+  const failing = scan.hits.filter((h) => h.failsCheck);
+  const nonFailingCount = scan.hits.length - failing.length;
+
+  if (failing.length > 0) {
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'fail',
+        method: 'code',
+        adapter: 'osv-scanner',
+        adapterVersion: scan.version,
+        coverage: scan.coverage,
+        observation: `${failing.length} critical/high/MAL- issue(s) across ${scan.lockfiles.length} lockfile(s), ${scan.packageCount} package(s)${nonFailingCount ? ` (${nonFailingCount} medium/low recorded as findings)` : ''}`,
+        evidenceIds: findings.map((f) => f.id),
+      },
+      findings,
+      adapterInfo: { id: 'osv-scanner', version: scan.version, coverage: scan.coverage, status: 'ok' },
+    };
+  }
+
+  return {
+    check: {
+      number: spec.number,
+      id: spec.id,
+      stepId: spec.stepId,
+      pillar: spec.pillar,
+      title: spec.title,
+      mode: spec.mode,
+      verdict: 'pass',
+      method: 'code',
+      adapter: 'osv-scanner',
+      adapterVersion: scan.version,
+      coverage: scan.coverage,
+      observation:
+        nonFailingCount > 0
+          ? `0 critical, high, or MAL- vulnerabilities across ${scan.lockfiles.length} lockfile(s), ${scan.packageCount} package(s) (${nonFailingCount} medium/low recorded as findings)`
+          : `0 critical, high, or MAL- vulnerabilities across ${scan.lockfiles.length} lockfile(s), ${scan.packageCount} package(s)`,
+      ...(findings.length ? { evidenceIds: findings.map((f) => f.id) } : {}),
+    },
+    findings,
+    adapterInfo: { id: 'osv-scanner', version: scan.version, coverage: scan.coverage, status: 'ok' },
+  };
+}
+
 function defaultNotChecked(
   spec: ReadinessCheckSpec,
   opts: { dryRun: boolean; repoPath?: string; noModel?: boolean; active?: boolean },
@@ -810,9 +1082,6 @@ function defaultNotChecked(
   } else if (spec.number === 3 && opts.noModel) {
     reason = '--no-model skips Check 3 (sign-up and log-in need a model and two test accounts)';
     whatToAdd = 'Run with a model and two test accounts to cover Check 3';
-  } else if ([7, 13].includes(spec.number) && !opts.repoPath) {
-    reason = '--repo was not provided';
-    whatToAdd = `Pass --repo <path> (${spec.needs})`;
   } else if ([8, 9, 10, 11, 12].includes(spec.number) && !opts.active) {
     reason = '--active was not passed';
     whatToAdd = `Pass --active (${spec.needs})`;
@@ -870,6 +1139,7 @@ export async function evaluateGrade1Profile(opts: {
   active?: boolean;
   hide?: (t: string) => string;
   gitleaks?: GitleaksExecOptions;
+  osv?: OsvExecOptions;
 }): Promise<{
   readiness: ReadinessReport;
   ledgerPlan: PlanResult;
@@ -914,6 +1184,25 @@ export async function evaluateGrade1Profile(opts: {
     checkFindingKeys.set(6, new Set(c6.findings.map((f) => findingDedupeKey(f))));
   }
 
+  const c7 = await evaluateCheck7MigrationRls({
+    ...(opts.repoPath ? { repoPath: opts.repoPath } : {}),
+    hide,
+  });
+  findings.push(...c7.findings);
+  if (c7.findings.length > 0) {
+    checkFindingKeys.set(7, new Set(c7.findings.map((f) => findingDedupeKey(f))));
+  }
+
+  const c13 = await evaluateCheck13Dependencies({
+    ...(opts.repoPath ? { repoPath: opts.repoPath } : {}),
+    hide,
+    ...(opts.osv ? { osv: opts.osv } : {}),
+  });
+  findings.push(...c13.findings);
+  if (c13.findings.length > 0) {
+    checkFindingKeys.set(13, new Set(c13.findings.map((f) => findingDedupeKey(f))));
+  }
+
   // Merge gitleaks adapter reporting cleanly into method.adapters (combining Checks 5 & 6 coverage).
   const glInfos = [c5.adapterInfo, c6.adapterInfo].filter((x): x is AdapterMethodInfo => Boolean(x));
   if (glInfos.length > 0) {
@@ -928,10 +1217,14 @@ export async function evaluateGrade1Profile(opts: {
       ...(errInfo?.detail ? { detail: errInfo.detail } : {}),
     });
   }
+  if (c7.adapterInfo) adapters.push(c7.adapterInfo);
+  if (c13.adapterInfo) adapters.push(c13.adapterInfo);
 
   const checks: ReadinessCheckResult[] = GRADE_1_CHECKS.map((spec) => {
     if (spec.number === 5) return c5.check;
     if (spec.number === 6) return c6.check;
+    if (spec.number === 7) return c7.check;
+    if (spec.number === 13) return c13.check;
     return defaultNotChecked(spec, opts);
   });
 

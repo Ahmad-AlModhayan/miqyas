@@ -11,6 +11,13 @@ import { parseArgs, parseEnv } from 'node:util';
 import { createInterface } from 'node:readline/promises';
 import { buildApp, cloneState, exportTree, resolveCommit, SourceError } from '../adapters/bench-source.js';
 import { probeGitleaksVersion } from '../adapters/gitleaks.js';
+import {
+  defaultOsvCacheDir,
+  hasPopulatedOsvCache,
+  OsvValidationError,
+  probeOsvScannerVersion,
+  updateOsvDatabase,
+} from '../adapters/osv.js';
 import { AgentError, type Agent, type PayloadEntry } from '../agents/agent.js';
 import { DEFAULT_MODEL } from '../agents/anthropic.js';
 import { RecordingAgent, ReplayAgent } from '../agents/cassette.js';
@@ -81,6 +88,8 @@ Usage:
   miqyas bench <name> [--repo <clone>] [--commit <ref>] [--dry-run]
   miqyas bench --corpus <dir|seeds.json> [--out <dir>] [--history <file>] [--no-model|--dry-run]
                                                    run benchmark suite, score parts & track regressions in history.jsonl (benches: ${Object.keys(BENCHES).join(', ')})
+  miqyas update-db [--ecosystems npm,PyPI] [--db-dir <dir>]
+                                                   explicitly download offline OSV vulnerability databases (prints & logs endpoints)
   miqyas doctor                                    check Node, the browser, endpoint and whether a model key is set
 
 Options:
@@ -112,7 +121,9 @@ Options:
   --corpus <path>        seeded corpus directory or seeds.json manifest (for lint / bench)
   --history <file>       regression history JSONL file (default bench/history.jsonl)
   --profile <name>       readiness profile to evaluate (grade-1)
-  --repo <path>          repository path for readiness code/secret checks (e.g. Check 6)
+  --repo <path>          repository path for readiness code/secret/migration/dependency checks (Checks 6, 7, 13)
+  --ecosystems <list>    comma-separated OSV ecosystems for update-db (default npm,PyPI)
+  --db-dir <dir>         override local OSV cache directory for update-db
 
 Live billed runs print a quote, require an interactive terminal cap <= $${DAILY_CAP_USD} daily cap, and need a provider key in your environment. Unbilled local/private OpenAI-compatible endpoints work non-interactively. Secrets in plans are written \${secret.NAME} and read
 from MIQYAS_SECRET_NAME.`;
@@ -153,6 +164,8 @@ const OPTIONS = {
   corpus: { type: 'string' },
   history: { type: 'string' },
   profile: { type: 'string' },
+  ecosystems: { type: 'string' },
+  'db-dir': { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 } as const;
 
@@ -189,6 +202,8 @@ export interface Injected {
   spendGuard?: SpendGuard;
   quote?: RunQuote;
   hostPolicyDeps?: Pick<HostOwnershipOptions, 'spendDir' | 'fetchImpl' | 'resolveTxtImpl'>;
+  osvFetch?: typeof fetch;
+  osvBaseUrl?: string;
 }
 
 function resolveCliRoute(o: Opts, requireReady: boolean): ResolvedRoute {
@@ -1084,7 +1099,52 @@ async function cmdDoctor(o: Opts): Promise<number> {
       ? `gitleaks ${gitleaksVer}: ok\n`
       : 'gitleaks: missing (optional; install gitleaks for Grade 1 Checks 5-6)\n',
   );
+  const osvVer = await probeOsvScannerVersion();
+  const osvDir = defaultOsvCacheDir();
+  const osvReady = hasPopulatedOsvCache(osvDir);
+  const osvCacheNote = `offline DB ${osvReady ? 'populated' : 'not populated; run: miqyas update-db'} at ${osvDir}`;
+  process.stdout.write(
+    osvVer
+      ? `osv-scanner ${osvVer}: ok (${osvCacheNote})\n`
+      : `osv-scanner: missing (optional; install osv-scanner and run \`miqyas update-db\` for Grade 1 Check 13; ${osvCacheNote})\n`,
+  );
   return major >= 20 && browserOk ? 0 : 3;
+}
+
+async function cmdUpdateDb(args: string[], o: Opts, inject: Injected): Promise<number> {
+  if (args.length > 0) throw new UsageError('usage: miqyas update-db [--ecosystems npm,PyPI] [--db-dir <dir>] [--json]');
+  const ecosystems = o.ecosystems !== undefined
+    ? o.ecosystems.split(',').map((s) => s.trim()).filter(Boolean)
+    : undefined;
+  if (o.ecosystems !== undefined && (!ecosystems || ecosystems.length === 0)) {
+    throw new UsageError('--ecosystems requires a non-empty comma-separated list');
+  }
+  if (o['db-dir'] !== undefined && !o['db-dir'].trim()) {
+    throw new UsageError('--db-dir requires a non-empty path');
+  }
+  const cacheDir = o['db-dir'] ? path.resolve(o['db-dir'].trim()) : undefined;
+  try {
+    const res = await updateOsvDatabase({
+      ...(ecosystems ? { ecosystems } : {}),
+      ...(cacheDir ? { cacheDir } : {}),
+      ...(inject.osvBaseUrl ? { baseUrl: inject.osvBaseUrl } : {}),
+      ...(inject.osvFetch ? { fetchFn: inject.osvFetch } : {}),
+      onProgress: (msg) => {
+        if (!o.json) process.stderr.write(`miqyas update-db: ${msg}\n`);
+      },
+    });
+    if (o.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+    } else {
+      process.stdout.write(
+        `OSV DB updated (${res.entries.length} ecosystem(s), ${res.totalBytes} bytes) at ${res.cacheDir}\nLog: ${res.logFile}\n`,
+      );
+    }
+    return 0;
+  } catch (e) {
+    if (e instanceof OsvValidationError) throw new UsageError(e.message);
+    throw new EnvError((e as Error).message);
+  }
 }
 
 export async function main(argv: string[], inject: Injected = {}): Promise<number> {
@@ -1125,6 +1185,8 @@ export async function main(argv: string[], inject: Injected = {}): Promise<numbe
         return await cmdScrub(args, o);
       case 'bench':
         return await cmdBench(args, o, inject);
+      case 'update-db':
+        return await cmdUpdateDb(args, o, inject);
       case 'doctor':
         return await cmdDoctor(o);
       default:
