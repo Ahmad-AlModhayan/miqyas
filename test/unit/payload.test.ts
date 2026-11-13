@@ -81,7 +81,7 @@ describe('payload log', () => {
   it('records the model that answered each call, which a server-side fallback can change, in the log and the usage', async () => {
     const { client } = stub([use('step_done', { summary: 'filled' }), use('record_verdict', { verdict: 'pass', observation: 'shown', evidence_refs: ['c2e2'] })], ['claude-opus-5-5', 'claude-sonnet-5-5']);
     const log: PayloadEntry[] = [];
-    const agent = new AnthropicAgent({ client, log: (e) => log.push(e) });
+    const agent = new AnthropicAgent({ model: 'claude-opus-5-5', client, log: (e) => log.push(e) });
     const p = plan("Type x into 'Name'");
     const c = contexts(p, NO_SCRUB, ['Name', 'Signed in']);
     await agent.act(c.act);

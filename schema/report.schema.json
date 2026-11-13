@@ -32,6 +32,7 @@
       }
     },
     "usage": { "$ref": "#/$defs/usage" },
+    "spend": { "$ref": "#/$defs/spend" },
     "method": { "$ref": "#/$defs/method" },
     "screenshots": { "$ref": "#/$defs/screenshots" },
     "plans": { "type": "array", "items": { "$ref": "#/$defs/planResult" } }
@@ -42,7 +43,42 @@
     "modelInfo": {
       "type": "object",
       "required": ["provider", "model"],
-      "properties": { "provider": { "type": "string" }, "model": { "type": "string" }, "effort": { "type": "string" } }
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "effort": { "type": "string" },
+        "tier": { "enum": ["low", "medium", "high"] },
+        "endpoint": { "type": "string" },
+        "endpointHost": { "type": "string" }
+      }
+    },
+    "spend": {
+      "type": "object",
+      "required": ["currency", "capUsd", "dailyCapUsd", "dailySpentBeforeUsd", "quote", "actualUsd"],
+      "additionalProperties": false,
+      "properties": {
+        "currency": { "const": "USD" },
+        "capUsd": { "type": ["number", "null"], "minimum": 0 },
+        "dailyCapUsd": { "type": "number", "minimum": 0 },
+        "dailySpentBeforeUsd": { "type": "number", "minimum": 0 },
+        "quote": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["likelyUsd", "worstCaseUsd", "priceDate", "stalePriceTable"],
+              "additionalProperties": false,
+              "properties": {
+                "likelyUsd": { "type": ["number", "null"], "minimum": 0 },
+                "worstCaseUsd": { "type": ["number", "null"], "minimum": 0 },
+                "priceDate": { "type": "string" },
+                "stalePriceTable": { "type": "boolean" }
+              }
+            }
+          ]
+        },
+        "actualUsd": { "type": ["number", "null"], "minimum": 0 }
+      }
     },
     "usage": {
       "type": "object",

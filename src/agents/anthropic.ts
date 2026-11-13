@@ -22,23 +22,28 @@ import {
   type StepHistory,
   type Usage,
 } from './agent.js';
+import { DEFAULT_TIER, resolveEndpoint, resolveModelChoice, type Tier } from './models.js';
+import { DEFAULT_MAX_ACT_TURNS as SPEND_MAX_ACT_TURNS, DEFAULT_MAX_TOKENS as SPEND_MAX_TOKENS, type SpendGuard } from './spend.js';
 
 type Msg = Anthropic.Beta.Messages.BetaMessageParam;
 type Block = Anthropic.Beta.Messages.BetaContentBlockParam;
 type ToolDef = Anthropic.Beta.Messages.BetaTool;
 
-export const DEFAULT_MODEL = 'claude-opus-5-5';
+export const DEFAULT_MODEL = resolveModelChoice({ tier: DEFAULT_TIER }).model;
 export const DEFAULT_EFFORT = 'medium';
-export const MAX_TOKENS = 16000;
+export const MAX_TOKENS = SPEND_MAX_TOKENS;
 /** Model turns allowed for one action step. */
-export const DEFAULT_MAX_ACT_TURNS = 12;
+export const DEFAULT_MAX_ACT_TURNS = SPEND_MAX_ACT_TURNS;
 
 export interface AnthropicAgentOptions {
+  tier?: Tier;
   model?: string;
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   maxActTurns?: number;
   log?: (e: PayloadEntry) => void;
   client?: Anthropic;
+  spend?: SpendGuard;
+  env?: NodeJS.ProcessEnv;
 }
 
 const strictObject = (properties: Record<string, unknown>, required: string[]) =>
@@ -143,17 +148,31 @@ export class AnthropicAgent implements Agent {
 
   constructor(private readonly opts: AnthropicAgentOptions = {}) {
     this.client = opts.client ?? new Anthropic();
-    this.info = { provider: 'anthropic', model: opts.model ?? DEFAULT_MODEL, effort: opts.effort ?? DEFAULT_EFFORT };
+    const chosen = resolveModelChoice({
+      ...(opts.tier !== undefined ? { tier: opts.tier } : {}),
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+    });
+    const ep = resolveEndpoint(opts.env);
+    this.info = {
+      provider: 'anthropic',
+      model: chosen.model,
+      effort: opts.effort ?? DEFAULT_EFFORT,
+      ...(chosen.tier ? { tier: chosen.tier } : {}),
+      endpoint: ep.endpoint,
+      endpointHost: ep.host,
+    };
     this.maxActTurns = opts.maxActTurns ?? DEFAULT_MAX_ACT_TURNS;
     this.limits = { maxTokens: MAX_TOKENS, maxTurns: this.maxActTurns };
   }
 
   /** Text and images of the newest message; tool results are opened up. Image data is counted, never scanned. */
-  private outgoing(newest: Block[]): Outgoing {
+  private outgoing(blocks: Block[]): Outgoing {
     const out: Outgoing = { text: '', images: 0, imageBytes: 0 };
     const visit = (b: unknown) => {
-      const blk = b as { type: string; text?: string; source?: { data?: string }; content?: unknown };
+      if (!b || typeof b !== 'object') return;
+      const blk = b as { type?: string; text?: string; source?: { data?: string }; content?: unknown; input?: unknown };
       if (blk.type === 'text' && blk.text) out.text += blk.text + '\n';
+      if (blk.type === 'tool_use' && blk.input !== undefined) out.text += JSON.stringify(blk.input) + '\n';
       if (blk.type === 'image') {
         out.images++;
         out.imageBytes += Math.floor(((blk.source?.data?.length ?? 0) * 3) / 4);
@@ -161,15 +180,35 @@ export class AnthropicAgent implements Agent {
       if (blk.type === 'tool_result' && typeof blk.content === 'string') out.text += blk.content + '\n';
       if (blk.type === 'tool_result' && Array.isArray(blk.content)) blk.content.forEach(visit);
     };
-    newest.forEach(visit);
+    blocks.forEach(visit);
     return out;
   }
 
   private async call(kind: CallGate['kind'], ctx: CallGate['ctx'], system: string, tools: ToolDef[], messages: Msg[]): Promise<Anthropic.Beta.Messages.BetaMessage> {
-    // Logged before it leaves, so a call that dies mid-flight is still on record. payloads.jsonl keeps one request
-    // entry per call; the answering model goes only into usage.byModel, in the reports.
-    gateCall({ kind, ctx, info: this.info, log: this.opts.log }, this.outgoing(messages[messages.length - 1]!.content as Block[]));
-    // Server-side fallback (default routing) re-runs a refused request on another model inside the same call.
+    const newest = this.outgoing(messages[messages.length - 1]!.content as Block[]);
+    let promptChars = system.length;
+    let promptImages = 0;
+    for (const m of messages) {
+      const blocks = Array.isArray(m.content) ? (m.content as Block[]) : [{ type: 'text', text: String(m.content ?? '') } as Block];
+      const o = this.outgoing(blocks);
+      promptChars += o.text.length;
+      promptImages += o.images;
+    }
+    // Re-scan, pessimistic spend check, and payload log BEFORE sending. Server-side fallback is disabled.
+    gateCall(
+      {
+        kind,
+        ctx,
+        info: this.info,
+        log: this.opts.log,
+        spend: this.opts.spend,
+        bucket: 'assert',
+        maxTokens: MAX_TOKENS,
+        promptChars,
+        promptImages,
+      },
+      newest,
+    );
     const params = {
       model: this.info.model,
       max_tokens: MAX_TOKENS,
@@ -177,8 +216,6 @@ export class AnthropicAgent implements Agent {
       tools,
       messages,
       output_config: { effort: this.info.effort },
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
     } as unknown as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming;
     let res: Anthropic.Beta.Messages.BetaMessage;
     try {
@@ -189,6 +226,15 @@ export class AnthropicAgent implements Agent {
       if (e instanceof Anthropic.APIError) throw new AgentError(`Anthropic API error ${e.status ?? ''}: ${e.message}`);
       throw new AgentError(`model call failed: ${(e as Error).message}`);
     }
+    if (
+      !res.usage ||
+      typeof res.usage.input_tokens !== 'number' ||
+      !Number.isFinite(res.usage.input_tokens) ||
+      typeof res.usage.output_tokens !== 'number' ||
+      !Number.isFinite(res.usage.output_tokens)
+    ) {
+      throw new AgentError('missing usage from model response');
+    }
     const model = res.model ?? this.info.model;
     const input = res.usage.input_tokens + (res.usage.cache_read_input_tokens ?? 0) + (res.usage.cache_creation_input_tokens ?? 0);
     const per = ((this.usage.byModel ??= {})[model] ??= { calls: 0, inputTokens: 0, outputTokens: 0 });
@@ -197,6 +243,7 @@ export class AnthropicAgent implements Agent {
       u.inputTokens += input;
       u.outputTokens += res.usage.output_tokens;
     }
+    await this.opts.spend?.recordAndPersist({ model, bucket: 'assert', inputTokens: input, outputTokens: res.usage.output_tokens });
     if (res.stop_reason === 'refusal') throw new AgentError('the model declined the request');
     if (res.stop_reason === 'max_tokens') throw new AgentError('the model reply hit max_tokens');
     return res;

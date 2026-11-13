@@ -125,4 +125,31 @@ describe('report method and schema', () => {
     expect(md).toContain(`wasl-scrub.json, SHA-256 \`${sha256}\`, 6 term(s)`);
     expect(renderMarkdown(buildReport({ ...base, dryRun: true, model: null, method: testMethod(), plans: [] }))).toContain('| Scrub rules | none |');
   });
+
+  it('validates and renders spend quote, actual cost, tier, and endpoint host in reports', () => {
+    const richMethod = {
+      ...method,
+      model: { ...method.model, tier: 'low' as const, endpoint: 'https://proxy.example.com/v1', endpointHost: 'proxy.example.com' },
+    };
+    const report = buildReport({
+      ...base,
+      model: { ...base.model, tier: 'low', endpoint: 'https://proxy.example.com/v1', endpointHost: 'proxy.example.com' },
+      method: richMethod,
+      spend: {
+        currency: 'USD',
+        capUsd: 2.0,
+        dailyCapUsd: 20,
+        dailySpentBeforeUsd: 1.5,
+        quote: { likelyUsd: 0.04, worstCaseUsd: 0.5, priceDate: '2026-10-06', stalePriceTable: false },
+        actualUsd: 0.03,
+      },
+      plans: [result('pass')],
+    });
+    expect(schemaErrors('report', report)).toEqual([]);
+    const md = renderMarkdown(report);
+    expect(md).toContain('tier low');
+    expect(md).toContain('proxy.example.com');
+    expect(md).toContain('quote likely');
+    expect(md).toContain('actual $0.03');
+  });
 });

@@ -8,6 +8,7 @@ import { PNG } from 'pngjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Adapter } from '../../src/adapters/adapter.js';
 import type { Agent, ActContext, ActOutcome, JudgeContext, JudgeOutcome } from '../../src/agents/agent.js';
+import { BudgetError, SpendGuard, quotePlans } from '../../src/agents/spend.js';
 import { parsePlan } from '../../src/proof-core/plan.js';
 import { parsePreset } from '../../src/proof-core/mutate.js';
 import { runMutations, runVerification } from '../../src/proof-core/orchestrator.js';
@@ -278,5 +279,80 @@ describe('Proof Core orchestrator', () => {
     expect(result.verdict).toBe('dry_run');
     expect(result.exitCode).toBe(3);
     expect(seen).toEqual(['dead:net::ERR_CONNECTION_REFUSED']);
+  });
+
+  it('executes code-judged assertions in --no-model mode at $0 without falling back to dry_run', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'miqyas-orch-nomodel-'));
+    temps.push(dir);
+    const plan = parsePlan(
+      {
+        format: 'miqyas-plan',
+        version: 1,
+        id: 'code-only',
+        steps: [{ id: 'a1', type: 'assertion', text: 'Heading visible', check: { locator: { role: 'heading', name: 'Saved' }, expect: 'visible' } }],
+      },
+      'code-only',
+    );
+    const { driver } = fakeDriver({ initialText: 'Saved' });
+    const quote = quotePlans({ plans: [plan], model: null, noModel: true });
+
+    const result = await runVerification({
+      runId: 'run-nomodel',
+      url: 'http://app.local/',
+      plans: [plan],
+      runDir: dir,
+      driver,
+      agent: null,
+      noModel: true,
+      quote,
+      scrub: parseScrubRules({ terms: [] }),
+      scrubMethod: { file: null, sha256: null, terms: 0 },
+    });
+
+    expect(result.dryRun).toBe(false);
+    expect(result.verdict).toBe('pass');
+    expect(result.exitCode).toBe(0);
+    expect(result.report.spend).toMatchObject({ actualUsd: 0, quote: { likelyUsd: 0, worstCaseUsd: 0 } });
+  });
+
+  it('ends plan with budget cap error (exit 3) when SpendGuard trips inside agent and records quote beside actual cost', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'miqyas-orch-cap-'));
+    temps.push(dir);
+    const plan = parsePlan(
+      { format: 'miqyas-plan', version: 1, id: 'p1', steps: [{ id: 's1', type: 'action', text: 'Open' }, { id: 'a1', type: 'assertion', text: 'Visible' }] },
+      'p1',
+    );
+    const { driver } = fakeDriver();
+    const spendGuard = new SpendGuard({ runCapUsd: 1, spentTodayUsd: 0 });
+    const quote = quotePlans({ plans: [plan], model: 'claude-haiku-5-5', spentTodayUsd: 0 });
+    const budgetAgent: Agent = {
+      info: { provider: 'anthropic', model: 'claude-haiku-5-5', tier: 'low' },
+      usage: { calls: 0, inputTokens: 0, outputTokens: 0 },
+      async act() {
+        throw new BudgetError('budget cap: exceeded $1.00 cap');
+      },
+      async judge() {
+        throw new Error('should not be called');
+      },
+    };
+
+    const result = await runVerification({
+      runId: 'run-cap',
+      url: 'http://app.local/',
+      plans: [plan],
+      runDir: dir,
+      driver,
+      agent: budgetAgent,
+      spendGuard,
+      quote,
+      scrub: parseScrubRules({ terms: [] }),
+      scrubMethod: { file: null, sha256: null, terms: 0 },
+    });
+
+    expect(result.verdict).toBe('error');
+    expect(result.exitCode).toBe(3);
+    expect(result.plans[0]!.error).toContain('budget cap');
+    const saved = JSON.parse(await readFile(path.join(dir, 'report.json'), 'utf8'));
+    expect(saved.spend).toMatchObject({ capUsd: 1, actualUsd: 0, quote: { likelyUsd: quote.likelyUsd, worstCaseUsd: quote.worstCaseUsd } });
   });
 });

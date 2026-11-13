@@ -3,13 +3,19 @@
 // pluggable; Anthropic is the default. The runner owns the browser; agents only see observations and call tools.
 
 import type { ActTool, Check, Observation } from '../surfaces/session.js';
+import { AgentError, type Tier } from './models.js';
+import type { SpendBucket, SpendGuard } from './spend.js';
 
 export type { ActTool } from '../surfaces/session.js';
+export { AgentError } from './models.js';
 
 export interface ModelInfo {
   provider: string;
   model: string;
   effort?: string;
+  tier?: Tier;
+  endpoint?: string;
+  endpointHost?: string;
 }
 
 export interface Usage {
@@ -86,10 +92,6 @@ export interface Agent {
   judge(ctx: JudgeContext): Promise<JudgeOutcome>;
 }
 
-/** An error from the model provider (network, auth, refusal) or a refused payload: the plan ends as an error, never a
- * pass (exit 3). */
-export class AgentError extends Error {}
-
 /** One line of payloads.jsonl: what one model call sent. */
 export interface PayloadEntry {
   at: string;
@@ -119,15 +121,28 @@ export interface CallGate {
   ctx: Pick<ActContext, 'plan' | 'step' | 'rescan' | 'signal'>;
   info: ModelInfo;
   log?: ((e: PayloadEntry) => void) | undefined;
+  spend?: SpendGuard | undefined;
+  bucket?: SpendBucket | undefined;
+  maxTokens?: number | undefined;
+  promptChars?: number | undefined;
+  promptImages?: number | undefined;
 }
 
 /**
  * Every model call passes here first, whatever the provider: the outgoing text is re-scanned with the active rules
- * (any hit refuses the call, naming the rule, never the text), then the call is logged. One entry per call.
+ * (any hit refuses the call, naming the rule, never the text), pessimistic spend guard checks run pre-call, and
+ * then the call is logged. One entry per call.
  */
 export function gateCall(g: CallGate, out: Outgoing): void {
   const hits = g.ctx.rescan(out.text);
   if (hits.length) throw new AgentError(`refused a model call: scrub ${hits.join(', ')} still matched the outgoing text`);
+  g.spend?.beforeCall({
+    model: g.info.model,
+    bucket: g.bucket ?? 'assert',
+    inputChars: g.promptChars ?? out.text.length,
+    images: g.promptImages ?? out.images,
+    maxOutputTokens: g.maxTokens ?? 16000,
+  });
   g.log?.({
     at: new Date().toISOString(),
     kind: g.kind,

@@ -3,8 +3,11 @@
 // summary anyone can rerun. Terms follow the benchmark terms in docs/PRD.md: the mutation score is
 // Stryker's, and every number here is a product KPI (our own plans and mutants), not a recognised benchmark suite.
 
+import { PRICES, PRICE_NOTE, costEstimate, usageByModel } from '../agents/models.js';
 import { excludedText, validity, type MutationSummary, type Outcome } from './mutate.js';
 import { answeredBy, cell, code, renderMethod, TOOL_VERSION, type Method, type RunReport, type Usage } from './report.js';
+
+export { PRICES, PRICE_NOTE, costEstimate };
 
 export interface Bench {
   name: string;
@@ -44,33 +47,7 @@ export const BENCHES: Record<string, Bench> = {
   },
 };
 
-/** USD per million tokens, Anthropic's first-party list prices as of 2026-10-06. */
-export const PRICES: Record<string, { input: number; output: number }> = {
-  'claude-opus-5-5': { input: 4, output: 20 },
-  'claude-sonnet-5-5': { input: 2, output: 10 },
-  'claude-haiku-5-5': { input: 0.1, output: 0.5 },
-  'claude-fable-5-1': { input: 10, output: 50 },
-};
-export const PRICE_NOTE =
-  "List prices of 2026-10-06; every input token at the uncached rate (Miqyas counts cache reads and writes as input), so it's an upper bound for input.";
-
-/** Cost at list price, each call at the model that answered it (asked model when not recorded); null when a model
- * has no price on file. */
-export function costEstimate(model: string | null, usage: Usage): number | null {
-  let sum = 0;
-  for (const [m, u] of Object.entries(byModel(model, usage))) {
-    const p = PRICES[m];
-    if (!p) return null;
-    sum += (u.inputTokens * p.input + u.outputTokens * p.output) / 1e6;
-  }
-  return (model && PRICES[model]) || usage.byModel ? sum : null;
-}
-
-/** Usage by answering model; calls with no recorded model go to the asked one. */
-function byModel(asked: string | null, u: Usage): NonNullable<Usage['byModel']> {
-  if (u.byModel) return u.byModel;
-  return u.calls && asked ? { [asked]: { calls: u.calls, inputTokens: u.inputTokens, outputTokens: u.outputTokens } } : {};
-}
+const byModel = usageByModel;
 
 function addUsage(asked: string | null, ...us: Usage[]): Usage {
   const out: Usage & { byModel: NonNullable<Usage['byModel']> } = { calls: 0, inputTokens: 0, outputTokens: 0, byModel: {} };

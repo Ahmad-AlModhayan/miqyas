@@ -4,6 +4,8 @@
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import type { ModelInfo, Usage } from '../agents/agent.js';
+import { costEstimate } from '../agents/models.js';
+import type { RunQuote, SpendGuard } from '../agents/spend.js';
 import { PLAYWRIGHT_VERSION } from '../surfaces/web/driver.js';
 import { countEntries, runVerdict, type PlanCounts, type PlanResult, type RunVerdict } from './ledger.js';
 
@@ -50,6 +52,52 @@ export function environment(browser: string | null): Pick<Method, 'versions' | '
   };
 }
 
+export interface SpendReport {
+  currency: 'USD';
+  capUsd: number | null;
+  dailyCapUsd: number;
+  dailySpentBeforeUsd: number;
+  quote: {
+    likelyUsd: number | null;
+    worstCaseUsd: number | null;
+    priceDate: string;
+    stalePriceTable: boolean;
+  } | null;
+  actualUsd: number | null;
+}
+
+export function buildSpendReport(opts: {
+  spendGuard?: SpendGuard | undefined;
+  quote?: RunQuote | undefined;
+  model: ModelInfo | null;
+  usage: Usage | null;
+  noModel?: boolean;
+}): SpendReport | undefined {
+  if (!opts.spendGuard && !opts.quote) return undefined;
+  const actualUsd = opts.noModel
+    ? 0
+    : opts.spendGuard
+      ? Math.round(opts.spendGuard.actualUsd * 1_000_000) / 1_000_000
+      : opts.model && opts.usage
+        ? costEstimate(opts.model.model, opts.usage)
+        : null;
+  return {
+    currency: 'USD',
+    capUsd: opts.spendGuard?.runCapUsd ?? (opts.noModel ? 0 : null),
+    dailyCapUsd: opts.spendGuard?.dailyCapUsd ?? opts.quote?.dailyCapUsd ?? 20,
+    dailySpentBeforeUsd: opts.spendGuard?.spentTodayUsd ?? opts.quote?.spentTodayUsd ?? 0,
+    quote: opts.quote
+      ? {
+          likelyUsd: opts.quote.likelyUsd,
+          worstCaseUsd: opts.quote.worstCaseUsd,
+          priceDate: opts.quote.priceDate,
+          stalePriceTable: opts.quote.stalePriceTable,
+        }
+      : null,
+    actualUsd,
+  };
+}
+
 export interface RunReport {
   tool: 'miqyas';
   version: string;
@@ -63,6 +111,7 @@ export interface RunReport {
   verdict: RunVerdict | 'dry_run';
   totals: PlanCounts & { plans: number; plansPassed: number };
   usage: Usage;
+  spend?: SpendReport;
   method: Method;
   screenshots: typeof SCREENSHOTS;
   plans: PlanResult[];
@@ -76,6 +125,7 @@ export function buildReport(input: {
   dryRun: boolean;
   model: ModelInfo | null;
   usage: Usage;
+  spend?: SpendReport;
   method: Method;
   plans: PlanResult[];
 }): RunReport {
@@ -101,6 +151,7 @@ export function buildReport(input: {
     verdict: input.dryRun ? 'dry_run' : runVerdict(input.plans),
     totals,
     usage: input.usage,
+    ...(input.spend ? { spend: input.spend } : {}),
     method: input.method,
     screenshots: SCREENSHOTS,
     plans: input.plans,
@@ -129,6 +180,18 @@ const MARK: Record<string, string> = {
   failed: 'FAILED',
 };
 
+function fmtUsd(v: number | null | undefined): string {
+  if (v === null || v === undefined) return 'n/a';
+  if (v > 0 && v < 0.01) return `$${v.toFixed(4)}`;
+  return `$${v.toFixed(2)}`;
+}
+
+export function formatSpendSummary(s: SpendReport): string {
+  const q = s.quote;
+  const qText = q ? `quote likely ${fmtUsd(q.likelyUsd)} / worst ${fmtUsd(q.worstCaseUsd)}; ` : '';
+  return `${qText}cap ${fmtUsd(s.capUsd)}; actual ${fmtUsd(s.actualUsd)} (today before ${fmtUsd(s.dailySpentBeforeUsd)} / $${s.dailyCapUsd.toFixed(2)})`;
+}
+
 export function renderMarkdown(r: RunReport): string {
   const t = r.totals;
   const lines: string[] = [];
@@ -141,6 +204,7 @@ export function renderMarkdown(r: RunReport): string {
   lines.push(`| Finished | ${r.finishedAt} |`);
   lines.push(`| Assertions | ${t.assertions}: ${t.passed} pass, ${t.failed} fail, ${t.unverified} unverified, ${t.blocked} blocked, ${t.notChecked} not checked |`);
   lines.push(`| Model calls | ${r.usage.calls} (${r.usage.inputTokens} input, ${r.usage.outputTokens} output tokens)${r.usage.byModel ? `; ${cell(answeredBy(r.usage))}` : ''} |`);
+  if (r.spend) lines.push(`| Spend | ${formatSpendSummary(r.spend)} |`);
   lines.push(`| Screenshots | ${r.screenshots.note} |`, '');
   lines.push('A plan passes only when every assertion has a recorded pass with evidence. Unverified, blocked and not checked count as failures.', '');
   lines.push(...renderMethod(r.method));
@@ -176,6 +240,17 @@ export function renderMarkdown(r: RunReport): string {
   return lines.join('\n');
 }
 
+function formatMethodModel(m: NonNullable<Method['model']>): string {
+  const parts = [
+    `${m.provider} ${m.model}${m.effort ? `, effort ${m.effort}` : ''}`,
+    `max ${m.maxTokens} tokens per reply`,
+    `${m.maxTurns} turns per action`,
+  ];
+  if (m.tier) parts.push(`tier ${m.tier}`);
+  if (m.endpoint) parts.push(`endpoint ${m.endpointHost && m.endpointHost !== 'api.anthropic.com' ? `${m.endpoint} (host ${m.endpointHost})` : m.endpoint}`);
+  return cell(parts.join(', '));
+}
+
 /** The method section, shared by run and mutation reports. */
 export function renderMethod(m: Method): string[] {
   const v = m.versions;
@@ -188,7 +263,7 @@ export function renderMethod(m: Method): string[] {
     '|---|---|',
     `| Versions | Miqyas ${v.miqyas}, Node ${v.node}, Playwright ${v.playwright}, Chromium ${v.browser ?? 'not launched'} |`,
     `| OS | ${m.os.platform} ${m.os.release} (${m.os.arch}) |`,
-    `| Model | ${m.model ? cell(`${m.model.provider} ${m.model.model}${m.model.effort ? `, effort ${m.model.effort}` : ''}, max ${m.model.maxTokens} tokens per reply, ${m.model.maxTurns} turns per action`) : 'none (dry run)'} |`,
+    `| Model | ${m.model ? formatMethodModel(m.model) : 'none (dry run)'} |`,
     `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'} |`,
     `| Timeouts | plan ${t.planMs / 1000} s, navigation ${t.navigationMs / 1000} s, action ${t.actionMs / 1000} s |`,
     `| Preset | ${m.preset ? cell(m.preset) : 'none'} |`,
