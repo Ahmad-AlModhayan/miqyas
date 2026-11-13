@@ -18,6 +18,7 @@ const ALLOWED_LAYERS = {
 
 const VENDOR_LAYER_ONLY = {
   playwright: 'surfaces',
+  'axe-core': 'surfaces',
   '@anthropic-ai/sdk': 'agents',
 };
 

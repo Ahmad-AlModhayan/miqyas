@@ -7,7 +7,8 @@ import type { ModelInfo, Usage } from '../agents/agent.js';
 import { costEstimate } from '../agents/models.js';
 import type { RunQuote, SpendGuard } from '../agents/spend.js';
 import { PLAYWRIGHT_VERSION } from '../surfaces/web/driver.js';
-import type { Finding } from './findings.js';
+import type { FailOnThreshold, Finding } from './findings.js';
+import { findingsExceedThreshold } from './findings.js';
 import { countEntries, runVerdict, type PlanCounts, type PlanResult, type RunVerdict } from './ledger.js';
 
 export type { ModelInfo, Usage } from '../agents/agent.js';
@@ -40,6 +41,7 @@ export interface Method {
     allowOtherOrigins: boolean;
     headed: boolean;
     strict?: boolean;
+    failOn?: FailOnThreshold;
   };
   /** The mutation preset; null for a plain run. */
   preset: string | null;
@@ -132,6 +134,7 @@ export function buildReport(input: {
   method: Method;
   plans: PlanResult[];
   findings?: Finding[];
+  failOn?: FailOnThreshold;
 }): RunReport {
   const totals = { plans: input.plans.length, plansPassed: 0, ...countEntries([]) };
   for (const p of input.plans) {
@@ -144,6 +147,12 @@ export function buildReport(input: {
     totals.unverified += p.counts.unverified;
     totals.modelOnly = (totals.modelOnly ?? 0) + (p.counts.modelOnly ?? 0);
   }
+  const failOn = input.failOn ?? input.method.settings.failOn;
+  const ledgerVerdict = runVerdict(input.plans);
+  const failedByFindings =
+    !input.dryRun &&
+    ledgerVerdict === 'pass' &&
+    findingsExceedThreshold(input.findings ?? [], failOn).length > 0;
   return {
     tool: 'miqyas',
     version: TOOL_VERSION,
@@ -153,7 +162,7 @@ export function buildReport(input: {
     target: { url: input.url },
     dryRun: input.dryRun,
     model: input.model,
-    verdict: input.dryRun ? 'dry_run' : runVerdict(input.plans),
+    verdict: input.dryRun ? 'dry_run' : failedByFindings ? 'fail' : ledgerVerdict,
     totals,
     usage: input.usage,
     ...(input.spend ? { spend: input.spend } : {}),
@@ -201,8 +210,10 @@ export function formatSpendSummary(s: SpendReport): string {
 export function renderMarkdown(r: RunReport): string {
   const t = r.totals;
   const lines: string[] = [];
+  const failOnHits = findingsExceedThreshold(r.findings ?? [], r.method.settings.failOn).length;
+  const failOnNote = failOnHits > 0 ? ` Failed by \`--fail-on ${r.method.settings.failOn}\` (${failOnHits} confirmed finding(s) at or above threshold).` : '';
   lines.push(`# Miqyas run ${r.runId}`, '');
-  lines.push(r.dryRun ? `**DRY RUN**: no assertion was judged (${t.notChecked} not checked); ${t.plans} plan(s) resolved and opened.` : `**${MARK[r.verdict]}**: ${t.plansPassed} of ${t.plans} plans passed; ${t.passed} of ${t.assertions} assertions have a recorded pass.`, '');
+  lines.push(r.dryRun ? `**DRY RUN**: no assertion was judged (${t.notChecked} not checked); ${t.plans} plan(s) resolved and opened.` : `**${MARK[r.verdict]}**: ${t.plansPassed} of ${t.plans} plans passed; ${t.passed} of ${t.assertions} assertions have a recorded pass.${failOnNote}`, '');
   lines.push('| | |', '|---|---|');
   lines.push(`| Target | ${cell(r.target.url)} |`);
   lines.push(`| Model | ${r.model ? cell(`${r.model.provider} ${r.model.model}${r.model.effort ? ` (effort ${r.model.effort})` : ''}`) : 'none'} |`);
@@ -279,7 +290,7 @@ export function renderMethod(m: Method): string[] {
     `| Versions | Miqyas ${v.miqyas}, Node ${v.node}, Playwright ${v.playwright}, Chromium ${v.browser ?? 'not launched'} |`,
     `| OS | ${m.os.platform} ${m.os.release} (${m.os.arch}) |`,
     `| Model | ${m.model ? formatMethodModel(m.model) : 'none (dry run)'} |`,
-    `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'}${s.strict ? ', strict' : ''} |`,
+    `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'}${s.strict ? ', strict' : ''}${s.failOn && s.failOn !== 'none' ? `, fail-on ${s.failOn}` : ''} |`,
     `| Timeouts | plan ${t.planMs / 1000} s, navigation ${t.navigationMs / 1000} s, action ${t.actionMs / 1000} s |`,
     `| Preset | ${m.preset ? cell(m.preset) : 'none'} |`,
     `| Scrub rules | ${m.scrub.file ? `${cell(m.scrub.file)}, SHA-256 \`${m.scrub.sha256}\`, ${m.scrub.terms} term(s)` : 'none'} |`,
@@ -305,7 +316,11 @@ export function renderHuman(r: RunReport): string {
   }
   const t = r.totals;
   const modelOnlyNote = (t.modelOnly ?? 0) > 0 ? ` (${t.modelOnly} model-only)` : '';
-  const findingsNote = r.findings?.length ? ` Findings: ${r.findings.length}.` : '';
+  const findingsCount = r.findings?.length ?? 0;
+  const triggeredCount = findingsExceedThreshold(r.findings ?? [], r.method.settings.failOn).length;
+  const findingsNote = findingsCount
+    ? ` Findings: ${findingsCount}${triggeredCount > 0 ? ` (${triggeredCount} >= fail-on ${r.method.settings.failOn})` : ''}.`
+    : '';
   out.push('');
   out.push(
     r.dryRun

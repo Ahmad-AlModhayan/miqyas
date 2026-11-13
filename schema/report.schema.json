@@ -175,7 +175,8 @@
             },
             "allowOtherOrigins": { "type": "boolean" },
             "headed": { "type": "boolean" },
-            "strict": { "type": "boolean" }
+            "strict": { "type": "boolean" },
+            "failOn": { "enum": ["none", "info", "low", "medium", "high", "critical"] }
           }
         },
         "preset": { "description": "The mutation preset's name; null for a plain run.", "type": ["string", "null"] },

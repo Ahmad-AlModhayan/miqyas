@@ -18,7 +18,7 @@ import {
   openWebSurfaceDriver,
 } from '../surfaces/web/driver.js';
 import { cropPng, toEvidenceNode } from '../surfaces/web/observe.js';
-import { dedupeFindings, detectPromptInjection, type Finding } from './findings.js';
+import { dedupeFindings, detectPromptInjection, normalizeSurfaceFindings, type FailOnThreshold, type Finding } from './findings.js';
 import { exitCodeFor, PlanLedger, settleJudgement, type ActionLog, type Evidence, type PlanResult } from './ledger.js';
 import {
   applyMutation,
@@ -52,6 +52,7 @@ export interface RunSettings {
   headed?: boolean;
   allowOtherOrigins?: boolean;
   strict?: boolean;
+  failOn?: FailOnThreshold;
   viewport?: { width: number; height: number };
   planTimeoutMs?: number;
   navTimeoutMs?: number;
@@ -186,6 +187,7 @@ function pickRunSettings(s?: RunSettings): RunSettings {
     ...(s.headed !== undefined ? { headed: s.headed } : {}),
     ...(s.allowOtherOrigins !== undefined ? { allowOtherOrigins: s.allowOtherOrigins } : {}),
     ...(s.strict !== undefined ? { strict: s.strict } : {}),
+    ...(s.failOn !== undefined ? { failOn: s.failOn } : {}),
     ...(s.viewport !== undefined ? { viewport: s.viewport } : {}),
     ...(s.planTimeoutMs !== undefined ? { planTimeoutMs: s.planTimeoutMs } : {}),
     ...(s.navTimeoutMs !== undefined ? { navTimeoutMs: s.navTimeoutMs } : {}),
@@ -213,6 +215,7 @@ export function buildMethodMetadata(
       allowOtherOrigins: settings.allowOtherOrigins ?? false,
       headed: settings.headed ?? false,
       ...(settings.strict ? { strict: true } : {}),
+      ...(settings.failOn && settings.failOn !== 'none' ? { failOn: settings.failOn } : {}),
       viewport: settings.viewport ?? defaults.viewport,
       timeouts: {
         planMs: settings.planTimeoutMs ?? defaults.planTimeoutMs,
@@ -279,10 +282,11 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
       });
       const injectedCaptures = new Set<number>();
       const scanObs = (obs: Observation, stepId?: string): void => {
-        const hits = detectPromptInjection(obs, hide, { planId: plan.id, ...(stepId ? { stepId } : {}) });
-        if (!hits.length) return;
-        injectedCaptures.add(obs.capture);
-        for (const h of hits) opts.onFinding?.(h);
+        const ctx = { planId: plan.id, ...(stepId ? { stepId } : {}) };
+        const injHits = detectPromptInjection(obs, hide, ctx);
+        if (injHits.length) injectedCaptures.add(obs.capture);
+        for (const h of injHits) opts.onFinding?.(h);
+        for (const sf of normalizeSurfaceFindings(obs, hide, ctx)) opts.onFinding?.(sf);
       };
 
       let latest = await session.observe();
@@ -506,6 +510,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     method,
     plans: planResults,
     ...(findings.length ? { findings } : {}),
+    ...(opts.settings?.failOn ? { failOn: opts.settings.failOn } : {}),
   });
 
   if (opts.writeReports !== false) {

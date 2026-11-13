@@ -2,11 +2,73 @@
 // Security & quality findings collected outside the assertion ledger (Layer 3: proof-core).
 // Includes always-on prompt-injection detection on rendered page content (#12) and shared Finding model for detectors (#13).
 
-import type { EvidenceNode, Observation, SnapNode } from '../surfaces/session.js';
+import type { EvidenceNode, Observation, SnapNode, SurfaceFinding } from '../surfaces/session.js';
 import { toEvidenceNode } from '../surfaces/web/observe.js';
 
 export type FindingSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
+export type FailOnThreshold = 'none' | FindingSeverity;
 export type FindingSource = 'code' | 'model';
+
+export const SEVERITY_RANK: Record<FindingSeverity, number> = {
+  info: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  critical: 5,
+};
+
+const VALID_FAIL_ON = new Set<FailOnThreshold>(['none', 'info', 'low', 'medium', 'high', 'critical']);
+
+/** Validate `--fail-on <severity>` option (`none` disables findings gating). */
+export function parseFailOn(raw: string | undefined): FailOnThreshold {
+  if (raw === undefined) return 'none';
+  const norm = raw.trim().toLowerCase() as FailOnThreshold;
+  if (!VALID_FAIL_ON.has(norm)) {
+    throw new Error(`--fail-on must be one of none, info, low, medium, high, critical (got "${raw}")`);
+  }
+  return norm;
+}
+
+/** Return confirmed findings at or above the configured `--fail-on` severity threshold. */
+export function findingsExceedThreshold(findings: readonly Finding[], failOn: FailOnThreshold | undefined): Finding[] {
+  if (!failOn || failOn === 'none') return [];
+  const floor = SEVERITY_RANK[failOn];
+  return findings.filter((f) => f.confirmed && SEVERITY_RANK[f.severity] >= floor);
+}
+
+/** Convert surface-level code findings on an Observation into scrubbed Proof Core Finding records. */
+export function normalizeSurfaceFindings(
+  obs: Observation,
+  hide: (t: string) => string,
+  context: { planId?: string; stepId?: string } = {},
+): Finding[] {
+  if (!obs.findings?.length) return [];
+  const obsUrl = hide(obs.url);
+  return obs.findings.map((sf: SurfaceFinding, i: number) => {
+    const safeUrl = sf.url !== undefined ? hide(sf.url) : obsUrl;
+    const nodes = sf.nodes?.map((n) => ({
+      ref: n.ref,
+      role: n.role,
+      name: hide(n.name),
+      ...(n.state !== undefined ? { state: hide(n.state) } : {}),
+      ...(n.testId !== undefined ? { testId: hide(n.testId) } : {}),
+      box: n.box,
+    }));
+    return {
+      id: `${sf.category}:${i + 1}`,
+      category: sf.category,
+      title: hide(sf.title),
+      severity: sf.severity,
+      source: 'code',
+      confirmed: sf.confirmed,
+      url: safeUrl,
+      ...(context.planId ? { planId: context.planId } : {}),
+      ...(context.stepId ? { stepId: context.stepId } : {}),
+      evidence: hide(sf.evidence),
+      ...(nodes?.length ? { nodes } : {}),
+    };
+  });
+}
 
 export interface Finding {
   id: string;
