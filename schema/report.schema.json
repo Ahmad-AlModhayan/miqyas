@@ -28,14 +28,16 @@
         "failed": { "$ref": "#/$defs/count" },
         "notChecked": { "$ref": "#/$defs/count" },
         "blocked": { "$ref": "#/$defs/count" },
-        "unverified": { "$ref": "#/$defs/count" }
+        "unverified": { "$ref": "#/$defs/count" },
+        "modelOnly": { "$ref": "#/$defs/count" }
       }
     },
     "usage": { "$ref": "#/$defs/usage" },
     "spend": { "$ref": "#/$defs/spend" },
     "method": { "$ref": "#/$defs/method" },
     "screenshots": { "$ref": "#/$defs/screenshots" },
-    "plans": { "type": "array", "items": { "$ref": "#/$defs/planResult" } }
+    "plans": { "type": "array", "items": { "$ref": "#/$defs/planResult" } },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
   },
   "$defs": {
     "count": { "type": "integer", "minimum": 0 },
@@ -172,7 +174,8 @@
               "properties": { "planMs": { "$ref": "#/$defs/count" }, "navigationMs": { "$ref": "#/$defs/count" }, "actionMs": { "$ref": "#/$defs/count" } }
             },
             "allowOtherOrigins": { "type": "boolean" },
-            "headed": { "type": "boolean" }
+            "headed": { "type": "boolean" },
+            "strict": { "type": "boolean" }
           }
         },
         "preset": { "description": "The mutation preset's name; null for a plain run.", "type": ["string", "null"] },
@@ -205,6 +208,7 @@
               "role": { "type": "string" },
               "name": { "type": "string" },
               "state": { "type": "string" },
+              "testId": { "type": "string" },
               "box": { "type": "object", "required": ["x", "y", "width", "height"], "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "width": { "type": "number" }, "height": { "type": "number" } } }
             }
           }
@@ -227,6 +231,7 @@
             "method": { "enum": ["code", "ai", "none"] },
             "observation": { "type": "string" },
             "reason": { "type": "string" },
+            "modelOnly": { "type": "boolean" },
             "evidence": { "$ref": "#/$defs/evidence" },
             "durationMs": { "type": "number", "minimum": 0 }
           }
@@ -270,12 +275,31 @@
             "failed": { "$ref": "#/$defs/count" },
             "notChecked": { "$ref": "#/$defs/count" },
             "blocked": { "$ref": "#/$defs/count" },
-            "unverified": { "$ref": "#/$defs/count" }
+            "unverified": { "$ref": "#/$defs/count" },
+            "modelOnly": { "$ref": "#/$defs/count" }
           }
         },
         "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
         "error": { "type": "string" },
         "durationMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["id", "category", "title", "severity", "source", "confirmed", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "category": { "type": "string" },
+        "title": { "type": "string" },
+        "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+        "source": { "enum": ["code", "model"] },
+        "confirmed": { "type": "boolean" },
+        "url": { "type": "string" },
+        "planId": { "type": "string" },
+        "stepId": { "type": "string" },
+        "evidence": { "type": "string" },
+        "nodes": { "$ref": "#/$defs/evidence/properties/nodes" }
       }
     }
   }

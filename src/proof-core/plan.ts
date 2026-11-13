@@ -13,6 +13,7 @@ export interface Step {
   type: StepType;
   text: string;
   check?: Check;
+  cite?: Locator;
 }
 
 export interface Plan {
@@ -110,11 +111,15 @@ export function parsePlan(raw: unknown, fallbackId: string, file?: string): Plan
     if (!text || !text.trim()) throw new PlanError(`${where} needs text`, file);
     if (s.id !== undefined && (typeof s.id !== 'string' || !/^[A-Za-z0-9_.-]+$/.test(s.id)))
       throw new PlanError(`${where}.id must match [A-Za-z0-9_.-]+`, file);
-    const step: { id?: string; type: StepType; text: string; check?: Check } = { type: s.type, text: text.trim() };
+    const step: { id?: string; type: StepType; text: string; check?: Check; cite?: Locator } = { type: s.type, text: text.trim() };
     if (typeof s.id === 'string') step.id = s.id;
     if (s.check !== undefined) {
       if (s.type !== 'assertion') throw new PlanError(`${where}: only assertions take a check`, file);
       step.check = parseCheck(s.check, where, file);
+    }
+    if (s.cite !== undefined) {
+      if (s.type !== 'assertion') throw new PlanError(`${where}: only assertions take a cite`, file);
+      step.cite = parseLocator(s.cite, `${where}.cite`, file);
     }
     return step;
   });
@@ -175,7 +180,13 @@ export function serializePlan(plan: Plan): string {
     id: plan.id,
     name: plan.name,
     surface: plan.surface,
-    steps: plan.steps.map((s) => (s.check ? { id: s.id, type: s.type, text: s.text, check: s.check } : { id: s.id, type: s.type, text: s.text })),
+    steps: plan.steps.map((s) => ({
+      id: s.id,
+      type: s.type,
+      text: s.text,
+      ...(s.check ? { check: s.check } : {}),
+      ...(s.cite ? { cite: s.cite } : {}),
+    })),
   };
   return JSON.stringify(out, null, 2) + '\n';
 }

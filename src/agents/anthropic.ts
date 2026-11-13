@@ -4,7 +4,7 @@
 // passes gateCall (re-scan, then one payload log entry) just before it is sent.
 
 import Anthropic from '@anthropic-ai/sdk';
-import type { Observation } from '../surfaces/session.js';
+import type { Observation, SnapNode } from '../surfaces/session.js';
 import {
   AgentError,
   gateCall,
@@ -30,16 +30,21 @@ import {
 } from './models.js';
 import {
   ACT_SYSTEM,
-  ACT_TOOL_SPECS,
   JUDGE_SYSTEM,
-  JUDGE_TOOL_SPECS,
   actInitialText,
+  buildActToolSpecs,
+  buildJudgeToolSpecs,
   captureText,
   croppedPngBase64,
+  isCandidateAction,
   judgeInitialText,
+  nonCandidateRefMessage,
   parseLookAgainSeconds,
   parseVerdictInput,
   recordAgentUsage,
+  restrictJudgeEvidence,
+  selectActCandidates,
+  selectJudgeCandidates,
   toAction,
   type ToolSpec,
 } from './protocol.js';
@@ -75,15 +80,12 @@ const toAnthropicTools = (specs: readonly ToolSpec[]): ToolDef[] =>
     strict: true,
   }));
 
-const ACT_TOOLS: ToolDef[] = toAnthropicTools(ACT_TOOL_SPECS);
-const JUDGE_TOOLS: ToolDef[] = toAnthropicTools(JUDGE_TOOL_SPECS);
-
 function imageBlock(o: Observation): Anthropic.Beta.Messages.BetaImageBlockParam {
   return { type: 'image', source: { type: 'base64', media_type: 'image/png', data: croppedPngBase64(o).base64 } };
 }
 
-function captureBlocks(label: string, o: Observation, scrub: (s: string) => string): Block[] {
-  return [{ type: 'text', text: captureText(label, o, scrub) }, imageBlock(o)];
+function captureBlocks(label: string, o: Observation, scrub: (s: string) => string, candidates?: readonly SnapNode[]): Block[] {
+  return [{ type: 'text', text: captureText(label, o, scrub, candidates) }, imageBlock(o)];
 }
 
 export class AnthropicAgent implements Agent {
@@ -196,14 +198,19 @@ export class AnthropicAgent implements Agent {
   }
 
   async act(ctx: ActContext): Promise<ActOutcome> {
+    let latestObs = ctx.observation;
+    let candidates = selectActCandidates(latestObs, ctx.step);
     const first: Block[] = [
       { type: 'text', text: actInitialText(ctx) },
-      ...captureBlocks('Latest capture:', ctx.observation, ctx.scrub),
+      ...captureBlocks('Latest capture:', latestObs, ctx.scrub, candidates),
     ];
     const messages: Msg[] = [{ role: 'user', content: first }];
     let nudged = false;
     for (let turn = 0; turn < this.maxActTurns; turn++) {
-      const res = await this.call('act', ctx, ACT_SYSTEM, ACT_TOOLS, messages);
+      const candidateRefs = candidates.map((n) => n.ref);
+      const candidateRefSet = new Set(candidateRefs);
+      const tools = toAnthropicTools(buildActToolSpecs(candidateRefs));
+      const res = await this.call('act', ctx, ACT_SYSTEM, tools, messages);
       messages.push({ role: 'assistant', content: res.content as Block[] });
       const uses = res.content.filter((b): b is Anthropic.Beta.Messages.BetaToolUseBlock => b.type === 'tool_use');
       if (uses.length === 0) {
@@ -219,17 +226,31 @@ export class AnthropicAgent implements Agent {
         if (u.name === 'step_done') return { status: 'done', summary: String(input.summary ?? '') };
         if (u.name === 'step_failed') return { status: 'failed', summary: String(input.reason ?? '') };
         const action = toAction(u.name, input);
+        const isLast = i === uses.length - 1;
         if (!action) {
           results.push({ type: 'tool_result', tool_use_id: u.id, is_error: true, content: `unknown tool ${u.name}` });
           continue;
         }
+        if (!isCandidateAction(action, candidateRefSet)) {
+          const msg = nonCandidateRefMessage(action);
+          results.push({
+            type: 'tool_result',
+            tool_use_id: u.id,
+            is_error: true,
+            content: isLast ? [{ type: 'text', text: ctx.scrub(msg) }, ...captureBlocks('Capture after this action:', latestObs, ctx.scrub, candidates)] : ctx.scrub(msg),
+          } as Block);
+          continue;
+        }
         const r = await ctx.execute(action);
-        const isLast = i === uses.length - 1;
+        latestObs = r.observation;
+        candidates = selectActCandidates(latestObs, ctx.step);
+        candidateRefSet.clear();
+        for (const n of candidates) candidateRefSet.add(n.ref);
         results.push({
           type: 'tool_result',
           tool_use_id: u.id,
           is_error: !r.ok,
-          content: isLast ? [{ type: 'text', text: ctx.scrub(r.message) }, ...captureBlocks('Capture after this action:', r.observation, ctx.scrub)] : ctx.scrub(r.message),
+          content: isLast ? [{ type: 'text', text: ctx.scrub(r.message) }, ...captureBlocks('Capture after this action:', latestObs, ctx.scrub, candidates)] : ctx.scrub(r.message),
         } as Block);
       }
       messages.push({ role: 'user', content: results });
@@ -239,20 +260,27 @@ export class AnthropicAgent implements Agent {
 
   async judge(ctx: JudgeContext): Promise<JudgeOutcome> {
     const blocks: Block[] = [{ type: 'text', text: judgeInitialText(ctx) }];
+    const shownRefs = new Set<string>();
+    const addJudgeCapture = (label: string, obs: Observation) => {
+      const candidates = selectJudgeCandidates(obs, ctx.step);
+      for (const n of candidates) shownRefs.add(n.ref);
+      return captureBlocks(label, obs, ctx.scrub, candidates);
+    };
     if (ctx.postAction && ctx.postAction.capture !== ctx.current.capture) {
       const ago = ((ctx.current.capturedAt.getTime() - ctx.postAction.capturedAt.getTime()) / 1000).toFixed(1);
-      blocks.push(...captureBlocks(`Capture ${ctx.postAction.capture}, taken right after the previous action (${ago} s before the current one):`, ctx.postAction, ctx.scrub));
+      blocks.push(...addJudgeCapture(`Capture ${ctx.postAction.capture}, taken right after the previous action (${ago} s before the current one):`, ctx.postAction));
     }
-    blocks.push(...captureBlocks(`Capture ${ctx.current.capture}, current state:`, ctx.current, ctx.scrub));
+    blocks.push(...addJudgeCapture(`Capture ${ctx.current.capture}, current state:`, ctx.current));
     const messages: Msg[] = [{ role: 'user', content: blocks }];
     let looks = 0;
     let nudged = false;
     for (let turn = 0; turn < 5; turn++) {
-      const res = await this.call('judge', ctx, JUDGE_SYSTEM, JUDGE_TOOLS, messages);
+      const tools = toAnthropicTools(buildJudgeToolSpecs([...shownRefs]));
+      const res = await this.call('judge', ctx, JUDGE_SYSTEM, tools, messages);
       messages.push({ role: 'assistant', content: res.content as Block[] });
       const uses = res.content.filter((b): b is Anthropic.Beta.Messages.BetaToolUseBlock => b.type === 'tool_use');
       const verdict = uses.find((u) => u.name === 'record_verdict');
-      if (verdict) return parseVerdictInput(verdict.input);
+      if (verdict) return restrictJudgeEvidence(parseVerdictInput(verdict.input), shownRefs);
       if (uses.length === 0) {
         if (nudged) return { verdict: 'none', reason: 'the judge did not record a verdict' };
         nudged = true;
@@ -268,7 +296,7 @@ export class AnthropicAgent implements Agent {
         looks++;
         const secs = parseLookAgainSeconds(u.input);
         const o = await ctx.lookAgain(secs);
-        results.push({ type: 'tool_result', tool_use_id: u.id, content: captureBlocks(`Capture ${o.capture}, after ${secs} s:`, o, ctx.scrub) } as Block);
+        results.push({ type: 'tool_result', tool_use_id: u.id, content: addJudgeCapture(`Capture ${o.capture}, after ${secs} s:`, o) } as Block);
       }
       messages.push({ role: 'user', content: results });
     }

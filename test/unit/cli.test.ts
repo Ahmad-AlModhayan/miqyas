@@ -291,4 +291,19 @@ describe('CLI exit codes', () => {
     expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--replay', badCas, '--out', outBad], { isTTY: false })).toBe(3);
     expect(existsSync(outBad)).toBe(false);
   });
+
+  it('prints help text documenting --strict mode and returns 0', async () => {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => {
+      chunks.push(String(c));
+      return true;
+    });
+    try {
+      expect(await main(['run', '--help'])).toBe(0);
+      expect(chunks.join('')).toContain('--strict');
+    } finally {
+      spy.mockRestore();
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    }
+  });
 });

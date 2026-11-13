@@ -6,6 +6,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runAdapters, type Adapter, type AdapterResult } from '../adapters/adapter.js';
 import type { ActTool, Agent, ModelInfo, StepHistory, ToolExecution, Usage } from '../agents/agent.js';
+import { isCandidateAction, nonCandidateRefMessage, selectActCandidates } from '../agents/protocol.js';
 import type { RunQuote, SpendGuard } from '../agents/spend.js';
 import { anyTerm, NO_SCRUB, ruleHits, scrubText, withSecrets, type ScrubRules } from '../scrub/scrub.js';
 import type { Observation, SnapNode, SurfaceDriver, SurfaceSession } from '../surfaces/session.js';
@@ -17,6 +18,7 @@ import {
   openWebSurfaceDriver,
 } from '../surfaces/web/driver.js';
 import { cropPng, toEvidenceNode } from '../surfaces/web/observe.js';
+import { dedupeFindings, detectPromptInjection, type Finding } from './findings.js';
 import { exitCodeFor, PlanLedger, settleJudgement, type ActionLog, type Evidence, type PlanResult } from './ledger.js';
 import {
   applyMutation,
@@ -49,6 +51,7 @@ export interface RunSettings {
   concurrency?: number;
   headed?: boolean;
   allowOtherOrigins?: boolean;
+  strict?: boolean;
   viewport?: { width: number; height: number };
   planTimeoutMs?: number;
   navTimeoutMs?: number;
@@ -63,6 +66,7 @@ export interface RunOptions extends RunSettings {
   env?: NodeJS.ProcessEnv;
   onBrowser?: (version: string) => void;
   onPlan?: (result: PlanResult) => void;
+  onFinding?: (finding: Finding) => void;
 }
 
 export interface ExecutePlansOptions extends RunSettings {
@@ -74,6 +78,7 @@ export interface ExecutePlansOptions extends RunSettings {
   scrub: ScrubRules;
   env?: NodeJS.ProcessEnv;
   onPlan?: (result: PlanResult) => void;
+  onFinding?: (finding: Finding) => void;
 }
 
 export interface VerificationRunOptions {
@@ -94,6 +99,7 @@ export interface VerificationRunOptions {
   writeReports?: boolean;
   startedAt?: Date;
   onPlan?: (result: PlanResult) => void;
+  onFinding?: (finding: Finding) => void;
 }
 
 export interface RunResult {
@@ -105,6 +111,7 @@ export interface RunResult {
   exitCode: number;
   plans: PlanResult[];
   adapters: AdapterResult[];
+  findings?: Finding[];
   report: RunReport;
   durationMs: number;
 }
@@ -130,6 +137,7 @@ export interface MutationRunOptions {
   scrubMethod: Method['scrub'];
   adapters?: Adapter[];
   concurrency?: number;
+  strict?: boolean;
   env?: NodeJS.ProcessEnv;
   writeReports?: boolean;
   onLog?: (line: string) => void;
@@ -177,6 +185,7 @@ function pickRunSettings(s?: RunSettings): RunSettings {
     ...(s.concurrency !== undefined ? { concurrency: s.concurrency } : {}),
     ...(s.headed !== undefined ? { headed: s.headed } : {}),
     ...(s.allowOtherOrigins !== undefined ? { allowOtherOrigins: s.allowOtherOrigins } : {}),
+    ...(s.strict !== undefined ? { strict: s.strict } : {}),
     ...(s.viewport !== undefined ? { viewport: s.viewport } : {}),
     ...(s.planTimeoutMs !== undefined ? { planTimeoutMs: s.planTimeoutMs } : {}),
     ...(s.navTimeoutMs !== undefined ? { navTimeoutMs: s.navTimeoutMs } : {}),
@@ -203,6 +212,7 @@ export function buildMethodMetadata(
       concurrency: settings.concurrency ?? 3,
       allowOtherOrigins: settings.allowOtherOrigins ?? false,
       headed: settings.headed ?? false,
+      ...(settings.strict ? { strict: true } : {}),
       viewport: settings.viewport ?? defaults.viewport,
       timeouts: {
         planMs: settings.planTimeoutMs ?? defaults.planTimeoutMs,
@@ -221,7 +231,14 @@ async function saveEvidence(runDir: string, planId: string, stepId: string, obs:
   await mkdir(dir, { recursive: true });
   const screen = path.join(dir, `${safe(stepId)}-c${obs.capture}.png`);
   await writeFile(screen, obs.png);
-  const ev: Evidence = { screenshot: rel(runDir, screen), nodes: nodes.map((n) => toEvidenceNode({ ...n, name: hide(n.name), state: hide(n.state) })), url: hide(obs.url), capturedAt: obs.capturedAt.toISOString() };
+  const ev: Evidence = {
+    screenshot: rel(runDir, screen),
+    nodes: nodes.map((n) =>
+      toEvidenceNode({ ...n, name: hide(n.name), state: hide(n.state), ...(n.testId ? { testId: hide(n.testId) } : {}) }),
+    ),
+    url: hide(obs.url),
+    capturedAt: obs.capturedAt.toISOString(),
+  };
   if (obs.unmasked) ev.unmasked = obs.unmasked;
   const crop = cropPng(obs.png, nodes.map((n) => n.box));
   if (crop) {
@@ -260,7 +277,16 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
         observe: mask ? { secrets: mask, hide } : { hide },
         hide,
       });
+      const injectedCaptures = new Set<number>();
+      const scanObs = (obs: Observation, stepId?: string): void => {
+        const hits = detectPromptInjection(obs, hide, { planId: plan.id, ...(stepId ? { stepId } : {}) });
+        if (!hits.length) return;
+        injectedCaptures.add(obs.capture);
+        for (const h of hits) opts.onFinding?.(h);
+      };
+
       let latest = await session.observe();
+      scanObs(latest);
       if (!opts.agent && !opts.noModel) {
         ledger.fail(`dry run (${latest.nodes.length} rendered nodes observed at ${hide(latest.url)})`);
         return;
@@ -287,6 +313,12 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
           const log: ActionLog[] = [];
           postAction = undefined;
           const execute = async (a: ActTool): Promise<ToolExecution> => {
+            const candidateRefs = new Set(selectActCandidates(latest, step).map((n) => n.ref));
+            if (!isCandidateAction(a, candidateRefs)) {
+              const msg = nonCandidateRefMessage(a);
+              log.push({ tool: a.tool, input: { ...a }, ok: false, error: msg });
+              return { ok: false, message: msg, observation: latest };
+            }
             const entry: ActionLog = { tool: a.tool, input: { ...a }, ok: true };
             const res = await session!.act(a, (raw) => {
               // Only the step's own secrets: masking and scrubbing cover those, not the rest of the environment.
@@ -304,18 +336,21 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
             if (res.unmasked) entry.unmasked = res.unmasked;
             log.push(entry);
             latest = res.observation;
+            scanObs(latest, step.id);
             if (a.tool !== 'wait' || !postAction) postAction = latest;
             return { ok: res.ok, message: res.message, observation: latest };
           };
           const outcome = await agent.act({ plan: planRef, step, history, observation: latest, scrub, rescan, signal: abort.signal, execute });
-          ledger.recordAction({ stepId: step.id, status: outcome.status, summary: outcome.summary, actions: log, durationMs: Date.now() - t0 });
-          history.push({ stepId: step.id, type: 'action', text: step.text, result: outcome.status === 'done' ? `done: ${outcome.summary}` : `FAILED: ${outcome.summary}` });
+          const safeSummary = hide(outcome.summary);
+          ledger.recordAction({ stepId: step.id, status: outcome.status, summary: safeSummary, actions: log, durationMs: Date.now() - t0 });
+          history.push({ stepId: step.id, type: 'action', text: step.text, result: outcome.status === 'done' ? `done: ${safeSummary}` : `FAILED: ${safeSummary}` });
           if (outcome.status === 'failed') return;
           continue;
         }
 
         // Assertion: judged now, at its position, before the next action.
         const current = await session!.observe();
+        scanObs(current, step.id);
         latest = current;
         if (step.check) {
           const r = await session!.check(step.check, current);
@@ -334,6 +369,7 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
         if (postAction) captures.set(postAction.capture, postAction);
         const lookAgain = async (seconds: number) => {
           latest = await session!.wait(seconds);
+          scanObs(latest, step.id);
           captures.set(latest.capture, latest);
           return latest;
         };
@@ -356,9 +392,27 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
         }
         const evObs = resolved[0]?.obs ?? latest;
         const evNodes = resolved.filter((r) => r.obs === evObs).map((r) => r.node);
-        const settled = settleJudgement({ verdict: j.verdict, observation: j.observation, nodes: evNodes, unresolvedRefs: unresolved });
+        const screenInjected = [...captures.keys()].some((c) => injectedCaptures.has(c));
+        const settled = settleJudgement({
+          verdict: j.verdict,
+          observation: hide(j.observation),
+          nodes: evNodes,
+          allResolvedNodes: resolved.map((r) => r.node),
+          unresolvedRefs: unresolved,
+          assertion: { text: step.text, ...(step.cite ? { cite: step.cite } : {}) },
+          strict: Boolean(opts.strict),
+          injectionDetected: screenInjected,
+        });
         const evidence = await saveEvidence(opts.runDir, plan.id, step.id, evObs, evNodes, hide);
-        const entry = { stepId: step.id, verdict: settled.verdict, method: 'ai' as const, observation: j.observation, evidence, durationMs: Date.now() - t0 };
+        const entry = {
+          stepId: step.id,
+          verdict: settled.verdict,
+          method: 'ai' as const,
+          observation: hide(j.observation),
+          evidence,
+          durationMs: Date.now() - t0,
+          ...(settled.modelOnly ? { modelOnly: true } : {}),
+        };
         ledger.recordAssertion(settled.reason ? { ...entry, reason: settled.reason } : entry);
         history.push({ stepId: step.id, type: 'assertion', text: step.text, result: settled.verdict });
       }
@@ -405,6 +459,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
   const dryRun = opts.agent === null && !opts.noModel;
   await mkdir(opts.runDir, { recursive: true });
 
+  const rawFindings: Finding[] = [];
   const planResults = await executePlans(opts.plans, {
     url: opts.url,
     driver: opts.driver,
@@ -415,7 +470,12 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     ...pickRunSettings(opts.settings),
     ...(opts.env !== undefined ? { env: opts.env } : {}),
     ...(opts.onPlan !== undefined ? { onPlan: opts.onPlan } : {}),
+    onFinding: (f) => {
+      rawFindings.push(f);
+      opts.onFinding?.(f);
+    },
   });
+  const findings = dedupeFindings(rawFindings);
 
   const adapterOutputs = opts.adapters?.length
     ? await runAdapters(opts.adapters, { surface: opts.driver.surface, url: opts.url, runDir: opts.runDir })
@@ -445,6 +505,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     ...(spend ? { spend } : {}),
     method,
     plans: planResults,
+    ...(findings.length ? { findings } : {}),
   });
 
   if (opts.writeReports !== false) {
@@ -469,6 +530,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     exitCode,
     plans: planResults,
     adapters: adapterOutputs,
+    ...(findings.length ? { findings } : {}),
     report,
     durationMs: finishedAt.getTime() - startedAt.getTime(),
   };
@@ -491,6 +553,7 @@ export async function runPlans(plans: Plan[], opts: RunOptions): Promise<PlanRes
       ...pickRunSettings(opts),
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       ...(opts.onPlan !== undefined ? { onPlan: opts.onPlan } : {}),
+      ...(opts.onFinding !== undefined ? { onFinding: opts.onFinding } : {}),
     });
   } finally {
     await driver.close();
@@ -523,6 +586,7 @@ export async function runMutations(opts: MutationRunOptions): Promise<MutationRu
           runDir: path.join(opts.runDir, 'baseline'),
           scrub: opts.scrub,
           concurrency,
+          ...(opts.strict ? { strict: true } : {}),
           ...(opts.env !== undefined ? { env: opts.env } : {}),
         });
         runs.baseline = baseline;
@@ -579,6 +643,7 @@ export async function runMutations(opts: MutationRunOptions): Promise<MutationRu
                 ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
                 runDir: path.join(opts.runDir, m.id),
                 scrub: opts.scrub,
+                ...(opts.strict ? { strict: true } : {}),
                 ...(opts.env !== undefined ? { env: opts.env } : {}),
               })
             : [undefined];
@@ -603,7 +668,12 @@ export async function runMutations(opts: MutationRunOptions): Promise<MutationRu
   // The preset name is free text from the user: scrubbed like everything else that reaches a report.
   const presetName = scrubText(opts.preset.name, opts.scrub);
   const summary = summarize(presetName, results, opts.preset.baseline);
-  const method = buildMethodMetadata(opts.agent, opts.driver, opts.scrubMethod, presetName, { concurrency, allowOtherOrigins: false, headed: false });
+  const method = buildMethodMetadata(opts.agent, opts.driver, opts.scrubMethod, presetName, {
+    concurrency,
+    allowOtherOrigins: false,
+    headed: false,
+    ...(opts.strict ? { strict: true } : {}),
+  });
   const model = opts.agent?.info ?? null;
   const usage = opts.agent?.usage ?? null;
   const spend = buildSpendReport({

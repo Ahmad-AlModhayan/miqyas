@@ -7,6 +7,7 @@ import type { ModelInfo, Usage } from '../agents/agent.js';
 import { costEstimate } from '../agents/models.js';
 import type { RunQuote, SpendGuard } from '../agents/spend.js';
 import { PLAYWRIGHT_VERSION } from '../surfaces/web/driver.js';
+import type { Finding } from './findings.js';
 import { countEntries, runVerdict, type PlanCounts, type PlanResult, type RunVerdict } from './ledger.js';
 
 export type { ModelInfo, Usage } from '../agents/agent.js';
@@ -38,6 +39,7 @@ export interface Method {
     timeouts: { planMs: number; navigationMs: number; actionMs: number };
     allowOtherOrigins: boolean;
     headed: boolean;
+    strict?: boolean;
   };
   /** The mutation preset; null for a plain run. */
   preset: string | null;
@@ -115,6 +117,7 @@ export interface RunReport {
   method: Method;
   screenshots: typeof SCREENSHOTS;
   plans: PlanResult[];
+  findings?: Finding[];
 }
 
 export function buildReport(input: {
@@ -128,6 +131,7 @@ export function buildReport(input: {
   spend?: SpendReport;
   method: Method;
   plans: PlanResult[];
+  findings?: Finding[];
 }): RunReport {
   const totals = { plans: input.plans.length, plansPassed: 0, ...countEntries([]) };
   for (const p of input.plans) {
@@ -138,6 +142,7 @@ export function buildReport(input: {
     totals.notChecked += p.counts.notChecked;
     totals.blocked += p.counts.blocked;
     totals.unverified += p.counts.unverified;
+    totals.modelOnly = (totals.modelOnly ?? 0) + (p.counts.modelOnly ?? 0);
   }
   return {
     tool: 'miqyas',
@@ -155,6 +160,7 @@ export function buildReport(input: {
     method: input.method,
     screenshots: SCREENSHOTS,
     plans: input.plans,
+    ...(input.findings?.length ? { findings: input.findings } : {}),
   };
 }
 
@@ -202,7 +208,8 @@ export function renderMarkdown(r: RunReport): string {
   lines.push(`| Model | ${r.model ? cell(`${r.model.provider} ${r.model.model}${r.model.effort ? ` (effort ${r.model.effort})` : ''}`) : 'none'} |`);
   lines.push(`| Started | ${r.startedAt} |`);
   lines.push(`| Finished | ${r.finishedAt} |`);
-  lines.push(`| Assertions | ${t.assertions}: ${t.passed} pass, ${t.failed} fail, ${t.unverified} unverified, ${t.blocked} blocked, ${t.notChecked} not checked |`);
+  const modelOnlySuffix = (t.modelOnly ?? 0) > 0 ? `, ${t.modelOnly} model-only` : '';
+  lines.push(`| Assertions | ${t.assertions}: ${t.passed} pass${modelOnlySuffix}, ${t.failed} fail, ${t.unverified} unverified, ${t.blocked} blocked, ${t.notChecked} not checked |`);
   lines.push(`| Model calls | ${r.usage.calls} (${r.usage.inputTokens} input, ${r.usage.outputTokens} output tokens)${r.usage.byModel ? `; ${cell(answeredBy(r.usage))}` : ''} |`);
   if (r.spend) lines.push(`| Spend | ${formatSpendSummary(r.spend)} |`);
   lines.push(`| Screenshots | ${r.screenshots.note} |`, '');
@@ -225,7 +232,7 @@ export function renderMarkdown(r: RunReport): string {
         const unmasked = [...new Set(e.actions.flatMap((a) => (a.unmasked ? [a.unmasked] : [])))].join('; ');
         lines.push(`| ${cell(e.stepId)} | action: ${cell(e.text)} | ${MARK[e.status]} | | ${cell(e.summary)}${did ? ` (${cell(did)})` : ''} | ${cell(unmasked)} |`);
       } else {
-        const seen = [e.observation, e.reason ? `(${e.reason})` : ''].filter(Boolean).join(' ');
+        const seen = [e.observation, e.modelOnly ? '(model-only)' : '', e.reason ? `(${e.reason})` : ''].filter(Boolean).join(' ');
         // Our evidence links stay links; the node names and the rest come from the page and are escaped.
         const ev = e.evidence
           ? [e.evidence.crop ? `[crop](${e.evidence.crop})` : '', e.evidence.screenshot ? `[screen](${e.evidence.screenshot})` : '', cell(e.evidence.nodes.map((n) => `${n.role} "${n.name}"`).join(', ')), cell(e.evidence.unmasked ?? '')]
@@ -234,6 +241,13 @@ export function renderMarkdown(r: RunReport): string {
           : '';
         lines.push(`| ${cell(e.stepId)} | assertion: ${cell(e.text)} | ${MARK[e.verdict]} | ${e.method} | ${cell(seen)} | ${ev} |`);
       }
+    }
+    lines.push('');
+  }
+  if (r.findings?.length) {
+    lines.push('## Findings', '', '| ID | Severity | Category | Source | URL | Evidence |', '|---|---|---|---|---|---|');
+    for (const f of r.findings) {
+      lines.push(`| ${cell(f.id)} | ${f.severity} | ${cell(f.category)} | ${f.source} | ${cell(f.url ?? '')} | ${cell(f.evidence)} |`);
     }
     lines.push('');
   }
@@ -265,7 +279,7 @@ export function renderMethod(m: Method): string[] {
     `| Versions | Miqyas ${v.miqyas}, Node ${v.node}, Playwright ${v.playwright}, Chromium ${v.browser ?? 'not launched'} |`,
     `| OS | ${m.os.platform} ${m.os.release} (${m.os.arch}) |`,
     `| Model | ${m.model ? formatMethodModel(m.model) : 'none (dry run)'} |`,
-    `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'} |`,
+    `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'}${s.strict ? ', strict' : ''} |`,
     `| Timeouts | plan ${t.planMs / 1000} s, navigation ${t.navigationMs / 1000} s, action ${t.actionMs / 1000} s |`,
     `| Preset | ${m.preset ? cell(m.preset) : 'none'} |`,
     `| Scrub rules | ${m.scrub.file ? `${cell(m.scrub.file)}, SHA-256 \`${m.scrub.sha256}\`, ${m.scrub.terms} term(s)` : 'none'} |`,
@@ -290,11 +304,13 @@ export function renderHuman(r: RunReport): string {
     }
   }
   const t = r.totals;
+  const modelOnlyNote = (t.modelOnly ?? 0) > 0 ? ` (${t.modelOnly} model-only)` : '';
+  const findingsNote = r.findings?.length ? ` Findings: ${r.findings.length}.` : '';
   out.push('');
   out.push(
     r.dryRun
       ? `DRY RUN: ${t.plans} plans, ${t.assertions} assertions resolved; nothing was judged.`
-      : `${MARK[r.verdict]}: ${t.plansPassed}/${t.plans} plans, ${t.passed}/${t.assertions} assertions with a recorded pass.`,
+      : `${MARK[r.verdict]}: ${t.plansPassed}/${t.plans} plans, ${t.passed}/${t.assertions} assertions with a recorded pass${modelOnlyNote}.${findingsNote}`,
   );
   return out.join('\n');
 }

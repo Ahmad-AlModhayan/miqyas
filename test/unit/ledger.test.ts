@@ -104,8 +104,22 @@ describe('ledger verdict rules', () => {
 });
 
 describe('settling a judgement', () => {
-  it('keeps a pass with an observation and a resolved node', () => {
-    expect(settleJudgement({ verdict: 'pass', observation: 'alert lists 3 items', nodes: [node], unresolvedRefs: [] })).toEqual({ verdict: 'pass' });
+  it('keeps a pass with an observation and a resolved node when uncitable (marked modelOnly)', () => {
+    expect(settleJudgement({ verdict: 'pass', observation: 'alert lists 3 items', nodes: [node], unresolvedRefs: [] })).toEqual({
+      verdict: 'pass',
+    });
+    expect(
+      settleJudgement({
+        verdict: 'pass',
+        observation: 'alert lists 3 items',
+        nodes: [node],
+        unresolvedRefs: [],
+        assertion: { text: 'Alert lists 3 items' },
+      }),
+    ).toEqual({
+      verdict: 'pass',
+      modelOnly: true,
+    });
   });
   it('downgrades a pass without a cited node, or with unresolved refs only, to unverified', () => {
     expect(settleJudgement({ verdict: 'pass', observation: 'ok', nodes: [], unresolvedRefs: [] }).verdict).toBe('unverified');
@@ -116,8 +130,109 @@ describe('settling a judgement', () => {
   it('downgrades a pass with no observation', () => {
     expect(settleJudgement({ verdict: 'pass', observation: ' ', nodes: [node], unresolvedRefs: [] }).verdict).toBe('unverified');
   });
+  it('requires a cited node to match quoted text in the assertion', () => {
+    const matched = settleJudgement({
+      verdict: 'pass',
+      observation: 'Alert shows missing name',
+      nodes: [node],
+      unresolvedRefs: [],
+      assertion: { text: "Shows 'missing: name' alert." },
+    });
+    expect(matched).toEqual({ verdict: 'pass' });
+
+    const mismatched = settleJudgement({
+      verdict: 'pass',
+      observation: 'Claimed saved even though cited alert says Missing: name',
+      nodes: [node],
+      unresolvedRefs: [],
+      assertion: { text: 'Shows "All saved" confirmation' },
+    });
+    expect(mismatched.verdict).toBe('unverified');
+    expect(mismatched.reason).toMatch(/All saved/);
+  });
+  it('requires a cited node to match assertion.cite locator when provided', () => {
+    const statusNode: EvidenceNode = { ref: 'c1e2', role: 'status', name: 'Saved', testId: 'save-status', box: { x: 0, y: 0, width: 40, height: 20 } };
+    expect(
+      settleJudgement({
+        verdict: 'pass',
+        observation: 'Status rendered',
+        nodes: [statusNode],
+        unresolvedRefs: [],
+        assertion: { text: 'Shows saved status', cite: { role: 'status', testId: 'save-status' } },
+      }),
+    ).toEqual({ verdict: 'pass' });
+
+    const wrongRole = settleJudgement({
+      verdict: 'pass',
+      observation: 'Cited wrong element',
+      nodes: [node],
+      unresolvedRefs: [],
+      assertion: { text: 'Shows saved status', cite: { role: 'status', testId: 'save-status' } },
+    });
+    expect(wrongRole.verdict).toBe('unverified');
+    expect(wrongRole.reason).toMatch(/cite locator/);
+
+    const citeMatchesQuoteFails = settleJudgement({
+      verdict: 'pass',
+      observation: 'Cited status node',
+      nodes: [statusNode],
+      unresolvedRefs: [],
+      assertion: { text: "Status shows 'All done'", cite: { role: 'status', testId: 'save-status' } },
+    });
+    expect(citeMatchesQuoteFails.verdict).toBe('unverified');
+    expect(citeMatchesQuoteFails.reason).toMatch(/All done/);
+  });
+  it('rejects model-only passes in strict mode or when prompt injection is detected on the screen', () => {
+    const strictReject = settleJudgement({
+      verdict: 'pass',
+      observation: 'Looks fine',
+      nodes: [node],
+      unresolvedRefs: [],
+      assertion: { text: 'Confirmation is visible' },
+      strict: true,
+    });
+    expect(strictReject.verdict).toBe('unverified');
+    expect(strictReject.modelOnly).toBe(true);
+    expect(strictReject.reason).toMatch(/--strict/);
+
+    const injReject = settleJudgement({
+      verdict: 'pass',
+      observation: 'Looks fine',
+      nodes: [node],
+      unresolvedRefs: [],
+      assertion: { text: 'Confirmation is visible' },
+      injectionDetected: true,
+    });
+    expect(injReject.verdict).toBe('unverified');
+    expect(injReject.modelOnly).toBe(true);
+    expect(injReject.reason).toMatch(/prompt-injection/);
+
+    const groundedWithInjection = settleJudgement({
+      verdict: 'pass',
+      observation: 'Shows Missing: name alert',
+      nodes: [node],
+      unresolvedRefs: [],
+      assertion: { text: 'Shows "Missing: name" alert' },
+      strict: true,
+      injectionDetected: true,
+    });
+    expect(groundedWithInjection).toEqual({ verdict: 'pass' });
+  });
   it('keeps a fail as a fail even without evidence', () => {
     expect(settleJudgement({ verdict: 'fail', observation: '', nodes: [], unresolvedRefs: [] }).verdict).toBe('fail');
+  });
+});
+
+describe('ledger modelOnly count tracking', () => {
+  it('counts modelOnly assertions without changing pass verdict when not strict', () => {
+    const l = new PlanLedger(plan);
+    l.recordAction({ stepId: 's1', status: 'done', summary: 'clicked', actions: [] });
+    l.recordAssertion({ stepId: 'a1', ...pass, modelOnly: true });
+    l.recordAction({ stepId: 's2', status: 'done', summary: 'clicked', actions: [] });
+    l.recordAssertion({ stepId: 'a2', ...pass });
+    const r = l.close(1);
+    expect(r.verdict).toBe('pass');
+    expect(r.counts).toMatchObject({ assertions: 2, passed: 2, modelOnly: 1 });
   });
 });
 

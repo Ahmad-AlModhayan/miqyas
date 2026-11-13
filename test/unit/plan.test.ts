@@ -33,7 +33,7 @@ describe('plan parsing', () => {
     expect(p.steps.map((s) => s.id)).toEqual(['s1', 'a3', 's2', 'a1', 's3', 'a2']);
   });
 
-  it('round-trips a native plan with a deterministic check', () => {
+  it('round-trips a native plan with a deterministic check and cite locator', () => {
     const native = {
       format: 'miqyas-plan',
       version: 1,
@@ -41,11 +41,12 @@ describe('plan parsing', () => {
       surface: 'web',
       steps: [
         { id: 's1', type: 'action', text: 'Click Add' },
-        { id: 'a1', type: 'assertion', text: 'An alert shows', check: { locator: { role: 'alert' }, expect: 'visible' } },
+        { id: 'a1', type: 'assertion', text: 'An alert shows', check: { locator: { role: 'alert' }, expect: 'visible' }, cite: { role: 'alert', testId: 'toast-msg' } },
       ],
     };
     const p = parsePlan(native, 'fallback');
     expect(p.derivedIds).toBe(false);
+    expect(p.steps[1]?.cite).toEqual({ role: 'alert', testId: 'toast-msg' });
     expect(parsePlan(JSON.parse(serializePlan(p)), 'fallback')).toEqual(p);
   });
 
@@ -57,7 +58,9 @@ describe('plan parsing', () => {
     [{ format: 'miqyas-plan', version: 1, steps: [{ type: 'action', text: '  ' }] }, /needs text/],
     [{ format: 'miqyas-plan', version: 1, steps: [{ id: 'a', type: 'action', text: 'x' }, { id: 'a', type: 'assertion', text: 'y' }] }, /duplicate/],
     [{ format: 'miqyas-plan', version: 1, steps: [{ type: 'action', text: 'x', check: { locator: { role: 'x' }, expect: 'visible' } }] }, /only assertions/],
+    [{ format: 'miqyas-plan', version: 1, steps: [{ id: 'a', type: 'action', text: 'x', cite: { role: 'button' } }] }, /only assertions/],
     [{ format: 'miqyas-plan', version: 1, steps: [{ type: 'assertion', text: 'x', check: { locator: {}, expect: 'visible' } }] }, /locator needs/],
+    [{ format: 'miqyas-plan', version: 1, steps: [{ type: 'assertion', text: 'x', cite: {} }] }, /locator needs/],
     [{ projectId: 'p', type: 'backend', planSteps: [{ type: 'action', description: 'x' }] }, /frontend only/],
   ])('rejects invalid plan %#', (raw, msg) => {
     expect(() => parsePlan(raw, 'f')).toThrow(PlanError);

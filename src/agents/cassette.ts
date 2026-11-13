@@ -32,6 +32,8 @@ import {
   captureText,
   isPlainObject,
   judgeInitialText,
+  selectActCandidates,
+  selectJudgeCandidates,
 } from './protocol.js';
 import { DEFAULT_MAX_ACT_TURNS, DEFAULT_MAX_TOKENS } from './spend.js';
 
@@ -216,22 +218,25 @@ function assertCleanScrub(texts: string[], rescan: (s: string) => string[], acti
   }
 }
 
-function buildInitialActTurn(obs: Observation, scrub: (s: string) => string, norm: RefNormalizer): NormalizedTurn {
+function buildInitialActTurn(ctx: Pick<ActContext, 'step' | 'observation' | 'scrub'>, norm: RefNormalizer): NormalizedTurn {
+  const candidates = selectActCandidates(ctx.observation, ctx.step);
   return {
-    obsTexts: [norm.normalizeText(captureText('Latest capture:', obs, scrub), scrub)],
-    images: [imageFingerprint(obs)],
+    obsTexts: [norm.normalizeText(captureText('Latest capture:', ctx.observation, ctx.scrub, candidates), ctx.scrub)],
+    images: [imageFingerprint(ctx.observation)],
   };
 }
 
 function buildExecuteTurn(
   normAction: ActTool,
   result: { ok: boolean; message: string; observation: Observation },
+  step: ActContext['step'],
   scrub: (s: string) => string,
   norm: RefNormalizer,
 ): NormalizedTurn {
+  const candidates = selectActCandidates(result.observation, step);
   return {
     priorEvent: `execute:${JSON.stringify(normAction)}->ok=${result.ok}:${norm.normalizeText(result.message, scrub)}`,
-    obsTexts: [norm.normalizeText(captureText('Capture after this action:', result.observation, scrub), scrub)],
+    obsTexts: [norm.normalizeText(captureText('Capture after this action:', result.observation, scrub, candidates), scrub)],
     images: [imageFingerprint(result.observation)],
   };
 }
@@ -241,23 +246,26 @@ function buildInitialJudgeTurn(ctx: JudgeContext, norm: RefNormalizer): Normaliz
   const images: ImageFingerprint[] = [];
   if (ctx.postAction && ctx.postAction.capture !== ctx.current.capture) {
     const ago = ((ctx.current.capturedAt.getTime() - ctx.postAction.capturedAt.getTime()) / 1000).toFixed(1);
+    const candidates = selectJudgeCandidates(ctx.postAction, ctx.step);
     obsTexts.push(
       norm.normalizeText(
-        captureText(`Capture ${ctx.postAction.capture}, taken right after the previous action (${ago} s before the current one):`, ctx.postAction, ctx.scrub),
+        captureText(`Capture ${ctx.postAction.capture}, taken right after the previous action (${ago} s before the current one):`, ctx.postAction, ctx.scrub, candidates),
         ctx.scrub,
       ),
     );
     images.push(imageFingerprint(ctx.postAction));
   }
-  obsTexts.push(norm.normalizeText(captureText(`Capture ${ctx.current.capture}, current state:`, ctx.current, ctx.scrub), ctx.scrub));
+  const currentCandidates = selectJudgeCandidates(ctx.current, ctx.step);
+  obsTexts.push(norm.normalizeText(captureText(`Capture ${ctx.current.capture}, current state:`, ctx.current, ctx.scrub, currentCandidates), ctx.scrub));
   images.push(imageFingerprint(ctx.current));
   return { obsTexts, images };
 }
 
-function buildLookAgainTurn(seconds: number, obs: Observation, scrub: (s: string) => string, norm: RefNormalizer): NormalizedTurn {
+function buildLookAgainTurn(seconds: number, obs: Observation, step: JudgeContext['step'], scrub: (s: string) => string, norm: RefNormalizer): NormalizedTurn {
+  const candidates = selectJudgeCandidates(obs, step);
   return {
     priorEvent: `look_again:${seconds}`,
-    obsTexts: [norm.normalizeText(captureText(`Capture ${obs.capture}, after ${seconds} s:`, obs, scrub), scrub)],
+    obsTexts: [norm.normalizeText(captureText(`Capture ${obs.capture}, after ${seconds} s:`, obs, scrub, candidates), scrub)],
     images: [imageFingerprint(obs)],
   };
 }
@@ -438,7 +446,7 @@ export class RecordingAgent implements Agent {
   async act(ctx: ActContext): Promise<ActOutcome> {
     const norm = new RefNormalizer();
     const initialPrompt = norm.normalizeText(actInitialText(ctx), ctx.scrub);
-    const turns: NormalizedTurn[] = [buildInitialActTurn(ctx.observation, ctx.scrub, norm)];
+    const turns: NormalizedTurn[] = [buildInitialActTurn(ctx, norm)];
     let turn = 0;
     let current = computeCanonicalKey({ kind: 'act', info: this.inner.info, ctx, norm, initialPrompt, turns });
 
@@ -449,7 +457,7 @@ export class RecordingAgent implements Agent {
         this.recordTurn({ kind: 'act', ctx, turn, canonical: current, response: { type: 'execute', action: normAction } });
         const r = await ctx.execute(action);
         turn++;
-        turns.push(buildExecuteTurn(normAction, r, ctx.scrub, norm));
+        turns.push(buildExecuteTurn(normAction, r, ctx.step, ctx.scrub, norm));
         current = computeCanonicalKey({ kind: 'act', info: this.inner.info, ctx, norm, initialPrompt, turns });
         return r;
       },
@@ -472,7 +480,7 @@ export class RecordingAgent implements Agent {
         this.recordTurn({ kind: 'judge', ctx, turn, canonical: current, response: { type: 'look_again', seconds } });
         const obs = await ctx.lookAgain(seconds);
         turn++;
-        turns.push(buildLookAgainTurn(seconds, obs, ctx.scrub, norm));
+        turns.push(buildLookAgainTurn(seconds, obs, ctx.step, ctx.scrub, norm));
         current = computeCanonicalKey({ kind: 'judge', info: this.inner.info, ctx, norm, initialPrompt, turns });
         return obs;
       },
@@ -636,7 +644,7 @@ export class ReplayAgent implements Agent {
   async act(ctx: ActContext): Promise<ActOutcome> {
     const norm = new RefNormalizer();
     const initialPrompt = norm.normalizeText(actInitialText(ctx), ctx.scrub);
-    const turns: NormalizedTurn[] = [buildInitialActTurn(ctx.observation, ctx.scrub, norm)];
+    const turns: NormalizedTurn[] = [buildInitialActTurn(ctx, norm)];
     let turn = 0;
 
     while (true) {
@@ -646,7 +654,7 @@ export class ReplayAgent implements Agent {
         const realAction = norm.denormalizeAction(entry.response.action);
         const r = await ctx.execute(realAction);
         turn++;
-        turns.push(buildExecuteTurn(entry.response.action, r, ctx.scrub, norm));
+        turns.push(buildExecuteTurn(entry.response.action, r, ctx.step, ctx.scrub, norm));
         continue;
       }
       if (entry.response.type === 'act_return') {
@@ -668,7 +676,7 @@ export class ReplayAgent implements Agent {
       if (entry.response.type === 'look_again') {
         const obs = await ctx.lookAgain(entry.response.seconds);
         turn++;
-        turns.push(buildLookAgainTurn(entry.response.seconds, obs, ctx.scrub, norm));
+        turns.push(buildLookAgainTurn(entry.response.seconds, obs, ctx.step, ctx.scrub, norm));
         continue;
       }
       if (entry.response.type === 'judge_return') {
