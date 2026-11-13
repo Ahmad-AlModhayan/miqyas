@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../schema/known-findings.schema.json",
+  "version": 1,
+  "target": "mini-shop",
+  "buildId": "mini-shop-clean-v1",
+  "reviewedAt": "2026-11-13T12:00:00Z",
+  "reviewer": "Kahf Labs",
+  "entries": [
+    {
+      "id": "kf-mock-banner",
+      "category": "console-info",
+      "severity": "info",
+      "evidencePattern": "Fixture clean build",
+      "rationale": "Expected informational notice on offline fixture"
+    }
+  ]
+}

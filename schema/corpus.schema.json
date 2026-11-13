@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miqyas.kahflabs.com/schema/corpus.schema.json",
+  "title": "Miqyas Verification Corpus Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "target", "cleanTwin", "seeds"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "target": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "cleanTwin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["buildDir", "knownFindings"],
+      "properties": {
+        "buildDir": { "type": "string", "minLength": 1 },
+        "knownFindings": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "pattern": "^https?://" }
+      }
+    },
+    "seeds": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "part", "category", "probe"],
+        "anyOf": [
+          { "required": ["mutation"] },
+          { "required": ["fixtureDir"] }
+        ],
+        "allOf": [
+          {
+            "if": { "properties": { "part": { "const": "asserted" } }, "required": ["part"] },
+            "then": {
+              "required": ["plan"],
+              "not": {
+                "anyOf": [
+                  { "required": ["readinessCheck"] },
+                  { "required": ["blindTokens"] }
+                ]
+              }
+            }
+          },
+          {
+            "if": { "properties": { "part": { "const": "unasserted" } }, "required": ["part"] },
+            "then": {
+              "not": {
+                "anyOf": [
+                  { "required": ["plan"] },
+                  { "required": ["assertion"] },
+                  { "required": ["readinessCheck"] }
+                ]
+              }
+            }
+          },
+          {
+            "if": { "properties": { "part": { "const": "readiness" } }, "required": ["part"] },
+            "then": {
+              "required": ["readinessCheck"],
+              "not": {
+                "anyOf": [
+                  { "required": ["plan"] },
+                  { "required": ["assertion"] }
+                ]
+              }
+            }
+          }
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
+          "title": { "type": "string", "minLength": 1 },
+          "part": { "enum": ["asserted", "unasserted", "readiness"] },
+          "category": {
+            "enum": [
+              "broken-flow",
+              "validation",
+              "css-visibility",
+              "layout-rtl",
+              "accessibility",
+              "runtime-error",
+              "auth-access",
+              "secret-leak",
+              "xss-injection",
+              "spend-abuse"
+            ]
+          },
+          "plan": { "type": "string", "minLength": 1 },
+          "assertion": { "type": "string", "minLength": 1 },
+          "readinessCheck": { "type": "string", "minLength": 1 },
+          "blindTokens": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 3 }
+          },
+          "fixtureDir": { "type": "string", "minLength": 1 },
+          "mutation": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "from", "to"],
+                "properties": {
+                  "kind": { "const": "string-swap" },
+                  "from": { "type": "string", "minLength": 1 },
+                  "to": { "type": "string" },
+                  "extensions": { "type": "array", "items": { "type": "string", "pattern": "^\\." } }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "css"],
+                "properties": {
+                  "kind": { "const": "css" },
+                  "css": { "type": "string", "minLength": 1 }
+                }
+              }
+            ]
+          },
+          "probe": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["measure"],
+            "allOf": [
+              {
+                "if": { "properties": { "measure": { "enum": ["height", "left"] } }, "required": ["measure"] },
+                "then": { "required": ["selector"] }
+              }
+            ],
+            "properties": {
+              "measure": { "enum": ["height", "left", "text"] },
+              "selector": { "type": "string", "minLength": 1 },
+              "path": { "type": "string", "pattern": "^/(?!/)" },
+              "steps": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+              "html": { "type": "string" },
+              "rootAttrs": { "type": "object", "additionalProperties": { "type": "string" } },
+              "expectClean": { "type": "string", "minLength": 1 },
+              "expectSeed": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

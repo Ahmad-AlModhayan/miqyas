@@ -144,3 +144,88 @@ describe('costEstimate', () => {
     expect(costEstimate('some-other-model', { calls: 0, inputTokens: 0, outputTokens: 0 })).toBeNull();
   });
 });
+
+describe('corpus bench summary rendering (#15)', () => {
+  it('renders per-part corpus scores and named regressions without blending', () => {
+    const s = buildBenchSummary({
+      ...input(),
+      corpus: {
+        tool: 'miqyas',
+        kind: 'corpus-score',
+        target: 'mini-shop',
+        timestamp: '2026-11-13T12:00:00Z',
+        sampleThreshold: { categoryValidMin: 10, partValidMin: 50 },
+        parts: {
+          asserted: {
+            total: 2,
+            valid: 2,
+            killed: 1,
+            survived: 1,
+            excluded: 0,
+            detectedTarget: 1,
+            detectedElsewhere: 0,
+            caughtByCode: 1,
+            caughtByJudge: 0,
+            score: 50,
+            sufficientSample: false,
+            byCategory: {
+              'broken-flow': {
+                total: 2,
+                valid: 2,
+                killed: 1,
+                survived: 1,
+                excluded: 0,
+                detectedTarget: 1,
+                detectedElsewhere: 0,
+                caughtByCode: 1,
+                caughtByJudge: 0,
+                score: 50,
+                sufficientSample: false,
+              },
+            },
+          },
+          unasserted: {
+            planted: 1,
+            detected: 1,
+            missed: 0,
+            confirmedCount: 1,
+            unconfirmedCount: 0,
+            recall: 100,
+            sufficientSample: false,
+            byCategory: {},
+          },
+          readiness: {
+            placed: 1,
+            caught: 1,
+            recall: 100,
+            checksTotal: 1,
+            checksProven: 1,
+            sufficientSample: false,
+            byCheck: {
+              'grade-1/secrets': { check: 'grade-1/secrets', placed: 1, caught: 1, recall: 100, cleanTwinQuiet: true, cleanTwinFalsePositives: 0 },
+            },
+            byCategory: {},
+          },
+        },
+        cleanTwin: {
+          totalFindings: 0,
+          suppressedKnown: 0,
+          falsePositives: 0,
+          planFalseFailures: 0,
+          quiet: true,
+          falsePositivesByCategory: {},
+        },
+      },
+      regressions: [
+        { metric: 'asserted.category.broken-flow', baseline: 100, current: 50, delta: -50, detail: 'Asserted [broken-flow] dropped from 100% to 50%' },
+      ],
+    });
+    const md = renderBenchMarkdown(s);
+    expect(md).toContain('## Corpus Scores (Per-Part, Unblended)');
+    expect(md).toContain('| Asserted | 50.0 % |');
+    expect(md).toContain('| Unasserted | 100.0 % |');
+    expect(md).toContain('| grade-1/secrets | 100.0 % | 1/1 | yes |');
+    expect(md).toContain('## Regressions');
+    expect(md).toContain('asserted.category.broken-flow');
+  });
+});

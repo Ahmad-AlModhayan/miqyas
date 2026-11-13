@@ -1,0 +1,225 @@
+{
+  "$schema": "../../schema/corpus.schema.json",
+  "version": 1,
+  "target": "mini-shop",
+  "description": "Offline regression corpus across all 10 defect categories, readiness seeds, and a reviewed clean twin.",
+  "cleanTwin": {
+    "buildDir": "corpus/fixtures/mini-shop-clean",
+    "knownFindings": "corpus/fixtures/mini-shop-clean/known-findings.json"
+  },
+  "seeds": [
+    {
+      "id": "seed-broken-flow-cart",
+      "title": "Add-to-cart fails to update cart counter",
+      "part": "asserted",
+      "category": "broken-flow",
+      "plan": "checkout-flow",
+      "assertion": "assert-cart-added",
+      "mutation": {
+        "kind": "string-swap",
+        "from": "1 item ready",
+        "to": "Cart update failed"
+      },
+      "probe": {
+        "measure": "text",
+        "steps": ["#add-to-cart"],
+        "expectClean": "1 item ready",
+        "expectSeed": "Cart update failed"
+      }
+    },
+    {
+      "id": "seed-validation-email",
+      "title": "Checkout skips required email validation",
+      "part": "asserted",
+      "category": "validation",
+      "plan": "checkout-flow",
+      "assertion": "assert-email-required",
+      "mutation": {
+        "kind": "string-swap",
+        "from": "Email is required",
+        "to": "Proceeding without validation"
+      },
+      "probe": {
+        "measure": "text",
+        "steps": ["#checkout-btn"],
+        "expectClean": "Email is required",
+        "expectSeed": "Proceeding without validation"
+      }
+    },
+    {
+      "id": "seed-css-promo-hidden",
+      "title": "Promo banner collapses with display none",
+      "part": "asserted",
+      "category": "css-visibility",
+      "plan": "checkout-static",
+      "assertion": "assert-promo-visible",
+      "mutation": {
+        "kind": "css",
+        "css": ".promo-banner { display: none !important; }"
+      },
+      "probe": {
+        "measure": "height",
+        "selector": ".promo-banner"
+      }
+    },
+    {
+      "id": "seed-rtl-direction",
+      "title": "RTL layout flipped to LTR",
+      "part": "asserted",
+      "category": "layout-rtl",
+      "plan": "rtl-layout",
+      "assertion": "assert-rtl-badge",
+      "mutation": {
+        "kind": "css",
+        "css": "body, .rtl-shell { direction: ltr !important; }"
+      },
+      "probe": {
+        "measure": "left",
+        "selector": ".rtl-badge"
+      }
+    },
+    {
+      "id": "seed-a11y-pay-label",
+      "title": "Pay button loses accessible aria-label",
+      "part": "asserted",
+      "category": "accessibility",
+      "plan": "checkout-static",
+      "assertion": "assert-pay-accessible",
+      "mutation": {
+        "kind": "string-swap",
+        "from": "Pay Now",
+        "to": "Missing",
+        "extensions": [".html"]
+      },
+      "probe": {
+        "measure": "text",
+        "expectClean": "Accessible label: Pay Now",
+        "expectSeed": "Accessible label: Missing"
+      }
+    },
+    {
+      "id": "seed-runtime-receipt-crash",
+      "title": "Blind unhandled error during receipt setup",
+      "part": "unasserted",
+      "category": "runtime-error",
+      "blindTokens": ["RUNTIME_RECEIPT_BOOM"],
+      "mutation": {
+        "kind": "string-swap",
+        "from": "return 'Receipt engine OK';",
+        "to": "return 'RUNTIME_RECEIPT_BOOM';"
+      },
+      "probe": {
+        "measure": "text",
+        "expectClean": "Receipt engine OK",
+        "expectSeed": "RUNTIME_RECEIPT_BOOM"
+      }
+    },
+    {
+      "id": "seed-auth-admin-bypass",
+      "title": "Blind admin gate permits unauthenticated access",
+      "part": "unasserted",
+      "category": "auth-access",
+      "blindTokens": ["Admin panel unlocked: guest"],
+      "mutation": {
+        "kind": "string-swap",
+        "from": "Admin access denied: sign-in required",
+        "to": "Admin panel unlocked: guest",
+        "extensions": [".html"]
+      },
+      "probe": {
+        "measure": "text",
+        "path": "/admin.html",
+        "expectClean": "Admin access denied",
+        "expectSeed": "Admin panel unlocked: guest"
+      }
+    },
+    {
+      "id": "seed-secret-leak-token",
+      "title": "Blind client bundle exposes synthetic service token",
+      "part": "unasserted",
+      "category": "secret-leak",
+      "blindTokens": ["SYNTHETIC_LEAK_TOKEN_9942"],
+      "mutation": {
+        "kind": "string-swap",
+        "from": "Tokens scrubbed",
+        "to": "SYNTHETIC_LEAK_TOKEN_9942",
+        "extensions": [".html"]
+      },
+      "probe": {
+        "measure": "text",
+        "expectClean": "Tokens scrubbed",
+        "expectSeed": "SYNTHETIC_LEAK_TOKEN_9942"
+      }
+    },
+    {
+      "id": "seed-xss-unescaped-comment",
+      "title": "Blind comment widget uses unsafe HTML injection",
+      "part": "unasserted",
+      "category": "xss-injection",
+      "blindTokens": ["XSS_PAYLOAD_SENTINEL"],
+      "mutation": {
+        "kind": "string-swap",
+        "from": "commentBox.textContent = 'Safe comment text';",
+        "to": "commentBox.innerHTML = '<span>XSS_PAYLOAD_SENTINEL</span>';"
+      },
+      "probe": {
+        "measure": "text",
+        "expectClean": "Safe comment text",
+        "expectSeed": "XSS_PAYLOAD_SENTINEL"
+      }
+    },
+    {
+      "id": "seed-spend-quota-removed",
+      "title": "Blind rate cap disabled on quote action",
+      "part": "unasserted",
+      "category": "spend-abuse",
+      "blindTokens": ["UNLIMITED_CALLS_SENTINEL"],
+      "mutation": {
+        "kind": "string-swap",
+        "from": "Rate limit: max 3 calls",
+        "to": "UNLIMITED_CALLS_SENTINEL"
+      },
+      "probe": {
+        "measure": "text",
+        "expectClean": "Rate limit: max 3 calls",
+        "expectSeed": "UNLIMITED_CALLS_SENTINEL"
+      }
+    },
+    {
+      "id": "readiness-a11y-detector",
+      "title": "Readiness probe for accessibility detector check",
+      "part": "readiness",
+      "category": "accessibility",
+      "readinessCheck": "grade-1/a11y",
+      "mutation": {
+        "kind": "string-swap",
+        "from": "<h1>بوابة الإدارة</h1>",
+        "to": "<div>Readiness A11y Broken</div><button type=\"button\" aria-label=\"\"></button>",
+        "extensions": [".html"]
+      },
+      "probe": {
+        "measure": "text",
+        "path": "/admin.html",
+        "expectClean": "بوابة الإدارة",
+        "expectSeed": "Readiness A11y Broken"
+      }
+    },
+    {
+      "id": "readiness-runtime-detector",
+      "title": "Readiness probe for console and pageerror detector",
+      "part": "readiness",
+      "category": "runtime-error",
+      "readinessCheck": "grade-1/console-errors",
+      "mutation": {
+        "kind": "string-swap",
+        "from": "return 'Receipt engine OK';",
+        "to": "setTimeout(() => { throw new Error('READINESS_RUNTIME_SENTINEL_88'); }, 0); return 'READINESS_RUNTIME_SENTINEL_88';"
+      },
+      "probe": {
+        "measure": "text",
+        "expectClean": "Receipt engine OK",
+        "expectSeed": "READINESS_RUNTIME_SENTINEL_88"
+      }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miqyas.kahflabs.com/schema/known-findings.schema.json",
+  "title": "Miqyas Clean Twin Known Findings Baseline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "target", "buildId", "reviewedAt", "reviewer", "entries"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "target": { "type": "string", "minLength": 1 },
+    "buildId": { "type": "string", "minLength": 1 },
+    "reviewedAt": { "type": "string", "minLength": 1 },
+    "reviewer": { "type": "string", "minLength": 1 },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "category", "evidencePattern", "rationale"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "category": { "type": "string", "minLength": 1 },
+          "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+          "urlPattern": { "type": "string", "minLength": 1 },
+          "evidencePattern": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "rationale": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

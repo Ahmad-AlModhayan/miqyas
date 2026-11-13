@@ -1,0 +1,29 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "checkout-flow",
+  "name": "Mini Shop Interactive Checkout",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "click-add",
+      "type": "action",
+      "text": "Click أضف للسلة"
+    },
+    {
+      "id": "assert-cart-added",
+      "type": "assertion",
+      "text": "Cart updates to '1 item ready'"
+    },
+    {
+      "id": "click-checkout",
+      "type": "action",
+      "text": "Click إتمام الطلب with empty email"
+    },
+    {
+      "id": "assert-email-required",
+      "type": "assertion",
+      "text": "Validation shows 'Email is required'"
+    }
+  ]
+}

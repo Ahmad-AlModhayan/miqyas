@@ -371,4 +371,51 @@ describe('CLI exit codes', () => {
     ).toBe(2);
     expect(existsSync(outBadMaxScreens)).toBe(false);
   });
+
+  it('validates corpus manifests with miqyas lint --corpus and rejects leaked unasserted seeds with exit code 2', async () => {
+    expect(await main(['lint', '--corpus', 'corpus/mini-shop'])).toBe(0);
+
+    const badCorpusDir = path.join(tmp, 'bad-corpus');
+    const badPlansDir = path.join(badCorpusDir, 'plans');
+    await import('node:fs/promises').then(async (fs) => {
+      await fs.mkdir(badPlansDir, { recursive: true });
+      await fs.mkdir(path.join(badCorpusDir, 'clean'), { recursive: true });
+      await fs.writeFile(
+        path.join(badCorpusDir, 'known.json'),
+        JSON.stringify({ version: 1, target: 'bad', buildId: 'b1', reviewedAt: '2026-11-13T00:00:00Z', reviewer: 'Kahf Labs', entries: [] }),
+      );
+      await fs.writeFile(
+        path.join(badPlansDir, 'p1.json'),
+        JSON.stringify({
+          format: 'miqyas-plan',
+          version: 1,
+          id: 'p1',
+          steps: [{ id: 'a1', type: 'assertion', text: 'Check SECRET_LEAK_TOKEN_99 is absent' }],
+        }),
+      );
+      await fs.writeFile(
+        path.join(badCorpusDir, 'seeds.json'),
+        JSON.stringify({
+          version: 1,
+          target: 'bad',
+          cleanTwin: { buildDir: path.join(badCorpusDir, 'clean'), knownFindings: path.join(badCorpusDir, 'known.json') },
+          seeds: [
+            {
+              id: 'u1',
+              title: 'Secret leak',
+              part: 'unasserted',
+              category: 'secret-leak',
+              blindTokens: ['SECRET_LEAK_TOKEN_99'],
+              mutation: { kind: 'string-swap', from: 'ok', to: 'SECRET_LEAK_TOKEN_99' },
+              probe: { measure: 'text', expectClean: 'ok', expectSeed: 'SECRET_LEAK_TOKEN_99' },
+            },
+          ],
+        }),
+      );
+    });
+
+    expect(await main(['lint', '--corpus', badCorpusDir])).toBe(2);
+    expect(await main(['lint', '--corpus', path.join(tmp, 'nonexistent-corpus')])).toBe(2);
+    expect(await main(['run', good, '--corpus', 'corpus/mini-shop', '--url', 'http://127.0.0.1:9/', '--dry-run'])).toBe(2);
+  });
 });

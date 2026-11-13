@@ -33,12 +33,23 @@ import {
   type RunQuote,
 } from '../agents/spend.js';
 import { BENCHES, buildBenchSummary, renderBenchMarkdown, type BenchSummary } from '../proof-core/bench.js';
-import { parseFailOn, type FailOnThreshold } from '../proof-core/findings.js';
-import { reportPath } from '../proof-core/ledger.js';
-import { BuildChangedError, parsePreset } from '../proof-core/mutate.js';
-import { runMutations, runVerification } from '../proof-core/orchestrator.js';
+import { CorpusError, lintCorpus, loadCorpusFromPath, resolveContainedCorpusPath, seedToMutation, verifyCorpusProbes, type CorpusManifest, type CorpusSeed } from '../proof-core/corpus.js';
+import { parseFailOn, type FailOnThreshold, type Finding } from '../proof-core/findings.js';
+import { reportPath, type PlanResult } from '../proof-core/ledger.js';
+import { applyMutation, BuildChangedError, classify, parsePreset, summarize, type Mutation, type MutationPreset, type MutationResult } from '../proof-core/mutate.js';
+import { executePlans, runMutations, runVerification } from '../proof-core/orchestrator.js';
 import { lintPlan, loadPlanFile, loadPlans, PlanError, resolvePlanFiles, serializePlan, type Plan } from '../proof-core/plan.js';
 import { renderHuman, type Method, type RunReport } from '../proof-core/report.js';
+import {
+  appendBenchHistory,
+  detectBenchRegressions,
+  loadBenchHistory,
+  matchesKnownFinding,
+  scoreCorpus,
+  seedMatchesFinding,
+  toHistoryEntry,
+  type BenchRegression,
+} from '../proof-core/scoring.js';
 import { NO_SCRUB, parseScrubRules, scrubDir, scrubText, type ScrubRules } from '../scrub/scrub.js';
 import { openWebSurfaceDriver } from '../surfaces/web/driver.js';
 import { DEFAULT_CRAWL_DEPTH, DEFAULT_CRAWL_MAX_SCREENS, DEFAULT_CRAWL_RPS } from '../surfaces/web/crawler.js';
@@ -61,12 +72,13 @@ Usage:
                                                    break copies of a build on purpose, report the detection rate
   miqyas quote <plans...> [--tier <level>] [--model <id>] [--no-model] [--preset <name|file>]
                                                    print a free offline cost quote and stop
-  miqyas lint <plans...>                           check plans offline
+  miqyas lint <plans...> [--corpus <dir|seeds.json>]
+                                                   check plans and/or corpus offline
   miqyas import testsprite <plans...> --out <dir>  convert TestSprite plans, assigning stable step ids
   miqyas scrub <dir> --rules <name|file> [--check] replace configured terms in a built app, then re-scan
   miqyas bench <name> [--repo <clone>] [--commit <ref>] [--dry-run]
-                                                   export, build, scrub, run and mutate a pinned app; write
-                                                   bench/<date>-<commit>/summary.md and summary.json (benches: ${Object.keys(BENCHES).join(', ')})
+  miqyas bench --corpus <dir|seeds.json> [--out <dir>] [--history <file>] [--no-model|--dry-run]
+                                                   run benchmark suite, score parts & track regressions in history.jsonl (benches: ${Object.keys(BENCHES).join(', ')})
   miqyas doctor                                    check Node, the browser, endpoint and whether a model key is set
 
 Options:
@@ -95,6 +107,8 @@ Options:
   --host-token <token>   expected ownership token when verifying /.well-known/miqyas.txt or DNS _miqyas.<host>
   --strict               require cite/quoted-text match on every AI pass (reject model-only passes)
   --fail-on <severity>   fail run on confirmed findings >= severity (none | info | low | medium | high | critical; default none)
+  --corpus <path>        seeded corpus directory or seeds.json manifest (for lint / bench)
+  --history <file>       regression history JSONL file (default bench/history.jsonl)
 
 Live billed runs print a quote, require an interactive terminal cap <= $${DAILY_CAP_USD} daily cap, and need a provider key in your environment. Unbilled local/private OpenAI-compatible endpoints work non-interactively. Secrets in plans are written \${secret.NAME} and read
 from MIQYAS_SECRET_NAME.`;
@@ -132,6 +146,8 @@ const OPTIONS = {
   preset: { type: 'string' },
   repo: { type: 'string' },
   commit: { type: 'string' },
+  corpus: { type: 'string' },
+  history: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 } as const;
 
@@ -429,12 +445,43 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
   }
 }
 
-async function cmdLint(args: string[]): Promise<number> {
-  const files = await resolvePlanFiles(args);
+async function resolveCorpusPlansArg(baseDir: string, explicitArgs: string[]): Promise<string[]> {
+  if (explicitArgs.length) return explicitArgs;
+  const defaultDir = path.join(baseDir, 'plans');
+  if (!existsSync(defaultDir)) return [];
+  try {
+    return await resolvePlanFiles([defaultDir]);
+  } catch (e) {
+    if (e instanceof PlanError && e.message.includes('no plan files')) return [];
+    throw e;
+  }
+}
+
+async function cmdLint(args: string[], o: Opts): Promise<number> {
   let errors = 0;
+  let loadedCorpus: Awaited<ReturnType<typeof loadCorpusFromPath>> | null = null;
+  let planInputs = args;
+
+  if (o.corpus !== undefined) {
+    if (!o.corpus.trim()) throw new UsageError('--corpus requires a directory or seeds.json path');
+    try {
+      loadedCorpus = await loadCorpusFromPath(o.corpus);
+      planInputs = await resolveCorpusPlansArg(loadedCorpus.baseDir, args);
+    } catch (e) {
+      if (e instanceof CorpusError || e instanceof PlanError) {
+        process.stdout.write(`ERROR corpus: ${e.message}\n`);
+        return 2;
+      }
+      throw e;
+    }
+  }
+
+  const files = planInputs.length ? await resolvePlanFiles(planInputs) : loadedCorpus ? [] : await resolvePlanFiles(args);
+  const loadedPlans: Plan[] = [];
   for (const f of files) {
     try {
       const plan = await loadPlanFile(f);
+      loadedPlans.push(plan);
       const issues = lintPlan(plan);
       const n = plan.steps.filter((s) => s.type === 'assertion').length;
       process.stdout.write(`${issues.some((i) => i.level === 'error') ? 'ERROR' : 'ok   '} ${f}  (${plan.steps.length} steps, ${n} assertions)\n`);
@@ -443,6 +490,20 @@ async function cmdLint(args: string[]): Promise<number> {
     } catch (e) {
       errors++;
       process.stdout.write(`ERROR ${(e as Error).message}\n`);
+    }
+  }
+  if (loadedCorpus) {
+    try {
+      if (!existsSync(loadedCorpus.cleanBuildDir)) {
+        throw new CorpusError(`clean twin buildDir not found: ${loadedCorpus.cleanBuildDir}`);
+      }
+      lintCorpus(loadedCorpus.manifest, loadedPlans, loadedCorpus.knownFindings);
+      process.stdout.write(
+        `ok    corpus ${loadedCorpus.manifest.target} (${loadedCorpus.manifest.seeds.length} seeds, ${loadedCorpus.knownFindings.entries.length} known findings)\n`,
+      );
+    } catch (e) {
+      errors++;
+      process.stdout.write(`ERROR corpus (${loadedCorpus.manifestPath}): ${(e as Error).message}\n`);
     }
   }
   return errors ? 2 : 0;
@@ -526,9 +587,304 @@ async function cmdMutate(args: string[], o: Opts, inject: Injected): Promise<num
   }
 }
 
+function buildAssertedPreset(manifest: CorpusManifest): MutationPreset {
+  const mutations = manifest.seeds
+    .filter((s) => s.part === 'asserted')
+    .map((s) => seedToMutation(s))
+    .filter((m): m is Mutation => m !== null);
+  return { name: manifest.target, mutations };
+}
+
+async function runFixtureAssertedSeeds(opts: {
+  seeds: CorpusSeed[];
+  plans: Plan[];
+  cleanResults: PlanResult[];
+  allowedRoots: string[];
+  runId: string;
+  work: string;
+  driver: Awaited<ReturnType<typeof openWebSurfaceDriver>>;
+  exec: Awaited<ReturnType<typeof prepareExecution>>;
+  scrub: ScrubRules;
+  strict: boolean;
+}): Promise<{ results: MutationResult[]; seedPlans: Record<string, PlanResult[]> }> {
+  const results: MutationResult[] = [];
+  const seedPlans: Record<string, PlanResult[]> = {};
+  const byPlanId = new Map(opts.plans.map((p) => [p.id, p]));
+  for (const seed of opts.seeds) {
+    if (!seed.fixtureDir || seed.mutation) continue;
+    const plan = seed.plan ? byPlanId.get(seed.plan) : undefined;
+    if (!plan) continue;
+    const seedDir = await resolveContainedCorpusPath(seed.fixtureDir, opts.allowedRoots, `seed "${seed.id}" fixtureDir`);
+    const srv = await serveDir(seedDir);
+    try {
+      const [mutated] = await executePlans([plan], {
+        url: srv.url,
+        driver: opts.driver,
+        agent: opts.exec.agent,
+        ...(opts.exec.noModel ? { noModel: true } : {}),
+        runDir: path.join(opts.work, 'fixture-asserted', seed.id),
+        scrub: opts.scrub,
+        ...(opts.strict ? { strict: true } : {}),
+      });
+      if (mutated) seedPlans[seed.id] = [mutated];
+      const base = opts.cleanResults.find((p) => p.planId === plan.id);
+      const spec: Mutation = {
+        id: seed.id,
+        title: seed.title,
+        kind: 'css',
+        css: '',
+        plan: plan.id,
+        ...(seed.assertion ? { assertion: seed.assertion } : {}),
+        probe: seed.probe,
+      };
+      results.push(classify(spec, true, base, mutated, `fixture ${seed.fixtureDir}`));
+    } finally {
+      await srv.close();
+    }
+  }
+  return { results, seedPlans };
+}
+
+async function runBlindCorpusSeeds(opts: {
+  loaded: Awaited<ReturnType<typeof loadCorpusFromPath>>;
+  allowedRoots: string[];
+  id: string;
+  work: string;
+  driver: Awaited<ReturnType<typeof openWebSurfaceDriver>>;
+  exec: Awaited<ReturnType<typeof prepareExecution>>;
+  scrub: ScrubRules;
+  scrubMethod: Method['scrub'];
+  headed: boolean;
+}): Promise<{ findingsBySeed: Map<string, Finding[]>; readinessRuns: { seedId: string; detected: boolean }[] }> {
+  const findingsBySeed = new Map<string, Finding[]>();
+  const readinessRuns: { seedId: string; detected: boolean }[] = [];
+  const blindSeeds = opts.loaded.manifest.seeds.filter((s) => s.part === 'unasserted' || s.part === 'readiness');
+  for (const seed of blindSeeds) {
+    let targetDir: string;
+    if (seed.fixtureDir) {
+      targetDir = await resolveContainedCorpusPath(seed.fixtureDir, opts.allowedRoots, `seed "${seed.id}" fixtureDir`);
+    } else {
+      targetDir = path.join(opts.work, 'seeds', seed.id);
+      await rm(targetDir, { recursive: true, force: true });
+      const mut = seedToMutation(seed, 'corpus');
+      if (mut) await applyMutation(mut, opts.loaded.cleanBuildDir, targetDir);
+    }
+    const srv = await serveDir(targetDir);
+    try {
+      const res = await runVerification({
+        runId: `${opts.id}-${seed.id}`,
+        url: srv.url,
+        plans: [],
+        runDir: path.join(opts.work, 'seed-runs', seed.id),
+        driver: opts.driver,
+        agent: opts.exec.agent,
+        noModel: opts.exec.noModel,
+        ...(opts.exec.spendGuard ? { spendGuard: opts.exec.spendGuard } : {}),
+        ...(opts.exec.quote ? { quote: opts.exec.quote } : {}),
+        scrub: opts.scrub,
+        scrubMethod: opts.scrubMethod,
+        settings: { concurrency: 1, allowOtherOrigins: false, headed: opts.headed, crawl: true },
+      });
+      const novel = (res.report.findings ?? []).filter(
+        (f) => !matchesKnownFinding(f, opts.loaded.knownFindings) && seedMatchesFinding(seed, f),
+      );
+      if (seed.part === 'unasserted') findingsBySeed.set(seed.id, novel);
+      else readinessRuns.push({ seedId: seed.id, detected: novel.length > 0 });
+    } finally {
+      await srv.close();
+    }
+  }
+  return { findingsBySeed, readinessRuns };
+}
+
+async function runCorpusBench(args: string[], o: Opts, inject: Injected): Promise<number> {
+  if (!o.corpus?.trim()) throw new UsageError('--corpus requires a directory or seeds.json path');
+  if (o.history !== undefined && !o.history.trim()) throw new UsageError('--history requires a file path');
+  for (const k of ['url', 'build', 'preset', 'record', 'replay', 'repo'] as const) {
+    if (o[k]) throw new UsageError(`bench --corpus does not support --${k}`);
+  }
+  validateCassetteFlags(o);
+  const loaded = await loadCorpusFromPath(o.corpus, process.cwd());
+  if (!existsSync(loaded.cleanBuildDir)) throw new EnvError(`clean twin buildDir not found: ${loaded.cleanBuildDir}`);
+  const planArgs = await resolveCorpusPlansArg(loaded.baseDir, args);
+  const plans = planArgs.length ? await loadPlans(planArgs) : [];
+  checkLint(plans);
+  lintCorpus(loaded.manifest, plans, loaded.knownFindings);
+
+  const preset = buildAssertedPreset(loaded.manifest);
+  const id = runId();
+  const startedAt = new Date();
+  const work = path.resolve('.miqyas', 'bench', id);
+  const outDir = path.resolve(o.out ?? path.join('bench', id));
+  const historyPath = path.resolve(o.history ?? path.join('bench', 'history.jsonl'));
+  const allowedRoots = [process.cwd(), loaded.baseDir];
+  const say = (s: string) => process.stderr.write(s + '\n');
+  const exec = await prepareExecution({ o, plans, runId: id, runDir: path.join(work, 'run'), inject, preset });
+  const { rules: scrub, method: scrubMethod } = await scrubRules(o, 'scrub');
+
+  const phasesMs = { export: 0, build: 0, scrub: 0, run: 0, mutate: 0 };
+  const driver = await openWebSurfaceDriver({ headed: o.headed, allowOtherOrigins: false });
+  try {
+    const probes = await verifyCorpusProbes({
+      manifest: loaded.manifest,
+      cleanBuildDir: loaded.cleanBuildDir,
+      baseRoot: process.cwd(),
+      baseDir: loaded.baseDir,
+      driver,
+      serve: serveDir,
+      workDir: path.join(work, 'probes'),
+    });
+    const failedProbes = probes.filter((p) => !p.effective);
+    if (failedProbes.length) {
+      throw new CorpusError(`corpus code probes failed for: ${failedProbes.map((p) => `${p.id} (${p.detail})`).join('; ')}`);
+    }
+
+    const tRun = Date.now();
+    const cleanSrv = await serveDir(loaded.cleanBuildDir);
+    let cleanReport: RunReport;
+    try {
+      const cleanRes = await runVerification({
+        runId: `${id}-clean`,
+        url: cleanSrv.url,
+        plans,
+        runDir: path.join(work, 'clean'),
+        driver,
+        agent: exec.agent,
+        noModel: exec.noModel,
+        ...(exec.spendGuard ? { spendGuard: exec.spendGuard } : {}),
+        ...(exec.quote ? { quote: exec.quote } : {}),
+        scrub,
+        scrubMethod,
+        settings: { concurrency: concurrency(o), allowOtherOrigins: false, headed: o.headed, crawl: !o['dry-run'] },
+        ...(o.strict ? { strict: true } : {}),
+      });
+      cleanReport = cleanRes.report;
+    } finally {
+      await cleanSrv.close();
+    }
+    phasesMs.run = Date.now() - tRun;
+
+    const tMut = Date.now();
+    let assertedResults: MutationResult[] = [];
+    let seedPlans: Record<string, PlanResult[]> = {};
+    let mutSummary = summarize('corpus', []);
+    let mutUsage = null;
+    if (preset.mutations.length && plans.length) {
+      const mutRes = await runMutations({
+        runId: `${id}-mut`,
+        buildDir: loaded.cleanBuildDir,
+        preset,
+        plans,
+        runDir: path.join(work, 'mutate'),
+        driver,
+        serve: serveDir,
+        agent: exec.agent,
+        noModel: exec.noModel,
+        ...(exec.spendGuard ? { spendGuard: exec.spendGuard } : {}),
+        ...(exec.quote ? { quote: exec.quote } : {}),
+        scrub,
+        scrubMethod,
+        concurrency: concurrency(o),
+        ...(o.strict ? { strict: true } : {}),
+        onLog: say,
+      });
+      assertedResults = mutRes.results;
+      seedPlans = mutRes.runs;
+      mutSummary = mutRes.report.summary;
+      mutUsage = mutRes.report.usage;
+    }
+
+    const fixtureAsserted = !o['dry-run']
+      ? await runFixtureAssertedSeeds({
+          seeds: loaded.manifest.seeds.filter((s) => s.part === 'asserted' && s.fixtureDir && !s.mutation),
+          plans,
+          cleanResults: cleanReport.plans,
+          allowedRoots,
+          runId: id,
+          work,
+          driver,
+          exec,
+          scrub,
+          strict: o.strict,
+        })
+      : { results: [], seedPlans: {} };
+    assertedResults = [...assertedResults, ...fixtureAsserted.results];
+    seedPlans = { ...seedPlans, ...fixtureAsserted.seedPlans };
+
+    let score: ReturnType<typeof scoreCorpus> | undefined;
+    let regressions: BenchRegression[] | undefined;
+    if (!o['dry-run']) {
+      const blind = await runBlindCorpusSeeds({ loaded, allowedRoots, id, work, driver, exec, scrub, scrubMethod, headed: o.headed });
+      score = scoreCorpus({
+        manifest: loaded.manifest,
+        knownFindings: loaded.knownFindings,
+        asserted: { results: assertedResults, seedPlans },
+        unasserted: { findingsBySeed: blind.findingsBySeed },
+        readiness: { runs: blind.readinessRuns },
+        cleanTwin: {
+          findings: cleanReport.findings ?? [],
+          planFalseFailures: cleanReport.plans.filter((p) => p.verdict === 'fail').length,
+        },
+      });
+      const commit = o.commit ?? loaded.knownFindings.buildId;
+      const prevHistory = await loadBenchHistory(historyPath);
+      const baseline =
+        [...prevHistory].reverse().find((e) => e.bench === loaded.manifest.target && !e.dryRun) ??
+        [...prevHistory].reverse().find((e) => e.bench === loaded.manifest.target);
+      const draftEntry = toHistoryEntry({ bench: loaded.manifest.target, commit, dryRun: false, score });
+      regressions = baseline ? detectBenchRegressions(draftEntry, baseline) : [];
+      await appendBenchHistory(historyPath, toHistoryEntry({ bench: loaded.manifest.target, commit, dryRun: false, score, regressions }));
+    }
+    phasesMs.mutate = Date.now() - tMut;
+
+    const commit = o.commit ?? loaded.knownFindings.buildId;
+    const relOut = path.relative(process.cwd(), outDir) || '.';
+    const summary = buildBenchSummary({
+      bench: {
+        name: loaded.manifest.target,
+        title: loaded.manifest.target,
+        repo: '.',
+        subdir: loaded.manifest.cleanTwin.buildDir,
+        commit,
+        commitNote: `corpus baseline ${loaded.knownFindings.buildId}`,
+        plans: path.relative(process.cwd(), path.join(loaded.baseDir, 'plans')) || '.',
+        preset: 'corpus',
+        scrub: 'none',
+        build: { install: [], vite: [], env: {}, outDir: loaded.manifest.cleanTwin.buildDir },
+      },
+      dryRun: o['dry-run'],
+      startedAt,
+      finishedAt: new Date(),
+      phasesMs,
+      commit,
+      unchanged: true,
+      scrub: { replaced: 0, files: 0, remaining: 0 },
+      run: cleanReport,
+      mutation: { summary: mutSummary, usage: mutUsage },
+      runs: { run: path.join(relOut, 'summary.json'), mutate: path.join(relOut, 'summary.json') },
+      ...(score ? { corpus: score } : {}),
+      ...(regressions ? { regressions } : {}),
+    });
+    await mkdir(outDir, { recursive: true });
+    await writeFile(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 2) + '\n', 'utf8');
+    const md = renderBenchMarkdown(summary);
+    await writeFile(path.join(outDir, 'summary.md'), md, 'utf8');
+    process.stdout.write(
+      o.json
+        ? JSON.stringify(summary, null, 2) + '\n'
+        : `\n${md}\nSummary: ${path.join(outDir, 'summary.md')}${o['dry-run'] ? '' : `\nHistory: ${historyPath}`}\n`,
+    );
+    return 0;
+  } finally {
+    await driver.close();
+    await rm(work, { recursive: true, force: true });
+  }
+}
+
 async function cmdBench(args: string[], o: Opts, inject: Injected): Promise<number> {
+  if (o.corpus) return await runCorpusBench(args, o, inject);
   const bench = BENCHES[args[0] ?? ''];
-  if (!bench || args.length > 1) throw new UsageError(`usage: miqyas bench <${Object.keys(BENCHES).join('|')}> [--repo <clone>] [--commit <ref>] [--dry-run]`);
+  if (!bench || args.length > 1) throw new UsageError(`usage: miqyas bench <${Object.keys(BENCHES).join('|')}> | miqyas bench --corpus <dir|seeds.json>`);
   for (const k of ['url', 'build', 'preset', 'scrub', 'out', 'record', 'replay'] as const) {
     if (o[k]) throw new UsageError(k === 'record' || k === 'replay' ? `bench does not support --${k}` : `bench sets --${k} itself`);
   }
@@ -706,6 +1062,14 @@ export async function main(argv: string[], inject: Injected = {}): Promise<numbe
     process.stdout.write(HELP + '\n');
     return cmd ? 0 : 2;
   }
+  if (o.corpus !== undefined && cmd !== 'lint' && cmd !== 'bench') {
+    process.stderr.write(`miqyas: --corpus is only supported on lint and bench\n`);
+    return 2;
+  }
+  if (o.history !== undefined && cmd !== 'bench') {
+    process.stderr.write(`miqyas: --history is only supported on bench\n`);
+    return 2;
+  }
   try {
     switch (cmd) {
       case 'run':
@@ -715,7 +1079,7 @@ export async function main(argv: string[], inject: Injected = {}): Promise<numbe
       case 'quote':
         return await cmdQuote(args, o, inject);
       case 'lint':
-        return await cmdLint(args);
+        return await cmdLint(args, o);
       case 'import':
         return await cmdImport(args, o);
       case 'scrub':
@@ -734,7 +1098,13 @@ export async function main(argv: string[], inject: Injected = {}): Promise<numbe
 
 /** Print a command's error and return its exit code: 2 for usage and plan errors, 3 for the environment and the rest. */
 export function errorExit(e: unknown): number {
-  if (e instanceof UsageError || e instanceof RouteUsageError || e instanceof PlanError || e instanceof HostPolicyError) {
+  if (
+    e instanceof UsageError ||
+    e instanceof RouteUsageError ||
+    e instanceof PlanError ||
+    e instanceof HostPolicyError ||
+    e instanceof CorpusError
+  ) {
     process.stderr.write(`miqyas: ${e.message}\n`);
     return 2;
   }

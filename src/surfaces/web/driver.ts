@@ -210,7 +210,8 @@ export async function measureProbe(browser: Browser, url: string, probe: Probe):
     throw e;
   });
   try {
-    await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
+    const targetUrl = probe.path ? new URL(probe.path, url).href : url;
+    await page.goto(targetUrl, { waitUntil: 'load', timeout: 30_000 });
     await settleLoad(page);
     for (const step of probe.steps ?? []) {
       await page.click(step, { timeout: 5000 });
