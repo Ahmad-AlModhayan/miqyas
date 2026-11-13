@@ -7,6 +7,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { dedupeFindings } from '../../src/proof-core/findings.js';
 import {
   buildReadinessReport,
+  evaluateCheck1LoadErrors,
+  evaluateCheck2Controls,
+  evaluateCheck4Accessibility,
   evaluateCheck5ServedSecrets,
   evaluateCheck6RepoSecrets,
   evaluateCheck7MigrationRls,
@@ -400,9 +403,99 @@ process.exit(${exitCode});
       crawl: makeFakeCrawl(),
       osv: { env: makeOsvEnv([], 0) },
     });
-    expect(profileRes.adapters.map((a) => a.id)).toEqual(expect.arrayContaining(['libpg-query', 'osv-scanner']));
+    expect(profileRes.adapters.map((a) => a.id)).toEqual(expect.arrayContaining(['libpg-query', 'osv-scanner', 'playwright', 'axe-core']));
+    expect(profileRes.readiness.checks.find((c) => c.number === 1)?.verdict).toBe('pass');
+    expect(profileRes.readiness.checks.find((c) => c.number === 2)?.verdict).toBe('pass');
+    expect(profileRes.readiness.checks.find((c) => c.number === 4)?.verdict).toBe('pass');
     expect(profileRes.readiness.checks.find((c) => c.number === 7)?.verdict).toBe('pass');
     expect(profileRes.readiness.checks.find((c) => c.number === 13)?.verdict).toBe('pass');
+  });
+
+  it('evaluates Check 1 (page/console/5xx vs 4xx findings): not_checked, pass with 4xx, and fail on 5xx or runtime errors', () => {
+    expect(evaluateCheck1LoadErrors({}).check.verdict).toBe('not_checked');
+
+    const crawl404 = makeFakeCrawl();
+    crawl404.playwrightVersion = '1.64.1';
+    crawl404.screens[0]!.observation.findings = [
+      { category: 'http-error', title: 'HTTP 404 on /missing', severity: 'medium', confirmed: true, evidence: '404 Not Found GET /missing' },
+    ];
+    const res404 = evaluateCheck1LoadErrors({ crawl: crawl404 });
+    expect(res404.check.verdict).toBe('pass');
+    expect(res404.check.coverage).toContain('1 screen(s)');
+    expect(res404.check.coverage).toContain('1 4xx finding(s)');
+    expect(res404.findings).toHaveLength(1);
+    expect(res404.blockingKeys).toEqual([]);
+
+    const crawlFail = makeFakeCrawl();
+    crawlFail.screens[0]!.observation.findings = [
+      { category: 'page-error', title: 'Uncaught page error', severity: 'high', confirmed: true, evidence: 'TypeError: boom' },
+    ];
+    crawlFail.crawlErrors = [
+      { category: 'http-error', title: 'HTTP 503 on /api', severity: 'high', confirmed: true, evidence: '503 Unavailable GET /api' },
+    ];
+    const resFail = evaluateCheck1LoadErrors({ crawl: crawlFail });
+    expect(resFail.check.verdict).toBe('fail');
+    expect(resFail.blockingKeys).toHaveLength(2);
+    expect(resFail.check.evidenceIds).toHaveLength(2);
+  });
+
+  it('evaluates Check 2 (non-destructive controls & destructive exclusions): pass vs fail on unchanged control', () => {
+    expect(evaluateCheck2Controls({}).check.verdict).toBe('not_checked');
+
+    const cleanCrawl = makeFakeCrawl();
+    cleanCrawl.skippedControls = 2;
+    cleanCrawl.controlChecks = [
+      { screenUrl: 'http://127.0.0.1:4173/', label: 'Details tab', tagName: 'button', status: 'changed' },
+      { screenUrl: 'http://127.0.0.1:4173/', label: 'Delete account', tagName: 'button', status: 'skipped-destructive' },
+      { screenUrl: 'http://127.0.0.1:4173/', label: 'Pay now', tagName: 'button', status: 'skipped-destructive' },
+    ];
+    const passRes = evaluateCheck2Controls({ crawl: cleanCrawl });
+    expect(passRes.check.verdict).toBe('pass');
+    expect(passRes.check.coverage).toContain('Delete account');
+    expect(passRes.check.coverage).toContain('Pay now');
+    expect(passRes.findings).toEqual([]);
+
+    const deadCrawl = makeFakeCrawl();
+    deadCrawl.controlChecks = [
+      { screenUrl: 'http://127.0.0.1:4173/', label: 'Details tab', tagName: 'button', status: 'changed' },
+      { screenUrl: 'http://127.0.0.1:4173/', label: 'Broken Save', tagName: 'button', status: 'unchanged' },
+    ];
+    const failRes = evaluateCheck2Controls({ crawl: deadCrawl });
+    expect(failRes.check.verdict).toBe('fail');
+    expect(failRes.findings).toHaveLength(1);
+    expect(failRes.findings[0]).toMatchObject({ category: 'dead-control', severity: 'medium' });
+  });
+
+  it('evaluates Check 4 (axe-core critical/serious aggregation): passes moderate/minor and fails critical/serious with node evidence', () => {
+    expect(evaluateCheck4Accessibility({}).check.verdict).toBe('not_checked');
+
+    const advCrawl = makeFakeCrawl();
+    advCrawl.axeVersion = '4.14.0';
+    advCrawl.screens[0]!.observation.findings = [
+      { category: 'a11y', title: 'axe region: Landmarks', severity: 'medium', confirmed: true, evidence: 'impact=moderate; targets=div' },
+    ];
+    const advRes = evaluateCheck4Accessibility({ crawl: advCrawl });
+    expect(advRes.check.verdict).toBe('pass');
+    expect(advRes.check.adapterVersion).toBe('4.14.0');
+    expect(advRes.findings).toHaveLength(1);
+    expect(advRes.blockingKeys).toEqual([]);
+
+    const failCrawl = makeFakeCrawl();
+    failCrawl.axeVersion = '4.14.0';
+    failCrawl.screens[0]!.observation.findings = [
+      {
+        category: 'a11y',
+        title: 'axe image-alt: Images must have alternative text',
+        severity: 'critical',
+        confirmed: true,
+        evidence: 'impact=critical; targets=img#hero',
+        nodes: [{ ref: 'img#hero', role: 'img', name: 'img#hero', box: { x: 0, y: 0, width: 100, height: 50 } }],
+      },
+    ];
+    const failRes = evaluateCheck4Accessibility({ crawl: failCrawl });
+    expect(failRes.check.verdict).toBe('fail');
+    expect(failRes.blockingKeys).toHaveLength(1);
+    expect(failRes.findings[0]?.nodes?.[0]?.ref).toBe('img#hero');
   });
 });
 

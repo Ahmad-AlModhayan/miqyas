@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Seed Check 1 HTTP 5xx</title>
+  </head>
+  <body>
+    <main><h1>Orders</h1></main>
+    <script>
+      fetch('/api/boom-500').catch(() => {});
+    </script>
+  </body>
+</html>

@@ -16,8 +16,8 @@ import {
 } from '../adapters/gitleaks.js';
 import { analyzeMigrationsRls, LIBPG_QUERY_VERSION } from '../adapters/migrations.js';
 import { runOsvScannerOffline, type OsvExecOptions } from '../adapters/osv.js';
-import type { CrawlResult, ServedArtifact } from '../surfaces/session.js';
-import { findingDedupeKey, type Finding } from './findings.js';
+import type { CrawlResult, ServedArtifact, SurfaceFinding } from '../surfaces/session.js';
+import { dedupeFindings, findingDedupeKey, normalizeSurfaceFindings, type Finding } from './findings.js';
 import { PlanLedger, type PlanResult } from './ledger.js';
 import { parsePlan, type Plan } from './plan.js';
 import type { AdapterMethodInfo } from './report.js';
@@ -924,6 +924,374 @@ export async function evaluateCheck7MigrationRls(opts: {
   };
 }
 
+function httpErrorStatus(f: Pick<Finding, 'category' | 'title' | 'evidence'>): number | null {
+  if (f.category !== 'http-error') return null;
+  const m = /^HTTP (\d{3})\b/.exec(f.title) ?? /^(\d{3})\b/.exec(f.evidence);
+  if (!m) return null;
+  const code = Number(m[1]);
+  return Number.isFinite(code) ? code : null;
+}
+
+/** Normalize passive/post-capture crawl errors using the single fallback screen URL rule. */
+export function normalizeCrawlErrors(
+  crawlErrors: SurfaceFinding[],
+  hide: (t: string) => string,
+  fallbackUrl = '',
+): Finding[] {
+  if (!crawlErrors.length) return [];
+  const fakeObs = {
+    capture: 0,
+    url: fallbackUrl,
+    title: '',
+    lang: 'en',
+    dir: 'ltr' as const,
+    viewport: { width: 1280, height: 800 },
+    nodes: [],
+    truncated: false,
+    png: Buffer.alloc(0),
+    capturedAt: new Date(0),
+    findings: crawlErrors,
+  };
+  return normalizeSurfaceFindings(fakeObs, hide, { planId: 'crawl', stepId: 'crawl-error' });
+}
+
+/** Collect and deduplicate surface detector findings from crawled screens plus pre/post-capture crawl errors. */
+export function collectCrawlSurfaceFindings(
+  crawl: CrawlResult,
+  hide: (t: string) => string,
+  fallbackUrl = '',
+): Finding[] {
+  const collected: Finding[] = [];
+  for (const s of crawl.screens) {
+    const stepId = `crawl-c${s.observation.capture}`;
+    collected.push(...normalizeSurfaceFindings(s.observation, hide, { planId: 'crawl', stepId }));
+  }
+  if (crawl.crawlErrors?.length) {
+    collected.push(...normalizeCrawlErrors(crawl.crawlErrors, hide, crawl.screens[0]?.url ?? fallbackUrl));
+  }
+  return dedupeFindings(collected);
+}
+
+/** Check 1: Every screen reached during crawl loads without page error, console error, or same-origin 5xx (4xx recorded as findings). */
+export function evaluateCheck1LoadErrors(opts: {
+  crawl?: CrawlResult;
+  hide?: (t: string) => string;
+  preCollected?: Finding[];
+}): {
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  blockingKeys: string[];
+  adapterInfo?: AdapterMethodInfo;
+} {
+  const spec = GRADE_1_CHECKS[0]!;
+  const hide = opts.hide ?? ((t: string) => t);
+  const crawl = opts.crawl;
+
+  if (!crawl) {
+    return {
+      ...secretCheckNotChecked(spec, {
+        adapter: 'playwright',
+        coverage: '0 crawled screens',
+        reason: 'crawl did not execute',
+        whatToAdd: 'Run with --url against a reachable web app so passive crawl can verify screen loads',
+        adapterInfo: { id: 'playwright', version: null, coverage: '0 screens crawled', status: 'skipped', detail: 'crawl did not run' },
+      }),
+      blockingKeys: [],
+    };
+  }
+
+  const allSurface = opts.preCollected ?? collectCrawlSurfaceFindings(crawl, hide);
+  const blocking = allSurface.filter((f) => {
+    if (f.category === 'page-error' || f.category === 'console-error') return true;
+    const status = httpErrorStatus(f);
+    return status !== null && status >= 500;
+  });
+  const http4xx = allSurface.filter((f) => {
+    const status = httpErrorStatus(f);
+    return status !== null && status >= 400 && status < 500;
+  });
+
+  if (crawl.screens.length === 0 && blocking.length === 0 && http4xx.length === 0) {
+    return {
+      ...secretCheckNotChecked(spec, {
+        adapter: 'playwright',
+        adapterVersion: crawl.playwrightVersion ?? null,
+        coverage: '0 crawled screens',
+        reason: '0 screens were reached during crawl',
+        whatToAdd: 'Ensure --url points to a reachable page (2xx/3xx or renderable document)',
+        adapterInfo: {
+          id: 'playwright',
+          version: crawl.playwrightVersion ?? null,
+          coverage: '0 screens crawled',
+          status: 'skipped',
+          detail: '0 screens reached',
+        },
+      }),
+      blockingKeys: [],
+    };
+  }
+
+  const combinedFindings = [...blocking, ...http4xx];
+  const haltNote = crawl.haltedReason ? ` (halted: ${crawl.haltedReason})` : '';
+  const coverage = `${crawl.screens.length} screen(s) crawled${haltNote}; ${blocking.length} load/runtime error(s), ${http4xx.length} 4xx finding(s)`;
+  const adapterInfo: AdapterMethodInfo = {
+    id: 'playwright',
+    version: crawl.playwrightVersion ?? null,
+    coverage,
+    status: 'ok',
+  };
+
+  if (blocking.length > 0) {
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'fail',
+        method: 'code',
+        adapter: 'playwright',
+        ...(crawl.playwrightVersion ? { adapterVersion: crawl.playwrightVersion } : {}),
+        coverage,
+        observation: `${blocking.length} uncaught error(s) or same-origin 5xx response(s) across ${crawl.screens.length} screen(s)${http4xx.length ? ` (${http4xx.length} 4xx recorded as findings)` : ''}`,
+        evidenceIds: blocking.map((f) => f.id),
+      },
+      findings: combinedFindings,
+      blockingKeys: blocking.map((f) => findingDedupeKey(f)),
+      adapterInfo,
+    };
+  }
+
+  return {
+    check: {
+      number: spec.number,
+      id: spec.id,
+      stepId: spec.stepId,
+      pillar: spec.pillar,
+      title: spec.title,
+      mode: spec.mode,
+      verdict: 'pass',
+      method: 'code',
+      adapter: 'playwright',
+      ...(crawl.playwrightVersion ? { adapterVersion: crawl.playwrightVersion } : {}),
+      coverage,
+      observation:
+        http4xx.length > 0
+          ? `0 page errors, console errors, or 5xx responses across ${crawl.screens.length} screen(s) (${http4xx.length} 4xx recorded as findings)`
+          : `0 page errors, console errors, or 5xx responses across ${crawl.screens.length} screen(s)`,
+    },
+    findings: combinedFindings,
+    blockingKeys: [],
+    adapterInfo,
+  };
+}
+
+/** Check 2: Every non-destructive control exercised by the crawl produces an observable change; destructive controls listed as skipped. */
+export function evaluateCheck2Controls(opts: {
+  crawl?: CrawlResult;
+  hide?: (t: string) => string;
+}): {
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  adapterInfo?: AdapterMethodInfo;
+} {
+  const spec = GRADE_1_CHECKS[1]!;
+  const hide = opts.hide ?? ((t: string) => t);
+  const crawl = opts.crawl;
+
+  if (!crawl || crawl.screens.length === 0) {
+    return secretCheckNotChecked(spec, {
+      adapter: 'playwright',
+      adapterVersion: crawl?.playwrightVersion ?? null,
+      coverage: '0 crawled screens',
+      reason: crawl ? '0 screens were reached during crawl' : 'crawl did not execute',
+      whatToAdd: 'Run with --url against a reachable web app so interactive controls can be exercised',
+      adapterInfo: {
+        id: 'playwright',
+        version: crawl?.playwrightVersion ?? null,
+        coverage: '0 controls checked',
+        status: 'skipped',
+        detail: 'no screens reached',
+      },
+    });
+  }
+
+  const records = crawl.controlChecks ?? [];
+  const changed = records.filter((c) => c.status === 'changed');
+  const unchanged = records.filter((c) => c.status === 'unchanged');
+  const skippedDestructive = records.filter((c) => c.status === 'skipped-destructive');
+
+  const skippedLabels = skippedDestructive.map((c) => `"${hide(c.label)}"`);
+  const skippedSummary =
+    skippedLabels.length > 0
+      ? `untouched destructive (${skippedLabels.length}): ${skippedLabels.slice(0, 8).join(', ')}${skippedLabels.length > 8 ? `, +${skippedLabels.length - 8} more` : ''}`
+      : crawl.skippedControls > 0
+        ? `untouched destructive (${crawl.skippedControls})`
+        : '0 destructive controls skipped';
+
+  const exercisedCount = changed.length + unchanged.length;
+  const coverage = `${crawl.screens.length} screen(s), ${exercisedCount} non-destructive control(s) exercised (${changed.length} changed, ${unchanged.length} unchanged); ${skippedSummary}`;
+  const adapterInfo: AdapterMethodInfo = {
+    id: 'playwright',
+    version: crawl.playwrightVersion ?? null,
+    coverage,
+    status: 'ok',
+  };
+
+  const findings: Finding[] = unchanged.map((u, i) => ({
+    id: `dead-control-check2:${i + 1}`,
+    category: 'dead-control',
+    title: `Check 2: control "${hide(u.label)}" produced no observable change`,
+    severity: 'medium',
+    source: 'code',
+    confirmed: true,
+    url: hide(u.screenUrl),
+    planId: 'crawl',
+    stepId: spec.stepId,
+    evidence: `${u.tagName} "${hide(u.label)}" on ${hide(u.screenUrl)} had no observable URL, DOM, text, or state change when clicked`,
+  }));
+
+  if (unchanged.length > 0) {
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'fail',
+        method: 'code',
+        adapter: 'playwright',
+        ...(crawl.playwrightVersion ? { adapterVersion: crawl.playwrightVersion } : {}),
+        coverage,
+        observation: `${unchanged.length} of ${exercisedCount} clicked control(s) had no observable response; ${skippedSummary}`,
+        evidenceIds: findings.map((f) => f.id),
+      },
+      findings,
+      adapterInfo,
+    };
+  }
+
+  return {
+    check: {
+      number: spec.number,
+      id: spec.id,
+      stepId: spec.stepId,
+      pillar: spec.pillar,
+      title: spec.title,
+      mode: spec.mode,
+      verdict: 'pass',
+      method: 'code',
+      adapter: 'playwright',
+      ...(crawl.playwrightVersion ? { adapterVersion: crawl.playwrightVersion } : {}),
+      coverage,
+      observation:
+        exercisedCount > 0
+          ? `all ${exercisedCount} exercised non-destructive control(s) produced an observable response; ${skippedSummary}`
+          : `0 non-destructive controls present on ${crawl.screens.length} screen(s); ${skippedSummary}`,
+    },
+    findings: [],
+    adapterInfo,
+  };
+}
+
+/** Check 4: Zero critical or serious axe-core violations across all crawled screens. */
+export function evaluateCheck4Accessibility(opts: {
+  crawl?: CrawlResult;
+  hide?: (t: string) => string;
+  preCollected?: Finding[];
+}): {
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  blockingKeys: string[];
+  adapterInfo?: AdapterMethodInfo;
+} {
+  const spec = GRADE_1_CHECKS[3]!;
+  const hide = opts.hide ?? ((t: string) => t);
+  const crawl = opts.crawl;
+
+  if (!crawl || crawl.screens.length === 0) {
+    return {
+      ...secretCheckNotChecked(spec, {
+        adapter: 'axe-core',
+        adapterVersion: crawl?.axeVersion ?? null,
+        coverage: '0 crawled screens',
+        reason: crawl ? '0 screens were reached during crawl' : 'crawl did not execute',
+        whatToAdd: 'Run with --url against a reachable web app so axe-core can audit rendered screens',
+        adapterInfo: {
+          id: 'axe-core',
+          version: crawl?.axeVersion ?? null,
+          coverage: '0 screens audited',
+          status: 'skipped',
+          detail: 'no screens reached',
+        },
+      }),
+      blockingKeys: [],
+    };
+  }
+
+  const allA11y = (opts.preCollected ?? collectCrawlSurfaceFindings(crawl, hide)).filter((f) => f.category === 'a11y');
+  const blocking = allA11y.filter((f) => f.severity === 'critical' || f.severity === 'high');
+  const advisory = allA11y.filter((f) => f.severity !== 'critical' && f.severity !== 'high');
+  const verNote = crawl.axeVersion ? ` ${crawl.axeVersion}` : '';
+  const coverage = `${crawl.screens.length} screen(s) audited via axe-core${verNote}; ${blocking.length} critical/serious, ${advisory.length} moderate/minor violation(s)`;
+  const adapterInfo: AdapterMethodInfo = {
+    id: 'axe-core',
+    version: crawl.axeVersion ?? null,
+    coverage,
+    status: 'ok',
+  };
+
+  if (blocking.length > 0) {
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'fail',
+        method: 'code',
+        adapter: 'axe-core',
+        ...(crawl.axeVersion ? { adapterVersion: crawl.axeVersion } : {}),
+        coverage,
+        observation: `${blocking.length} critical/serious axe-core violation(s) found across ${crawl.screens.length} screen(s)${advisory.length ? ` (${advisory.length} moderate/minor also recorded)` : ''}`,
+        evidenceIds: blocking.map((f) => f.id),
+      },
+      findings: allA11y,
+      blockingKeys: blocking.map((f) => findingDedupeKey(f)),
+      adapterInfo,
+    };
+  }
+
+  return {
+    check: {
+      number: spec.number,
+      id: spec.id,
+      stepId: spec.stepId,
+      pillar: spec.pillar,
+      title: spec.title,
+      mode: spec.mode,
+      verdict: 'pass',
+      method: 'code',
+      adapter: 'axe-core',
+      ...(crawl.axeVersion ? { adapterVersion: crawl.axeVersion } : {}),
+      coverage,
+      observation:
+        advisory.length > 0
+          ? `0 critical/serious axe-core violations across ${crawl.screens.length} screen(s) (${advisory.length} moderate/minor recorded as findings)`
+          : `0 critical/serious axe-core violations across ${crawl.screens.length} screen(s)`,
+    },
+    findings: allA11y,
+    blockingKeys: [],
+    adapterInfo,
+  };
+}
+
 /** Check 13: No critical, high, or `MAL-` malicious package in repository lockfiles (`osv-scanner --offline`). */
 export async function evaluateCheck13Dependencies(opts: {
   repoPath?: string;
@@ -1135,6 +1503,7 @@ export async function evaluateGrade1Profile(opts: {
   dryRun: boolean;
   noModel?: boolean;
   crawl?: CrawlResult;
+  fallbackUrl?: string;
   repoPath?: string;
   active?: boolean;
   hide?: (t: string) => string;
@@ -1162,6 +1531,36 @@ export async function evaluateGrade1Profile(opts: {
       adapters,
       checkFindingKeys,
     };
+  }
+
+  const preCollected = opts.crawl ? collectCrawlSurfaceFindings(opts.crawl, hide, opts.fallbackUrl ?? '') : undefined;
+  const c1 = evaluateCheck1LoadErrors({
+    ...(opts.crawl ? { crawl: opts.crawl } : {}),
+    hide,
+    ...(preCollected ? { preCollected } : {}),
+  });
+  findings.push(...c1.findings);
+  if (c1.blockingKeys.length > 0) {
+    checkFindingKeys.set(1, new Set(c1.blockingKeys));
+  }
+
+  const c2 = evaluateCheck2Controls({
+    ...(opts.crawl ? { crawl: opts.crawl } : {}),
+    hide,
+  });
+  findings.push(...c2.findings);
+  if (c2.findings.length > 0) {
+    checkFindingKeys.set(2, new Set(c2.findings.map((f) => findingDedupeKey(f))));
+  }
+
+  const c4 = evaluateCheck4Accessibility({
+    ...(opts.crawl ? { crawl: opts.crawl } : {}),
+    hide,
+    ...(preCollected ? { preCollected } : {}),
+  });
+  findings.push(...c4.findings);
+  if (c4.blockingKeys.length > 0) {
+    checkFindingKeys.set(4, new Set(c4.blockingKeys));
   }
 
   const c5 = await evaluateCheck5ServedSecrets({
@@ -1203,7 +1602,7 @@ export async function evaluateGrade1Profile(opts: {
     checkFindingKeys.set(13, new Set(c13.findings.map((f) => findingDedupeKey(f))));
   }
 
-  // Merge gitleaks adapter reporting cleanly into method.adapters (combining Checks 5 & 6 coverage).
+  // Merge gitleaks adapter reporting cleanly into method.adapters (preserving index 0 for backward compatibility).
   const glInfos = [c5.adapterInfo, c6.adapterInfo].filter((x): x is AdapterMethodInfo => Boolean(x));
   if (glInfos.length > 0) {
     const okInfo = glInfos.find((x) => x.status === 'ok');
@@ -1219,8 +1618,23 @@ export async function evaluateGrade1Profile(opts: {
   }
   if (c7.adapterInfo) adapters.push(c7.adapterInfo);
   if (c13.adapterInfo) adapters.push(c13.adapterInfo);
+  const pwInfos = [c1.adapterInfo, c2.adapterInfo].filter((x): x is AdapterMethodInfo => Boolean(x));
+  if (pwInfos.length > 0) {
+    const okInfo = pwInfos.find((x) => x.status === 'ok');
+    const version = pwInfos.find((x) => x.version !== null)?.version ?? null;
+    adapters.push({
+      id: 'playwright',
+      version,
+      coverage: pwInfos.map((x) => x.coverage).join(' | '),
+      status: okInfo ? 'ok' : 'skipped',
+    });
+  }
+  if (c4.adapterInfo) adapters.push(c4.adapterInfo);
 
   const checks: ReadinessCheckResult[] = GRADE_1_CHECKS.map((spec) => {
+    if (spec.number === 1) return c1.check;
+    if (spec.number === 2) return c2.check;
+    if (spec.number === 4) return c4.check;
     if (spec.number === 5) return c5.check;
     if (spec.number === 6) return c6.check;
     if (spec.number === 7) return c7.check;

@@ -61,7 +61,13 @@ import {
   type RunReport,
   type SpendReport,
 } from './report.js';
-import { evaluateGrade1Profile, linkReadinessEvidenceIds, type ReadinessProfile, type ReadinessReport } from './readiness.js';
+import {
+  evaluateGrade1Profile,
+  linkReadinessEvidenceIds,
+  normalizeCrawlErrors,
+  type ReadinessProfile,
+  type ReadinessReport,
+} from './readiness.js';
 
 export interface RunSettings {
   concurrency?: number;
@@ -608,13 +614,13 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     opts.onFinding?.(f);
   };
 
+  const sharedCrawlRules = withSecrets(opts.scrub, [], opts.env ?? process.env);
+  const sharedHide = (t: string) => scrubText(t, sharedCrawlRules);
   const shouldCrawl = Boolean((opts.settings?.crawl || opts.settings?.profile === 'grade-1') && !dryRun);
   let crawlResult: CrawlResult | undefined;
   if (shouldCrawl && opts.driver.crawl) {
-    const crawlRules = withSecrets(opts.scrub, [], opts.env ?? process.env);
-    const crawlScrub = (t: string) => scrubText(t, crawlRules);
-    const crawlRescan = (t: string) => ruleHits(t, crawlRules);
-    const crawlHide = (t: string) => scrubText(t, NO_SCRUB);
+    const crawlScrub = sharedHide;
+    const crawlRescan = (t: string) => ruleHits(t, sharedCrawlRules);
     crawlResult = await opts.driver.crawl({
       url: opts.url,
       ...(opts.settings?.maxScreens !== undefined ? { maxScreens: opts.settings.maxScreens } : {}),
@@ -623,12 +629,12 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
       ...(opts.settings?.profile === 'grade-1' ? { collectServedArtifacts: true } : {}),
       viewport: opts.settings?.viewport ?? DEFAULT_VIEWPORT,
       navTimeoutMs: opts.settings?.navTimeoutMs ?? NAV_TIMEOUT_MS,
-      hide: crawlHide,
+      hide: sharedHide,
       onScreen: async (obs) => {
         const stepId = `crawl-c${obs.capture}`;
         const ctx = { planId: 'crawl', stepId };
-        for (const h of detectPromptInjection(obs, crawlHide, ctx)) pushFinding(h);
-        for (const sf of normalizeSurfaceFindings(obs, crawlHide, ctx)) pushFinding(sf);
+        for (const h of detectPromptInjection(obs, sharedHide, ctx)) pushFinding(h);
+        for (const sf of normalizeSurfaceFindings(obs, sharedHide, ctx)) pushFinding(sf);
         await proposeForScreen({
           agent: opts.agent,
           ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
@@ -639,11 +645,16 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
           stepId,
           scrub: crawlScrub,
           rescan: crawlRescan,
-          hide: crawlHide,
+          hide: sharedHide,
           onFinding: pushFinding,
         });
       },
     });
+    if (crawlResult.crawlErrors?.length) {
+      for (const cf of normalizeCrawlErrors(crawlResult.crawlErrors, sharedHide, crawlResult.screens[0]?.url ?? opts.url)) {
+        pushFinding(cf);
+      }
+    }
   }
 
   const planResults = await executePlans(opts.plans, {
@@ -675,14 +686,14 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
   let allPlans = planResults;
   let readinessCheckFindingKeys: Map<number, Set<string>> | undefined;
   if (opts.settings?.profile === 'grade-1') {
-    const evalHide = (t: string) => scrubText(t, withSecrets(opts.scrub, [], opts.env ?? process.env));
     const readinessRes = await evaluateGrade1Profile({
       dryRun,
       ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
       ...(crawlResult ? { crawl: crawlResult } : {}),
+      fallbackUrl: opts.url,
       ...(opts.repoPath ? { repoPath: opts.repoPath } : {}),
       ...(opts.settings.active ? { active: true } : {}),
-      hide: evalHide,
+      hide: sharedHide,
       ...(opts.gitleaksOpts ? { gitleaks: opts.gitleaksOpts } : opts.env ? { gitleaks: { env: opts.env } } : {}),
       ...(opts.osvOpts ? { osv: opts.osvOpts } : opts.env ? { osv: { env: opts.env } } : {}),
     });

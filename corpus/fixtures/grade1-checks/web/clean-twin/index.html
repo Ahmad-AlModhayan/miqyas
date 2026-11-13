@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Web Clean Twin</title>
+  </head>
+  <body>
+    <main>
+      <h1>Storefront Home</h1>
+      <nav aria-label="Primary">
+        <a href="/settings.html">Settings</a>
+        <a href="/logout">Log out</a>
+      </nav>
+      <button type="button" id="toggle-details" aria-expanded="false">Show Details</button>
+      <div id="details-panel" hidden>Expanded store details</div>
+      <div role="tablist" aria-label="Sections">
+        <button type="button" role="tab" aria-selected="true" id="tab-overview">Overview</button>
+        <button type="button" role="tab" aria-selected="false" id="tab-faq">FAQ</button>
+      </div>
+      <p id="tab-output">Overview section</p>
+      <button type="button" id="danger-btn" onclick="fetch('/api/destroy', { method: 'POST' })">Delete account</button>
+    </main>
+    <script>
+      document.getElementById('toggle-details').addEventListener('click', function () {
+        const panel = document.getElementById('details-panel');
+        const nextHidden = !panel.hidden;
+        panel.hidden = nextHidden;
+        this.setAttribute('aria-expanded', String(!nextHidden));
+      });
+      document.getElementById('tab-faq').addEventListener('click', function () {
+        this.setAttribute('aria-selected', 'true');
+        document.getElementById('tab-overview').setAttribute('aria-selected', 'false');
+        document.getElementById('tab-output').textContent = 'Frequently asked questions';
+      });
+      document.getElementById('tab-overview').addEventListener('click', function () {
+        this.setAttribute('aria-selected', 'true');
+        document.getElementById('tab-faq').setAttribute('aria-selected', 'false');
+        document.getElementById('tab-output').textContent = 'Overview section';
+      });
+    </script>
+  </body>
+</html>
