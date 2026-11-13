@@ -33,6 +33,7 @@ import {
   type RunQuote,
 } from '../agents/spend.js';
 import { BENCHES, buildBenchSummary, renderBenchMarkdown, type BenchSummary } from '../proof-core/bench.js';
+import { parseFailOn, type FailOnThreshold } from '../proof-core/findings.js';
 import { reportPath } from '../proof-core/ledger.js';
 import { BuildChangedError, parsePreset } from '../proof-core/mutate.js';
 import { runMutations, runVerification } from '../proof-core/orchestrator.js';
@@ -83,6 +84,7 @@ Options:
   --headed               show the browser
   --allow-other-origins  let the app load from other origins (blocked by default)
   --strict               require cite/quoted-text match on every AI pass (reject model-only passes)
+  --fail-on <severity>   fail run on confirmed findings >= severity (none | info | low | medium | high | critical; default none)
 
 Live billed runs print a quote, require an interactive terminal cap <= $${DAILY_CAP_USD} daily cap, and need a provider key in your environment. Unbilled local/private OpenAI-compatible endpoints work non-interactively. Secrets in plans are written \${secret.NAME} and read
 from MIQYAS_SECRET_NAME.`;
@@ -107,6 +109,7 @@ const OPTIONS = {
   headed: { type: 'boolean', default: false },
   'allow-other-origins': { type: 'boolean', default: false },
   strict: { type: 'boolean', default: false },
+  'fail-on': { type: 'string' },
   build: { type: 'string' },
   preset: { type: 'string' },
   repo: { type: 'string' },
@@ -292,6 +295,14 @@ function concurrency(o: Opts): number {
   return n;
 }
 
+function failOnSetting(o: Opts): FailOnThreshold {
+  try {
+    return parseFailOn(o['fail-on']);
+  } catch (e) {
+    throw new UsageError((e as Error).message);
+  }
+}
+
 function checkLint(plans: Plan[]): void {
   const errors = plans.flatMap((p) => lintPlan(p).filter((i) => i.level === 'error').map((i) => `${p.source.file ?? p.id}: ${i.message}`));
   if (errors.length) throw new PlanError(errors.join('\n'));
@@ -308,7 +319,8 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
   checkLint(plans);
   const id = runId();
   const runDir = path.resolve(o.out ?? path.join('.miqyas', 'runs', id));
-  const settings = { concurrency: concurrency(o), allowOtherOrigins: o['allow-other-origins'], headed: o.headed, ...(o.strict ? { strict: true } : {}) };
+  const failOn = failOnSetting(o);
+  const settings = { concurrency: concurrency(o), allowOtherOrigins: o['allow-other-origins'], headed: o.headed, ...(o.strict ? { strict: true } : {}), ...(failOn !== 'none' ? { failOn } : {}) };
   // Credentials, pricing, quote, and cap confirmation run first so a refused start leaves no empty folder.
   const exec = await prepareExecution({ o, plans, runId: id, runDir, inject });
   const { rules: scrub, method: scrubMethod } = await scrubRules(o, 'scrub');

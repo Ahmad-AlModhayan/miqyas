@@ -292,7 +292,7 @@ describe('CLI exit codes', () => {
     expect(existsSync(outBad)).toBe(false);
   });
 
-  it('prints help text documenting --strict mode and returns 0', async () => {
+  it('prints help text documenting --strict and --fail-on modes and returns 0', async () => {
     const chunks: string[] = [];
     const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => {
       chunks.push(String(c));
@@ -301,9 +301,18 @@ describe('CLI exit codes', () => {
     try {
       expect(await main(['run', '--help'])).toBe(0);
       expect(chunks.join('')).toContain('--strict');
+      expect(chunks.join('')).toContain('--fail-on');
     } finally {
       spy.mockRestore();
       vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     }
+  });
+
+  it('rejects invalid --fail-on severities with exit code 2 before creating an output directory', async () => {
+    const badFailOnOut = path.join(tmp, 'out-bad-failon');
+    expect(
+      await main(['run', good, '--url', 'http://127.0.0.1:9/', '--dry-run', '--fail-on', 'severe', '--out', badFailOnOut]),
+    ).toBe(2);
+    expect(existsSync(badFailOnOut)).toBe(false);
   });
 });

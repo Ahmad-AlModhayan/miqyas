@@ -20,6 +20,7 @@ import type {
   SurfaceSession,
   SurfaceSessionOptions,
 } from '../session.js';
+import { attachWebDetectors } from './detectors.js';
 import { observeWithHandles, type ObserveOptions, type SnapshotWithHandles } from './observe.js';
 import { originProxy } from './proxy.js';
 
@@ -293,16 +294,24 @@ export async function openWebSurfaceDriver(opts: { headed?: boolean; allowOtherO
         throw e;
       });
       const navs = inFlight(page, navTimeoutMs);
+      const detectors = attachWebDetectors(context, page, {
+        baseOrigin: new URL(sessionOpts.url).origin,
+        hide,
+        ...(look.secrets ? { knownSecrets: look.secrets } : {}),
+        navTimeoutMs,
+      });
 
       let latest: Observation | undefined;
       let latestHandles = new Map<string, ElementHandle<Element>>();
       const snap = async (): Promise<Observation> => {
         const next = await observeSettledWithHandles(page, navs, look);
+        const screenFindings = await detectors.collect();
+        const observation = screenFindings.length ? { ...next.observation, findings: screenFindings } : next.observation;
         const prev = latestHandles;
-        latest = next.observation;
+        latest = observation;
         latestHandles = next.handles;
         await disposeHandles(prev);
-        return next.observation;
+        return observation;
       };
       let loaded = false;
       const gotoOrigin = async (pathOrUrl: string) => {

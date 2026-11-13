@@ -76,8 +76,22 @@ export interface Observation {
   capturedAt: Date;
   /** Full rendered page text (scrubbed/bounded) scanned by Proof Core detectors so truncated nodes cannot hide injections. */
   renderedText?: string;
+  /** Always-on code detector findings captured on this observed screen. */
+  findings?: SurfaceFinding[];
   /** Set when the screenshot may show a secret that could not be masked (a canvas, embed, or unreadable frame). */
   unmasked?: string;
+}
+
+export type SurfaceFindingSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
+
+export interface SurfaceFinding {
+  category: string;
+  title: string;
+  severity: SurfaceFindingSeverity;
+  confirmed: boolean;
+  url?: string;
+  evidence: string;
+  nodes?: EvidenceNode[];
 }
 
 export interface ObserveOptions {
