@@ -242,4 +242,53 @@ describe('CLI exit codes', () => {
       }
     }
   });
+
+  it('rejects conflicting --record/--replay flags (exit 2) and fails closed on missing or corrupt --replay cassette (exit 3)', async () => {
+    const cas = path.join(tmp, 'missing-cas.jsonl');
+    const badCas = path.join(tmp, 'corrupt-cas.jsonl');
+    await writeFile(badCas, '{not json\n');
+
+    expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--record', cas, '--replay', cas])).toBe(2);
+    expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--replay', cas, '--endpoint', 'http://127.0.0.1:8000/v1'])).toBe(2);
+    expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--replay', cas, '--no-model'])).toBe(2);
+    expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--replay', cas, '--dry-run'])).toBe(2);
+    expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--record', cas, '--no-model'])).toBe(2);
+    expect(await main(['bench', 'book', '--record', cas])).toBe(2);
+    expect(await main(['bench', 'book', '--replay', cas])).toBe(2);
+
+    const outMissing = path.join(tmp, 'out-missing-cas');
+    expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--replay', cas, '--out', outMissing], { isTTY: false })).toBe(3);
+    expect(existsSync(outMissing)).toBe(false);
+
+    const mismatchCas = path.join(tmp, 'mismatch-cas.jsonl');
+    await writeFile(
+      mismatchCas,
+      JSON.stringify({
+        type: 'header',
+        cassetteSchema: 1,
+        provider: 'anthropic',
+        model: 'claude-haiku-5-5',
+        tier: 'low',
+        effort: 'medium',
+        createdAt: new Date().toISOString(),
+      }) + '\n',
+    );
+    const outMismatch = path.join(tmp, 'out-mismatch-cas');
+    expect(
+      await main(['run', good, '--url', 'http://127.0.0.1:9/', '--replay', mismatchCas, '--provider', 'openai', '--out', outMismatch], {
+        isTTY: false,
+      }),
+    ).toBe(3);
+    expect(existsSync(outMismatch)).toBe(false);
+    expect(
+      await main(['run', good, '--url', 'http://127.0.0.1:9/', '--replay', mismatchCas, '--effort', 'max', '--out', outMismatch], {
+        isTTY: false,
+      }),
+    ).toBe(3);
+    expect(existsSync(outMismatch)).toBe(false);
+
+    const outBad = path.join(tmp, 'out-bad-cas');
+    expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--replay', badCas, '--out', outBad], { isTTY: false })).toBe(3);
+    expect(existsSync(outBad)).toBe(false);
+  });
 });

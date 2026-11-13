@@ -9,6 +9,14 @@ import type { SpendBucket, SpendGuard } from './spend.js';
 export type { ActTool } from '../surfaces/session.js';
 export { AgentError } from './models.js';
 
+export interface ReplayInfo {
+  cassette: string;
+  cassetteSha256: string;
+  hits: number;
+  misses: number;
+  imageMismatches: number;
+}
+
 export interface ModelInfo {
   provider: string;
   model: string;
@@ -16,6 +24,7 @@ export interface ModelInfo {
   tier?: Tier;
   endpoint?: string;
   endpointHost?: string;
+  replay?: ReplayInfo;
 }
 
 export interface Usage {

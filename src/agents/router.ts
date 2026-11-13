@@ -6,10 +6,11 @@ import { AnthropicAgent } from './anthropic.js';
 import {
   DEFAULT_EFFORT,
   DEFAULT_ENDPOINT,
-  EFFORT_LEVELS,
   isLocalOrPrivateHost,
   resolveModelChoice,
   sanitizeEndpointUrl,
+  validateEffort,
+  validateProviderName,
   validateTier,
   type EffortLevel,
   type ProviderName,
@@ -49,16 +50,19 @@ export interface ResolvedRoute {
 
 function normalizeProvider(opts: RouteOptions, env: NodeJS.ProcessEnv): ProviderName {
   if (opts.provider !== undefined) {
-    const cliProvider = opts.provider.trim();
-    if (cliProvider === 'anthropic') return 'anthropic';
-    if (cliProvider === 'openai' || cliProvider === 'openai-compatible') return 'openai';
-    throw new RouteUsageError(`--provider must be anthropic or openai (got "${opts.provider}")`);
+    try {
+      return validateProviderName(opts.provider)!;
+    } catch (e) {
+      throw new RouteUsageError(`--${(e as Error).message}`);
+    }
   }
   const envProvider = env.MIQYAS_PROVIDER?.trim();
   if (envProvider !== undefined && envProvider !== '') {
-    if (envProvider === 'anthropic') return 'anthropic';
-    if (envProvider === 'openai' || envProvider === 'openai-compatible') return 'openai';
-    throw new RouteEnvError(`MIQYAS_PROVIDER must be anthropic or openai (got "${envProvider}")`);
+    try {
+      return validateProviderName(envProvider)!;
+    } catch (e) {
+      throw new RouteEnvError(`MIQYAS_PROVIDER ${(e as Error).message.replace(/^provider /, '')}`);
+    }
   }
   if (env.OPENAI_BASE_URL?.trim()) return 'openai';
   return 'anthropic';
@@ -66,10 +70,11 @@ function normalizeProvider(opts: RouteOptions, env: NodeJS.ProcessEnv): Provider
 
 function normalizeEffort(raw?: string): EffortLevel {
   const value = raw?.trim() || DEFAULT_EFFORT;
-  if (!(EFFORT_LEVELS as readonly string[]).includes(value)) {
-    throw new RouteUsageError('--effort must be low, medium, high, xhigh or max');
+  try {
+    return validateEffort(value)!;
+  } catch (e) {
+    throw new RouteUsageError((e as Error).message);
   }
-  return value as EffortLevel;
 }
 
 function parseEndpointWithSource(cliEndpoint: string | undefined, envValue: string | undefined, envVarName: string) {

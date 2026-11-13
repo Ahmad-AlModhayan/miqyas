@@ -100,6 +100,21 @@ export function isLocalOrPrivateHost(hostname: string): boolean {
   return false;
 }
 
+export function validateProviderName(provider?: string): ProviderName | undefined {
+  if (provider === undefined) return undefined;
+  const trimmed = provider.trim();
+  if (trimmed === 'anthropic') return 'anthropic';
+  if (trimmed === 'openai' || trimmed === 'openai-compatible') return 'openai';
+  throw new Error(`provider must be anthropic or openai (got "${provider}")`);
+}
+
+export function validateEffort(effort?: string): EffortLevel | undefined {
+  if (effort === undefined) return undefined;
+  const trimmed = effort.trim();
+  if ((EFFORT_LEVELS as readonly string[]).includes(trimmed)) return trimmed as EffortLevel;
+  throw new Error('--effort must be low, medium, high, xhigh or max');
+}
+
 export function validateTier(tier?: string): Tier | undefined {
   if (tier === undefined) return undefined;
   if (tier !== 'low' && tier !== 'medium' && tier !== 'high') {
