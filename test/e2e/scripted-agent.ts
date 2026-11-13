@@ -2,7 +2,7 @@
 // A deterministic agent for offline end-to-end tests: no model, no network. It clicks the node whose name is
 // quoted in the step, and passes an assertion when every quoted text is rendered (cites those nodes).
 
-import type { ActContext, ActOutcome, Agent, JudgeContext, JudgeOutcome } from '../../src/model/agent.js';
+import type { ActContext, ActOutcome, Agent, JudgeContext, JudgeOutcome } from '../../src/agents/agent.js';
 
 const quoted = (s: string) => [...s.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
 

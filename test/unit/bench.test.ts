@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Shield-1.0.0
 import { describe, expect, it } from 'vitest';
-import { BENCHES, buildBenchSummary, costEstimate, renderBenchMarkdown, type BenchInput } from '../../src/core/bench.js';
-import type { PlanResult } from '../../src/core/ledger.js';
-import { summarize, type MutationResult } from '../../src/core/mutate.js';
-import { buildReport } from '../../src/core/report.js';
+import { BENCHES, buildBenchSummary, costEstimate, renderBenchMarkdown, type BenchInput } from '../../src/proof-core/bench.js';
+import type { PlanResult } from '../../src/proof-core/ledger.js';
+import { summarize, type MutationResult } from '../../src/proof-core/mutate.js';
+import { buildReport } from '../../src/proof-core/report.js';
 import { testMethod } from '../report-helpers.js';
 
 const bench = BENCHES['wasl-tray']!;

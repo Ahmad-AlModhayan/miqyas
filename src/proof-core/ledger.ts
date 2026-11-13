@@ -3,25 +3,12 @@
 // has a recorded pass; the verdict is computed from the entries, never taken from a model's overall impression.
 
 import path from 'node:path';
+import type { Box, EvidenceNode } from '../surfaces/session.js';
 import type { Plan, Step } from './plan.js';
 
+export type { Box, EvidenceNode } from '../surfaces/session.js';
 export type Verdict = 'pass' | 'fail' | 'not_checked' | 'blocked' | 'unverified';
 export type Method = 'code' | 'ai' | 'none';
-
-export interface Box {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface EvidenceNode {
-  ref: string;
-  role: string;
-  name: string;
-  state?: string;
-  box: Box;
-}
 
 export interface Evidence {
   /** Paths relative to the run folder. */

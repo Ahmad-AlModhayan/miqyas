@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Shield-1.0.0
 import { createServer, request, type IncomingMessage } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { originProxy, type OriginProxy } from '../../src/web/proxy.js';
+import { originProxy, type OriginProxy } from '../../src/surfaces/web/proxy.js';
 
 // The app: /reset sends half a body and drops the socket; /ok answers with hop-by-hop headers the proxy must drop.
 const app = createServer((req, res) => {

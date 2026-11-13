@@ -2,18 +2,30 @@
 // The agent interface: a provider carries out action steps (act) and judges assertions (judge). Providers are
 // pluggable; Anthropic is the default. The runner owns the browser; agents only see observations and call tools.
 
-import type { Step } from '../core/plan.js';
-import type { ModelInfo, Usage } from '../core/report.js';
-import type { Observation } from '../web/observe.js';
+import type { ActTool, Check, Observation } from '../surfaces/session.js';
 
-export type ActTool =
-  | { tool: 'click'; ref: string }
-  | { tool: 'fill'; ref: string; text: string }
-  | { tool: 'select_option'; ref: string; option: string }
-  | { tool: 'press'; key: string }
-  | { tool: 'scroll'; direction: 'up' | 'down'; ref?: string }
-  | { tool: 'wait'; seconds: number }
-  | { tool: 'navigate'; path: string };
+export type { ActTool } from '../surfaces/session.js';
+
+export interface ModelInfo {
+  provider: string;
+  model: string;
+  effort?: string;
+}
+
+export interface Usage {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** By the model that answered (`res.model`): a server-side fallback can answer on another model than the one asked. */
+  byModel?: Record<string, Omit<Usage, 'byModel'>>;
+}
+
+export interface AgentStep {
+  id: string;
+  type: 'action' | 'assertion';
+  text: string;
+  check?: Check;
+}
 
 export interface ToolExecution {
   ok: boolean;
@@ -24,14 +36,14 @@ export interface ToolExecution {
 
 export interface StepHistory {
   stepId: string;
-  type: Step['type'];
+  type: AgentStep['type'];
   text: string;
   result: string;
 }
 
 export interface ActContext {
   plan: { id: string; name: string };
-  step: Step;
+  step: AgentStep;
   history: StepHistory[];
   observation: Observation;
   /** Apply scrub rules to any text before it leaves the machine. */
@@ -50,7 +62,7 @@ export interface ActOutcome {
 
 export interface JudgeContext {
   plan: { id: string; name: string };
-  step: Step;
+  step: AgentStep;
   history: StepHistory[];
   /** Captured right after the previous action's last tool, when the previous step was an action. */
   postAction?: Observation;
@@ -69,6 +81,7 @@ export type JudgeOutcome =
 export interface Agent {
   readonly info: ModelInfo | null;
   readonly usage: Usage;
+  readonly limits?: { maxTokens: number; maxTurns: number };
   act(ctx: ActContext): Promise<ActOutcome>;
   judge(ctx: JudgeContext): Promise<JudgeOutcome>;
 }

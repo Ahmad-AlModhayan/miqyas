@@ -13,6 +13,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "lint": "node scripts/check-boundaries.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run test/unit",
     "test:e2e": "vitest run test/e2e",

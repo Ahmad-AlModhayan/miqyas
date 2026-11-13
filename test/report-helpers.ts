@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'node:fs';
 import { Ajv2020 } from 'ajv/dist/2020.js';
-import { environment, type Method } from '../src/core/report.js';
+import { environment, type Method } from '../src/proof-core/report.js';
 
 export function testMethod(scrub: Partial<Method['scrub']> = {}): Method {
   return {

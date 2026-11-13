@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Shield-1.0.0
 import { describe, expect, it } from 'vitest';
-import { PlanLedger } from '../../src/core/ledger.js';
-import { parsePlan } from '../../src/core/plan.js';
+import { PlanLedger } from '../../src/proof-core/ledger.js';
+import { parsePlan } from '../../src/proof-core/plan.js';
 import { readFileSync } from 'node:fs';
-import { buildReport, cell, renderHuman, renderMarkdown, TOOL_VERSION } from '../../src/core/report.js';
+import { buildReport, cell, renderHuman, renderMarkdown, TOOL_VERSION } from '../../src/proof-core/report.js';
 import { schemaErrors, testMethod } from '../report-helpers.js';
 
 function result(verdict: 'pass' | 'fail') {
