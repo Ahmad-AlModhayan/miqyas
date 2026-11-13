@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mini Shop Clean Twin</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="rtl-shell">
+      <div class="rtl-badge">متجر مصغر</div>
+      <nav aria-label="Main Navigation">
+        <a href="./index.html">الرئيسية</a>
+        <a href="./admin.html">الإدارة</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1>متجر مصغر الرئيسي</h1>
+      <div class="promo-banner">عرض التوصيل المجاني متاح الآن</div>
+
+      <section class="card">
+        <button id="add-to-cart" type="button">أضف للسلة</button>
+        <p id="cart-status">Cart empty</p>
+      </section>
+
+      <section class="card">
+        <label for="email-input">البريد الإلكتروني</label>
+        <input id="email-input" type="email" value="" />
+        <button id="checkout-btn" type="button">إتمام الطلب</button>
+        <p id="email-error"></p>
+      </section>
+
+      <section class="card">
+        <button id="pay-btn" type="button" aria-label="Pay Now">💳</button>
+        <p id="a11y-readout"></p>
+      </section>
+
+      <section class="card">
+        <p id="receipt-status"></p>
+        <p id="runtime-log">No runtime errors</p>
+        <p id="config-status">Tokens scrubbed</p>
+        <p id="comment-box"></p>
+        <p id="quota-status"></p>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

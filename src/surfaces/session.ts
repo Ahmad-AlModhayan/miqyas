@@ -39,6 +39,7 @@ export interface Check {
  * so surface drivers can measure builds without importing Proof Core.
  */
 export interface Probe {
+  path?: string;
   steps?: string[];
   rootAttrs?: Record<string, string>;
   html?: string;

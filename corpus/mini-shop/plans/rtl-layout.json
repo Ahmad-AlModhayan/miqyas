@@ -1,0 +1,18 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "rtl-layout",
+  "name": "Mini Shop RTL Layout",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "assert-rtl-badge",
+      "type": "assertion",
+      "text": "The RTL storefront badge is visible on the right",
+      "check": {
+        "locator": { "text": "متجر مصغر" },
+        "expect": "visible"
+      }
+    }
+  ]
+}

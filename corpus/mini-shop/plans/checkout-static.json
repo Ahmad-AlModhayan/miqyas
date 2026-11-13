@@ -1,0 +1,27 @@
+{
+  "format": "miqyas-plan",
+  "version": 1,
+  "id": "checkout-static",
+  "name": "Mini Shop Static Surface Checks",
+  "surface": "web",
+  "steps": [
+    {
+      "id": "assert-promo-visible",
+      "type": "assertion",
+      "text": "The promo banner is visible",
+      "check": {
+        "locator": { "text": "عرض التوصيل المجاني متاح الآن" },
+        "expect": "visible"
+      }
+    },
+    {
+      "id": "assert-pay-accessible",
+      "type": "assertion",
+      "text": "The Pay Now button has an accessible name",
+      "check": {
+        "locator": { "role": "button", "name": "Pay Now" },
+        "expect": "visible"
+      }
+    }
+  ]
+}

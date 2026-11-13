@@ -6,6 +6,7 @@
 import { PRICES, PRICE_NOTE, costEstimate, usageByModel } from '../agents/models.js';
 import { excludedText, validity, type MutationSummary, type Outcome } from './mutate.js';
 import { answeredBy, cell, code, renderMethod, TOOL_VERSION, type Method, type RunReport, type Usage } from './report.js';
+import type { BenchRegression, CorpusScoreReport } from './scoring.js';
 
 export { PRICES, PRICE_NOTE, costEstimate };
 
@@ -101,6 +102,8 @@ export interface BenchSummary {
   usage: Usage & { model: string | null; costUsd: number | null; priceNote: string };
   method: Method;
   runs: { run: string; mutate: string };
+  corpus?: CorpusScoreReport;
+  regressions?: BenchRegression[];
 }
 
 export interface BenchInput {
@@ -116,6 +119,8 @@ export interface BenchInput {
   mutation: { summary: MutationSummary; usage: Usage | null };
   /** Run folders, as they should appear in the summary (relative). */
   runs: BenchSummary['runs'];
+  corpus?: CorpusScoreReport;
+  regressions?: BenchRegression[];
 }
 
 export function buildBenchSummary(i: BenchInput): BenchSummary {
@@ -167,7 +172,50 @@ export function buildBenchSummary(i: BenchInput): BenchSummary {
     usage: { ...usage, model, costUsd: usage.calls ? costEstimate(model, usage) : 0, priceNote: PRICE_NOTE },
     method: { ...i.run.method, preset: m.preset },
     runs: i.runs,
+    ...(i.corpus ? { corpus: i.corpus } : {}),
+    ...(i.regressions ? { regressions: i.regressions } : {}),
   };
+}
+
+function renderCorpusMarkdown(c: CorpusScoreReport): string[] {
+  const { asserted, unasserted, readiness } = c.parts;
+  const pctText = (v: number | null) => (v === null ? 'n/a' : `${v.toFixed(1)} %`);
+  const out: string[] = [
+    '## Corpus Scores (Per-Part, Unblended)',
+    '',
+    '| Part | Score / Recall | Detail | Sample Gate |',
+    '|---|---|---|---|',
+    `| Asserted | ${pctText(asserted.score)} | ${asserted.killed}/${asserted.valid} valid (target ${asserted.detectedTarget}, elsewhere ${asserted.detectedElsewhere}; code ${asserted.caughtByCode}, judge ${asserted.caughtByJudge}) | ${asserted.sufficientSample ? 'ok' : `below ${c.sampleThreshold.partValidMin}`} |`,
+    `| Unasserted | ${pctText(unasserted.recall)} | ${unasserted.detected}/${unasserted.planted} detected (confirmed ${unasserted.confirmedCount}, unconfirmed ${unasserted.unconfirmedCount}) | ${unasserted.sufficientSample ? 'ok' : `below ${c.sampleThreshold.partValidMin}`} |`,
+    `| Readiness | ${pctText(readiness.recall)} | ${readiness.caught}/${readiness.placed} seeds; ${readiness.checksProven}/${readiness.checksTotal} checks proven | ${readiness.sufficientSample ? 'ok' : `below ${c.sampleThreshold.partValidMin}`} |`,
+    `| Clean twin | ${c.cleanTwin.quiet ? 'QUIET' : 'NOISY'} | ${c.cleanTwin.falsePositives} false positives (${c.cleanTwin.suppressedKnown} known suppressed) | n/a |`,
+    '',
+  ];
+  const cats = Object.entries(asserted.byCategory);
+  if (cats.length) {
+    out.push('| Asserted Category | Score | Killed / Valid | Code / Judge | Sample |', '|---|---|---|---|---|');
+    for (const [cat, b] of cats) {
+      out.push(`| ${cell(cat)} | ${pctText(b.score)} | ${b.killed}/${b.valid} | ${b.caughtByCode}/${b.caughtByJudge} | ${b.sufficientSample ? 'ok' : `<${c.sampleThreshold.categoryValidMin}`} |`);
+    }
+    out.push('');
+  }
+  const uCats = Object.entries(unasserted.byCategory);
+  if (uCats.length) {
+    out.push('| Unasserted Category | Recall | Detected / Planted | Confirmed / Unconfirmed | Sample |', '|---|---|---|---|---|');
+    for (const [cat, b] of uCats) {
+      out.push(`| ${cell(cat)} | ${pctText(b.recall)} | ${b.detected}/${b.planted} | ${b.confirmedCount}/${b.unconfirmedCount} | ${b.sufficientSample ? 'ok' : `<${c.sampleThreshold.categoryValidMin}`} |`);
+    }
+    out.push('');
+  }
+  const checks = Object.values(readiness.byCheck);
+  if (checks.length) {
+    out.push('| Readiness Check | Recall | Caught / Placed | Clean Twin Quiet |', '|---|---|---|---|');
+    for (const chk of checks) {
+      out.push(`| ${cell(chk.check)} | ${pctText(chk.recall)} | ${chk.caught}/${chk.placed} | ${chk.cleanTwinQuiet ? 'yes' : `no (${chk.cleanTwinFalsePositives})`} |`);
+    }
+    out.push('');
+  }
+  return out;
 }
 
 const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
@@ -208,6 +256,17 @@ export function renderBenchMarkdown(s: BenchSummary): string {
     `| Wall time | ${secs(s.wallMs)}: export ${secs(p.export)}, build ${secs(p.build)}, scrub ${secs(p.scrub)}, run ${secs(p.run)}, mutate ${secs(p.mutate)} |`,
     `| Raw runs | \`${s.runs.run}\`, \`${s.runs.mutate}\` (git-ignored, stay on this machine) |`,
     '',
+    ...(s.corpus ? renderCorpusMarkdown(s.corpus) : []),
+    ...(s.regressions?.length
+      ? [
+          '## Regressions',
+          '',
+          '| Metric | Baseline | Current | Detail |',
+          '|---|---|---|---|',
+          ...s.regressions.map((r) => `| \`${r.metric}\` | ${String(r.baseline)} | ${String(r.current)} | ${cell(r.detail)} |`),
+          '',
+        ]
+      : []),
     '## Mutations',
     '',
     m.definition,

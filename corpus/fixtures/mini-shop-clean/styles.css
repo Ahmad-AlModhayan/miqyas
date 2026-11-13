@@ -1,0 +1,38 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  padding: 0;
+  direction: rtl;
+}
+
+main {
+  padding: 24px;
+}
+
+.rtl-shell {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.rtl-badge {
+  display: inline-block;
+  padding: 6px 12px;
+  background: #e6f4ea;
+  border-radius: 6px;
+}
+
+.promo-banner {
+  min-height: 36px;
+  line-height: 36px;
+  padding: 4px 12px;
+  background: #fef7e0;
+  margin-bottom: 16px;
+}
+
+.card {
+  border: 1px solid #d0d7de;
+  padding: 12px;
+  margin-bottom: 12px;
+}
