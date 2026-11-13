@@ -5,6 +5,14 @@ import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  PROBE_ADAPTER_ID,
+  PROBE_ADAPTER_VERSION,
+  probeBackendPublicAccess,
+  probeTwoAccountIdor,
+  probeUnauthenticatedRoutes,
+  type TestAccountSpec,
+} from '../adapters/backend-probe.js';
+import {
   detectKnownSecretFormats,
   isGitRepo,
   probeGitleaksVersion,
@@ -17,6 +25,7 @@ import {
 import { analyzeMigrationsRls, LIBPG_QUERY_VERSION } from '../adapters/migrations.js';
 import { runOsvScannerOffline, type OsvExecOptions } from '../adapters/osv.js';
 import type { CrawlResult, ServedArtifact, SurfaceFinding } from '../surfaces/session.js';
+import type { HostOwnershipOptions } from '../surfaces/web/policy.js';
 import { dedupeFindings, findingDedupeKey, normalizeSurfaceFindings, type Finding } from './findings.js';
 import { PlanLedger, type PlanResult } from './ledger.js';
 import { parsePlan, type Plan } from './plan.js';
@@ -1438,6 +1447,250 @@ export async function evaluateCheck13Dependencies(opts: {
   };
 }
 
+export interface ActiveProbeCheckOptions {
+  active?: boolean;
+  url?: string;
+  allowHost?: string;
+  hostToken?: string;
+  maxRps?: number;
+  crawl?: CrawlResult;
+  accounts?: readonly TestAccountSpec[];
+  protectedRoutes?: readonly string[];
+  fetchImpl?: typeof fetch;
+  hostPolicyDeps?: Pick<HostOwnershipOptions, 'spendDir' | 'env' | 'fetchImpl' | 'resolveTxtImpl'>;
+  hide?: (t: string) => string;
+}
+
+function finalizeActiveSecurityCheck(opts: {
+  spec: ReadinessCheckSpec;
+  executed: boolean;
+  haltedReason?: 'rate-limit' | 'max-probes';
+  reason?: string;
+  whatToAdd: string;
+  coverage: string;
+  findings: Finding[];
+  failObservation: string;
+  passObservation: string;
+}): {
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  adapterInfo?: AdapterMethodInfo;
+} {
+  const { spec, findings } = opts;
+  // FR-Q2: if a check was aborted early by 429/503 rate-limiting with zero findings, it cannot claim pass.
+  if (!opts.executed || (opts.haltedReason === 'rate-limit' && findings.length === 0)) {
+    const reason =
+      opts.haltedReason === 'rate-limit'
+        ? 'rate-limit encountered (429/503) before verification completed'
+        : opts.reason ?? 'active probe did not reach minimum coverage';
+    return secretCheckNotChecked(spec, {
+      adapter: PROBE_ADAPTER_ID,
+      adapterVersion: PROBE_ADAPTER_VERSION,
+      coverage: opts.coverage,
+      reason,
+      whatToAdd: opts.whatToAdd,
+      adapterInfo: {
+        id: PROBE_ADAPTER_ID,
+        version: PROBE_ADAPTER_VERSION,
+        coverage: opts.coverage,
+        status: 'skipped',
+        detail: reason,
+      },
+    });
+  }
+
+  const verdict = findings.length > 0 ? 'fail' : 'pass';
+  return {
+    check: {
+      number: spec.number,
+      id: spec.id,
+      stepId: spec.stepId,
+      pillar: spec.pillar,
+      title: spec.title,
+      mode: spec.mode,
+      verdict,
+      method: 'code',
+      adapter: PROBE_ADAPTER_ID,
+      adapterVersion: PROBE_ADAPTER_VERSION,
+      coverage: opts.coverage,
+      observation: verdict === 'fail' ? opts.failObservation : opts.passObservation,
+      securityNotice: SECURITY_NOTICE,
+      ...(findings.length > 0 ? { evidenceIds: findings.map((f) => f.id) } : {}),
+    },
+    findings,
+    adapterInfo: { id: PROBE_ADAPTER_ID, version: PROBE_ADAPTER_VERSION, coverage: opts.coverage, status: 'ok' },
+  };
+}
+
+function buildProbeArgs(opts: ActiveProbeCheckOptions) {
+  return {
+    url: opts.url ?? '',
+    active: true as const,
+    ...(opts.allowHost ? { allowHost: opts.allowHost } : {}),
+    ...(opts.hostToken ? { hostToken: opts.hostToken } : {}),
+    ...(opts.maxRps !== undefined ? { maxRps: opts.maxRps } : {}),
+    ...(opts.crawl ? { crawl: opts.crawl } : {}),
+    ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+    ...(opts.hostPolicyDeps ? { hostPolicyDeps: opts.hostPolicyDeps } : {}),
+  };
+}
+
+function missingUrlOrInactive(
+  spec: ReadinessCheckSpec,
+  opts: ActiveProbeCheckOptions,
+  zeroCoverage: string,
+): { check: ReadinessCheckResult; findings: Finding[]; adapterInfo?: AdapterMethodInfo } | null {
+  if (!opts.active) {
+    return secretCheckNotChecked(spec, {
+      adapter: PROBE_ADAPTER_ID,
+      coverage: zeroCoverage,
+      reason: '--active was not passed',
+      whatToAdd: `Pass --active (${spec.needs})`,
+    });
+  }
+  if (!opts.url) {
+    return secretCheckNotChecked(spec, {
+      adapter: PROBE_ADAPTER_ID,
+      adapterVersion: PROBE_ADAPTER_VERSION,
+      coverage: zeroCoverage,
+      reason: 'target --url not provided',
+      whatToAdd: 'Run with --url <app-url> --active',
+      adapterInfo: { id: PROBE_ADAPTER_ID, version: PROBE_ADAPTER_VERSION, coverage: zeroCoverage, status: 'skipped', detail: 'missing --url' },
+    });
+  }
+  return null;
+}
+
+/** Check 8: Public key (anon/publishable/Firebase) cannot read backend tables/collections (Supabase, Firebase). */
+export async function evaluateCheck8BackendAccess(opts: ActiveProbeCheckOptions): Promise<{
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  adapterInfo?: AdapterMethodInfo;
+}> {
+  const spec = GRADE_1_CHECKS[7]!;
+  const pre = missingUrlOrInactive(spec, opts, '0 backend probes');
+  if (pre) return pre;
+
+  const hide = opts.hide ?? ((t: string) => t);
+  const probe = await probeBackendPublicAccess(buildProbeArgs(opts));
+  const findings: Finding[] = probe.exposedTables.map((row, idx) => {
+    const cols = row.columns.length ? row.columns.join(', ') : '(unknown keys)';
+    return {
+      id: `readiness-${spec.stepId}-${idx + 1}`,
+      category: 'backend-public-read',
+      title: `[${SECURITY_NOTICE}] Public key reads ${row.provider} table "${row.table}"`,
+      severity: 'high',
+      source: 'code',
+      confirmed: true,
+      url: hide(row.endpoint),
+      planId: 'readiness',
+      stepId: spec.stepId,
+      evidence: hide(
+        `[${SECURITY_NOTICE}] ${row.provider} public-key GET ${row.endpoint} (table "${row.table}") returned HTTP ${row.status} with row data; column keys only: ${cols}`,
+      ),
+    };
+  });
+
+  return finalizeActiveSecurityCheck({
+    spec,
+    executed: probe.executed,
+    ...(probe.haltedReason ? { haltedReason: probe.haltedReason } : {}),
+    ...(probe.reason ? { reason: probe.reason } : {}),
+    whatToAdd: 'Ensure the app serves Supabase/Firebase client config or /rest/v1 routes and allow read probing',
+    coverage: probe.coverage,
+    findings,
+    failObservation: `${probe.exposedTables.length} backend table(s)/collection(s) readable with public key (${SECURITY_NOTICE})`,
+    passObservation: `0 public-key readable tables across ${probe.probes.length} table/collection probe(s) (${SECURITY_NOTICE})`,
+  });
+}
+
+/** Check 9: Account B cannot GET Account A's observed resource IDs (zero enumeration, zero row values persisted). */
+export async function evaluateCheck9TwoAccountIdor(opts: ActiveProbeCheckOptions): Promise<{
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  adapterInfo?: AdapterMethodInfo;
+}> {
+  const spec = GRADE_1_CHECKS[8]!;
+  const pre = missingUrlOrInactive(spec, opts, '0 IDOR probes');
+  if (pre) return pre;
+
+  const hide = opts.hide ?? ((t: string) => t);
+  const probe = await probeTwoAccountIdor({
+    ...buildProbeArgs(opts),
+    ...(opts.accounts ? { accounts: opts.accounts } : {}),
+  });
+  const findings: Finding[] = probe.idorLeaks.map((row, idx) => ({
+    id: `readiness-${spec.stepId}-${idx + 1}`,
+    category: 'idor-read',
+    title: `[${SECURITY_NOTICE}] Test account B can read account A resource ${hide(row.resourceLabel)}`,
+    severity: 'high',
+    source: 'code',
+    confirmed: true,
+    url: hide(row.endpoint),
+    planId: 'readiness',
+    stepId: spec.stepId,
+    evidence: hide(
+      `[${SECURITY_NOTICE}] Account B GET ${row.endpoint} (${row.resourceLabel}) returned HTTP ${row.statusB} (Account A status ${row.statusA})`,
+    ),
+  }));
+
+  return finalizeActiveSecurityCheck({
+    spec,
+    executed: probe.executed,
+    ...(probe.haltedReason ? { haltedReason: probe.haltedReason } : {}),
+    ...(probe.reason ? { reason: probe.reason } : {}),
+    whatToAdd: 'Provide MIQYAS_SECRET_ACCOUNT_A_* and MIQYAS_SECRET_ACCOUNT_B_* sessions plus resource routes',
+    coverage: probe.coverage,
+    findings,
+    failObservation: `${probe.idorLeaks.length} cross-account record read(s) succeeded out of ${probe.probedCount} replayed (${SECURITY_NOTICE})`,
+    passObservation: `Account B denied across ${probe.probedCount} Account A resource ID(s) (${SECURITY_NOTICE})`,
+  });
+}
+
+/** Check 10: Observed routes behind log-in refuse requests without session credentials (`redirect: 'manual'`). */
+export async function evaluateCheck10SessionAuth(opts: ActiveProbeCheckOptions): Promise<{
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  adapterInfo?: AdapterMethodInfo;
+}> {
+  const spec = GRADE_1_CHECKS[9]!;
+  const pre = missingUrlOrInactive(spec, opts, '0 sessionless route probes');
+  if (pre) return pre;
+
+  const hide = opts.hide ?? ((t: string) => t);
+  const probe = await probeUnauthenticatedRoutes({
+    ...buildProbeArgs(opts),
+    ...(opts.accounts ? { accounts: opts.accounts } : {}),
+    ...(opts.protectedRoutes ? { protectedRoutes: opts.protectedRoutes } : {}),
+  });
+  const findings: Finding[] = probe.unprotectedRoutes.map((row, idx) => ({
+    id: `readiness-${spec.stepId}-${idx + 1}`,
+    category: 'unauthenticated-route',
+    title: `[${SECURITY_NOTICE}] Protected route serves content without a session`,
+    severity: 'high',
+    source: 'code',
+    confirmed: true,
+    url: hide(row.endpoint),
+    planId: 'readiness',
+    stepId: spec.stepId,
+    evidence: hide(
+      `[${SECURITY_NOTICE}] Unauthenticated GET ${row.endpoint} returned HTTP ${row.statusNoSession} (${row.detail})`,
+    ),
+  }));
+
+  return finalizeActiveSecurityCheck({
+    spec,
+    executed: probe.executed,
+    ...(probe.haltedReason ? { haltedReason: probe.haltedReason } : {}),
+    ...(probe.reason ? { reason: probe.reason } : {}),
+    whatToAdd: 'Provide MIQYAS_SECRET_ACCOUNT_A_* with observed authenticated routes (--active)',
+    coverage: probe.coverage,
+    findings,
+    failObservation: `${probe.unprotectedRoutes.length} route(s) served protected responses without session credentials (${SECURITY_NOTICE})`,
+    passObservation: `All ${probe.probedCount} authenticated route(s) refused sessionless replay (${SECURITY_NOTICE})`,
+  });
+}
+
 function defaultNotChecked(
   spec: ReadinessCheckSpec,
   opts: { dryRun: boolean; repoPath?: string; noModel?: boolean; active?: boolean },
@@ -1506,6 +1759,13 @@ export async function evaluateGrade1Profile(opts: {
   fallbackUrl?: string;
   repoPath?: string;
   active?: boolean;
+  allowHost?: string;
+  hostToken?: string;
+  maxRps?: number;
+  accounts?: readonly TestAccountSpec[];
+  protectedRoutes?: readonly string[];
+  fetchImpl?: typeof fetch;
+  hostPolicyDeps?: Pick<HostOwnershipOptions, 'spendDir' | 'env' | 'fetchImpl' | 'resolveTxtImpl'>;
   hide?: (t: string) => string;
   gitleaks?: GitleaksExecOptions;
   osv?: OsvExecOptions;
@@ -1602,6 +1862,37 @@ export async function evaluateGrade1Profile(opts: {
     checkFindingKeys.set(13, new Set(c13.findings.map((f) => findingDedupeKey(f))));
   }
 
+  const probeOpts: ActiveProbeCheckOptions = {
+    ...(opts.active ? { active: true } : {}),
+    ...(opts.fallbackUrl ? { url: opts.fallbackUrl } : {}),
+    ...(opts.allowHost ? { allowHost: opts.allowHost } : {}),
+    ...(opts.hostToken ? { hostToken: opts.hostToken } : {}),
+    ...(opts.maxRps !== undefined ? { maxRps: opts.maxRps } : {}),
+    ...(opts.crawl ? { crawl: opts.crawl } : {}),
+    ...(opts.accounts ? { accounts: opts.accounts } : {}),
+    ...(opts.protectedRoutes ? { protectedRoutes: opts.protectedRoutes } : {}),
+    ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+    ...(opts.hostPolicyDeps ? { hostPolicyDeps: opts.hostPolicyDeps } : {}),
+    hide,
+  };
+  const c8 = await evaluateCheck8BackendAccess(probeOpts);
+  findings.push(...c8.findings);
+  if (c8.findings.length > 0) {
+    checkFindingKeys.set(8, new Set(c8.findings.map((f) => findingDedupeKey(f))));
+  }
+
+  const c9 = await evaluateCheck9TwoAccountIdor(probeOpts);
+  findings.push(...c9.findings);
+  if (c9.findings.length > 0) {
+    checkFindingKeys.set(9, new Set(c9.findings.map((f) => findingDedupeKey(f))));
+  }
+
+  const c10 = await evaluateCheck10SessionAuth(probeOpts);
+  findings.push(...c10.findings);
+  if (c10.findings.length > 0) {
+    checkFindingKeys.set(10, new Set(c10.findings.map((f) => findingDedupeKey(f))));
+  }
+
   // Merge gitleaks adapter reporting cleanly into method.adapters (preserving index 0 for backward compatibility).
   const glInfos = [c5.adapterInfo, c6.adapterInfo].filter((x): x is AdapterMethodInfo => Boolean(x));
   if (glInfos.length > 0) {
@@ -1630,6 +1921,17 @@ export async function evaluateGrade1Profile(opts: {
     });
   }
   if (c4.adapterInfo) adapters.push(c4.adapterInfo);
+  const probeInfos = [c8.adapterInfo, c9.adapterInfo, c10.adapterInfo].filter((x): x is AdapterMethodInfo => Boolean(x));
+  if (probeInfos.length > 0) {
+    const okInfo = probeInfos.find((x) => x.status === 'ok');
+    const version = probeInfos.find((x) => x.version !== null)?.version ?? PROBE_ADAPTER_VERSION;
+    adapters.push({
+      id: PROBE_ADAPTER_ID,
+      version,
+      coverage: probeInfos.map((x) => x.coverage).join(' | '),
+      status: okInfo ? 'ok' : 'skipped',
+    });
+  }
 
   const checks: ReadinessCheckResult[] = GRADE_1_CHECKS.map((spec) => {
     if (spec.number === 1) return c1.check;
@@ -1638,6 +1940,9 @@ export async function evaluateGrade1Profile(opts: {
     if (spec.number === 5) return c5.check;
     if (spec.number === 6) return c6.check;
     if (spec.number === 7) return c7.check;
+    if (spec.number === 8) return c8.check;
+    if (spec.number === 9) return c9.check;
+    if (spec.number === 10) return c10.check;
     if (spec.number === 13) return c13.check;
     return defaultNotChecked(spec, opts);
   });

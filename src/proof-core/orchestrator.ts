@@ -5,6 +5,7 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runAdapters, type Adapter, type AdapterResult } from '../adapters/adapter.js';
+import { resolveTestAccountsFromEnv, type TestAccountSpec } from '../adapters/backend-probe.js';
 import type { GitleaksExecOptions } from '../adapters/gitleaks.js';
 import type { OsvExecOptions } from '../adapters/osv.js';
 import type { ActTool, Agent, ModelInfo, StepHistory, ToolExecution, Usage } from '../agents/agent.js';
@@ -139,8 +140,11 @@ export interface VerificationRunOptions {
   repoPath?: string;
   gitleaksOpts?: GitleaksExecOptions;
   osvOpts?: OsvExecOptions;
+  probeFetch?: typeof fetch;
+  testAccounts?: readonly TestAccountSpec[];
+  protectedRoutes?: readonly string[];
   env?: NodeJS.ProcessEnv;
-  hostPolicyDeps?: Pick<HostOwnershipOptions, 'spendDir' | 'fetchImpl' | 'resolveTxtImpl'>;
+  hostPolicyDeps?: Pick<HostOwnershipOptions, 'spendDir' | 'env' | 'fetchImpl' | 'resolveTxtImpl'>;
   writeReports?: boolean;
   startedAt?: Date;
   onPlan?: (result: PlanResult) => void;
@@ -588,6 +592,65 @@ export async function executePlans(plans: Plan[], opts: ExecutePlansOptions): Pr
   return results;
 }
 
+function collectCredentialSecrets(
+  runEnv: Record<string, string | undefined>,
+  accounts: readonly TestAccountSpec[],
+): { names: string[]; env: Record<string, string | undefined> } {
+  const names: string[] = [];
+  const syntheticEnv: Record<string, string | undefined> = {};
+  const add = (name: string, val: string | undefined) => {
+    const trimmed = val?.trim();
+    if (!trimmed) return;
+    if (!(name in syntheticEnv)) names.push(name);
+    syntheticEnv[`MIQYAS_SECRET_${name}`] = trimmed;
+  };
+
+  for (const [k, v] of Object.entries(runEnv)) {
+    if (!k.startsWith('MIQYAS_SECRET_') || !v?.trim()) continue;
+    const short = k.slice('MIQYAS_SECRET_'.length);
+    if (/(?:_ROUTES|_RESOURCES|_LOGIN_URL)$/i.test(short)) continue;
+    const raw = v.trim();
+    if (short.endsWith('_HEADER')) {
+      const idx = raw.indexOf(':');
+      if (idx > 0) add(`${short}_VAL`, raw.slice(idx + 1).trim());
+      add(short, raw);
+      continue;
+    }
+    if (raw.startsWith('{') && raw.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (typeof parsed.bearerToken === 'string') add(`${short}_TOKEN`, parsed.bearerToken);
+        if (typeof parsed.token === 'string') add(`${short}_TOKEN`, parsed.token);
+        if (typeof parsed.cookie === 'string') add(`${short}_COOKIE`, parsed.cookie);
+        if (parsed.headers && typeof parsed.headers === 'object' && !Array.isArray(parsed.headers)) {
+          for (const [hk, hv] of Object.entries(parsed.headers as Record<string, unknown>)) {
+            if (typeof hv === 'string') add(`${short}_HEADER_${hk.toUpperCase()}`, hv);
+          }
+        }
+        if (parsed.credentials && typeof parsed.credentials === 'object' && !Array.isArray(parsed.credentials)) {
+          for (const [ck, cv] of Object.entries(parsed.credentials as Record<string, unknown>)) {
+            if (typeof cv === 'string' && ck !== 'email' && ck !== 'username') add(`${short}_${ck.toUpperCase()}`, cv);
+          }
+        }
+        continue;
+      } catch {
+        // non-JSON string: fall through and register verbatim
+      }
+    }
+    add(short, raw);
+  }
+
+  for (const acc of accounts) {
+    if (acc.bearerToken) add(`ACCOUNT_${acc.name}_TOKEN`, acc.bearerToken);
+    if (acc.cookie) add(`ACCOUNT_${acc.name}_COOKIE`, acc.cookie);
+    if (acc.headers) {
+      for (const [hk, hv] of Object.entries(acc.headers)) add(`ACCOUNT_${acc.name}_HEADER_${hk.toUpperCase()}`, hv);
+    }
+    if (acc.credentials?.password) add(`ACCOUNT_${acc.name}_PASSWORD`, acc.credentials.password);
+  }
+  return { names, env: syntheticEnv };
+}
+
 /** Central Proof Core orchestrator: coordinates plans, SurfaceSession driver, Adapters, and Agent into one RunResult. */
 export async function runVerification(opts: VerificationRunOptions): Promise<RunResult> {
   if (opts.settings?.active) {
@@ -614,7 +677,10 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     opts.onFinding?.(f);
   };
 
-  const sharedCrawlRules = withSecrets(opts.scrub, [], opts.env ?? process.env);
+  const runEnv = opts.env ?? process.env;
+  const resolvedAccounts = opts.testAccounts ?? resolveTestAccountsFromEnv(runEnv);
+  const credSecrets = collectCredentialSecrets(runEnv, resolvedAccounts);
+  const sharedCrawlRules = withSecrets(opts.scrub, credSecrets.names, credSecrets.env);
   const sharedHide = (t: string) => scrubText(t, sharedCrawlRules);
   const shouldCrawl = Boolean((opts.settings?.crawl || opts.settings?.profile === 'grade-1') && !dryRun);
   let crawlResult: CrawlResult | undefined;
@@ -693,6 +759,15 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
       fallbackUrl: opts.url,
       ...(opts.repoPath ? { repoPath: opts.repoPath } : {}),
       ...(opts.settings.active ? { active: true } : {}),
+      ...(opts.settings.allowHost ? { allowHost: opts.settings.allowHost } : {}),
+      ...(opts.settings.hostToken ? { hostToken: opts.settings.hostToken } : {}),
+      ...(opts.settings.maxRps !== undefined ? { maxRps: opts.settings.maxRps } : {}),
+      accounts: resolvedAccounts,
+      ...(opts.protectedRoutes ? { protectedRoutes: opts.protectedRoutes } : {}),
+      ...(opts.probeFetch ? { fetchImpl: opts.probeFetch } : {}),
+      ...(opts.env || opts.hostPolicyDeps
+        ? { hostPolicyDeps: { ...(opts.env ? { env: opts.env } : {}), ...opts.hostPolicyDeps } }
+        : {}),
       hide: sharedHide,
       ...(opts.gitleaksOpts ? { gitleaks: opts.gitleaksOpts } : opts.env ? { gitleaks: { env: opts.env } } : {}),
       ...(opts.osvOpts ? { osv: opts.osvOpts } : opts.env ? { osv: { env: opts.env } } : {}),

@@ -13,6 +13,9 @@ import {
   evaluateCheck5ServedSecrets,
   evaluateCheck6RepoSecrets,
   evaluateCheck7MigrationRls,
+  evaluateCheck8BackendAccess,
+  evaluateCheck9TwoAccountIdor,
+  evaluateCheck10SessionAuth,
   evaluateCheck13Dependencies,
   evaluateGrade1Profile,
   GRADE_1_CHECKS,
@@ -496,6 +499,131 @@ process.exit(${exitCode});
     expect(failRes.check.verdict).toBe('fail');
     expect(failRes.blockingKeys).toHaveLength(1);
     expect(failRes.findings[0]?.nodes?.[0]?.ref).toBe('img#hero');
+  });
+
+  it('evaluates Checks 8, 9, 10 with --active gating, host policy, zero row leakage, and SECURITY_NOTICE', async () => {
+    expect((await evaluateCheck8BackendAccess({ url: 'http://127.0.0.1:4173/' })).check.verdict).toBe('not_checked');
+    expect((await evaluateCheck9TwoAccountIdor({ url: 'http://127.0.0.1:4173/' })).check.verdict).toBe('not_checked');
+    expect((await evaluateCheck10SessionAuth({ url: 'http://127.0.0.1:4173/' })).check.verdict).toBe('not_checked');
+
+    await expect(
+      evaluateCheck8BackendAccess({ url: 'https://unowned-target.example/', active: true }),
+    ).rejects.toThrow(/--allow-host|host/i);
+
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ role: 'anon' })).toString('base64url');
+    const anonJwt = `${header}.${payload}.sig`;
+    const crawl = makeFakeCrawl();
+    crawl.servedArtifacts = [
+      {
+        name: 'app.js',
+        kind: 'bundle',
+        url: 'http://127.0.0.1:4173/app.js',
+        text: `const sb = createClient("http://127.0.0.1:4173", "${anonJwt}"); sb.from("users").select("*");`,
+      },
+    ];
+
+    const c8Fail = await evaluateCheck8BackendAccess({
+      active: true,
+      url: 'http://127.0.0.1:4173/',
+      maxRps: 100,
+      crawl,
+      fetchImpl: async () =>
+        new Response(JSON.stringify([{ id: 1, secretColumnVal: 'ROW_LEAK_SENTINEL_881' }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    });
+    expect(c8Fail.check.verdict).toBe('fail');
+    expect(c8Fail.check.securityNotice).toBe(SECURITY_NOTICE);
+    expect(c8Fail.findings[0]?.title).toContain(SECURITY_NOTICE);
+    expect(JSON.stringify(c8Fail)).not.toContain('ROW_LEAK_SENTINEL_881');
+
+    const c8Pass = await evaluateCheck8BackendAccess({
+      active: true,
+      url: 'http://127.0.0.1:4173/',
+      maxRps: 100,
+      crawl,
+      fetchImpl: async () => new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }),
+    });
+    expect(c8Pass.check.verdict).toBe('pass');
+    expect(c8Pass.check.securityNotice).toBe(SECURITY_NOTICE);
+
+    // Check 9 with < 2 accounts -> not_checked
+    const c9MissingAcc = await evaluateCheck9TwoAccountIdor({
+      active: true,
+      url: 'http://127.0.0.1:4173/',
+      accounts: [{ name: 'A', bearerToken: 'tok-a', protectedRoutes: ['/api/orders'] }],
+    });
+    expect(c9MissingAcc.check.verdict).toBe('not_checked');
+    expect(c9MissingAcc.check.securityNotice).toBe(SECURITY_NOTICE);
+
+    const apiMock: typeof fetch = async (input, init) => {
+      const u = new URL(String(input));
+      const auth = (init?.headers as Record<string, string> | undefined)?.authorization ?? '';
+      if (u.pathname === '/api/orders') {
+        if (!auth) return new Response('unauthorized', { status: 401 });
+        return auth === 'Bearer tok-a'
+          ? new Response(JSON.stringify([{ id: 'ord-1', total: 'ROW_ORDER_SECRET' }]), { status: 200, headers: { 'content-type': 'application/json' } })
+          : new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (u.pathname === '/api/orders/ord-1') {
+        if (!auth) return new Response('unauthorized', { status: 401 });
+        return new Response(JSON.stringify({ id: 'ord-1', total: 'ROW_ORDER_SECRET' }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (u.pathname === '/api/private') {
+        return new Response(JSON.stringify({ secret: 'UNAUTH_ROW_SECRET' }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('not found', { status: 404 });
+    };
+
+    const accounts = [
+      { name: 'A' as const, bearerToken: 'tok-a', protectedRoutes: ['/api/orders', '/api/private'] },
+      { name: 'B' as const, bearerToken: 'tok-b', protectedRoutes: ['/api/orders', '/api/private'] },
+    ];
+    const c9Fail = await evaluateCheck9TwoAccountIdor({
+      active: true,
+      url: 'http://127.0.0.1:4173/',
+      maxRps: 100,
+      accounts,
+      fetchImpl: apiMock,
+    });
+    expect(c9Fail.check.verdict).toBe('fail');
+    expect(c9Fail.check.securityNotice).toBe(SECURITY_NOTICE);
+    expect(c9Fail.findings[0]?.category).toBe('idor-read');
+    expect(JSON.stringify(c9Fail)).not.toContain('ROW_ORDER_SECRET');
+
+    const c10Fail = await evaluateCheck10SessionAuth({
+      active: true,
+      url: 'http://127.0.0.1:4173/',
+      maxRps: 100,
+      accounts,
+      fetchImpl: apiMock,
+    });
+    expect(c10Fail.check.verdict).toBe('fail');
+    expect(c10Fail.check.securityNotice).toBe(SECURITY_NOTICE);
+    expect(c10Fail.findings[0]?.category).toBe('unauthenticated-route');
+    expect(JSON.stringify(c10Fail)).not.toContain('UNAUTH_ROW_SECRET');
+
+    const c10Pass = await evaluateCheck10SessionAuth({
+      active: true,
+      url: 'http://127.0.0.1:4173/',
+      maxRps: 100,
+      protectedRoutes: ['/api/orders'],
+      fetchImpl: apiMock,
+    });
+    expect(c10Pass.check.verdict).toBe('pass');
+
+    // FR-Q2: early 429/503 halt with 0 findings cannot claim pass -> must return not_checked
+    const c8RateLimited = await evaluateCheck8BackendAccess({
+      active: true,
+      url: 'http://127.0.0.1:4173/',
+      maxRps: 100,
+      crawl,
+      fetchImpl: async () => new Response('rate limit', { status: 429 }),
+    });
+    expect(c8RateLimited.check.verdict).toBe('not_checked');
+    expect(c8RateLimited.check.reason).toContain('rate-limit');
   });
 });
 
