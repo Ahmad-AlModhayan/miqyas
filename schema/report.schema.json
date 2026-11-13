@@ -37,6 +37,7 @@
     "method": { "$ref": "#/$defs/method" },
     "screenshots": { "$ref": "#/$defs/screenshots" },
     "crawl": { "$ref": "#/$defs/crawlSummary" },
+    "readiness": { "$ref": "#/$defs/readiness" },
     "plans": { "type": "array", "items": { "$ref": "#/$defs/planResult" } },
     "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
   },
@@ -184,7 +185,10 @@
             "maxRps": { "type": "number", "exclusiveMinimum": 0 },
             "active": { "type": "boolean" },
             "allowWrites": { "type": "boolean" },
-            "allowHost": { "type": "string" }
+            "allowHost": { "type": "string" },
+            "profile": { "enum": ["grade-1"] },
+            "repoProvided": { "type": "boolean" },
+            "noModel": { "type": "boolean" }
           }
         },
         "preset": { "description": "The mutation preset's name; null for a plain run.", "type": ["string", "null"] },
@@ -197,6 +201,21 @@
             "file": { "type": ["string", "null"] },
             "sha256": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[0-9a-f]{64}$" }] },
             "terms": { "$ref": "#/$defs/count" }
+          }
+        },
+        "adapters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "version", "coverage", "status"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "version": { "type": ["string", "null"] },
+              "coverage": { "type": "string" },
+              "status": { "enum": ["ok", "skipped", "error"] },
+              "detail": { "type": "string" }
+            }
           }
         }
       }
@@ -302,6 +321,83 @@
         "skippedControls": { "$ref": "#/$defs/count" },
         "skippedOffOriginLinks": { "$ref": "#/$defs/count" },
         "haltedReason": { "enum": ["http-429", "http-503", "captcha-or-waf", "max-screens"] }
+      }
+    },
+    "pillarId": {
+      "enum": [
+        "code-and-logic",
+        "ui-states-and-flows",
+        "data-and-money",
+        "apis-and-third-parties",
+        "security-and-tenant-isolation",
+        "performance-and-cost",
+        "operations",
+        "ai-and-compliance"
+      ]
+    },
+    "readiness": {
+      "type": "object",
+      "required": ["profile", "status", "summary", "counts", "pillars", "checks", "whatToAdd"],
+      "additionalProperties": false,
+      "properties": {
+        "profile": { "enum": ["grade-1"] },
+        "status": { "enum": ["ready", "not_ready"] },
+        "summary": { "type": "string", "minLength": 1 },
+        "counts": {
+          "type": "object",
+          "required": ["total", "passed", "failed", "notChecked"],
+          "additionalProperties": false,
+          "properties": {
+            "total": { "$ref": "#/$defs/count" },
+            "passed": { "$ref": "#/$defs/count" },
+            "failed": { "$ref": "#/$defs/count" },
+            "notChecked": { "$ref": "#/$defs/count" }
+          }
+        },
+        "pillars": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "applicableAtGrade", "total", "passed", "failed", "notChecked"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/pillarId" },
+              "name": { "type": "string", "minLength": 1 },
+              "applicableAtGrade": { "type": "boolean" },
+              "total": { "$ref": "#/$defs/count" },
+              "passed": { "$ref": "#/$defs/count" },
+              "failed": { "$ref": "#/$defs/count" },
+              "notChecked": { "$ref": "#/$defs/count" }
+            }
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["number", "id", "stepId", "pillar", "title", "mode", "verdict", "method", "coverage", "observation"],
+            "additionalProperties": false,
+            "properties": {
+              "number": { "type": "integer", "minimum": 1 },
+              "id": { "type": "string", "minLength": 1 },
+              "stepId": { "type": "string", "minLength": 1 },
+              "pillar": { "$ref": "#/$defs/pillarId" },
+              "title": { "type": "string", "minLength": 1 },
+              "mode": { "enum": ["passive", "active"] },
+              "verdict": { "enum": ["pass", "fail", "not_checked"] },
+              "method": { "enum": ["code", "none"] },
+              "adapter": { "type": "string" },
+              "adapterVersion": { "type": ["string", "null"] },
+              "coverage": { "type": "string" },
+              "observation": { "type": "string" },
+              "reason": { "type": "string" },
+              "whatToAdd": { "type": "string" },
+              "securityNotice": { "type": "string" },
+              "evidenceIds": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "whatToAdd": { "type": "array", "items": { "type": "string" } }
       }
     },
     "finding": {

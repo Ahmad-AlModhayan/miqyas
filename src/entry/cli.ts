@@ -3,13 +3,14 @@
 // Verification, mutation suites, surface execution, and model calls are delegated to Proof Core / drivers / agents.
 
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, parseEnv } from 'node:util';
 import { createInterface } from 'node:readline/promises';
 import { buildApp, cloneState, exportTree, resolveCommit, SourceError } from '../adapters/bench-source.js';
+import { probeGitleaksVersion } from '../adapters/gitleaks.js';
 import { AgentError, type Agent, type PayloadEntry } from '../agents/agent.js';
 import { DEFAULT_MODEL } from '../agents/anthropic.js';
 import { RecordingAgent, ReplayAgent } from '../agents/cassette.js';
@@ -39,6 +40,7 @@ import { reportPath, type PlanResult } from '../proof-core/ledger.js';
 import { applyMutation, BuildChangedError, classify, parsePreset, summarize, type Mutation, type MutationPreset, type MutationResult } from '../proof-core/mutate.js';
 import { executePlans, runMutations, runVerification } from '../proof-core/orchestrator.js';
 import { lintPlan, loadPlanFile, loadPlans, PlanError, resolvePlanFiles, serializePlan, type Plan } from '../proof-core/plan.js';
+import { parseReadinessProfile, type ReadinessProfile } from '../proof-core/readiness.js';
 import { renderHuman, type Method, type RunReport } from '../proof-core/report.js';
 import {
   appendBenchHistory,
@@ -67,7 +69,7 @@ class EnvError extends Error {}
 const HELP = `miqyas: AI testing that proves what it checked. PolyForm Shield 1.0.0.
 
 Usage:
-  miqyas run [plans...] --url <url> [options]      run plans (and/or --crawl) against a web app
+  miqyas run [plans...] --url <url> [options]      run plans, --crawl, or --profile grade-1 against a web app
   miqyas mutate <plans...> --build <dir> --preset <name|file> [options]
                                                    break copies of a build on purpose, report the detection rate
   miqyas quote <plans...> [--tier <level>] [--model <id>] [--no-model] [--preset <name|file>]
@@ -109,6 +111,8 @@ Options:
   --fail-on <severity>   fail run on confirmed findings >= severity (none | info | low | medium | high | critical; default none)
   --corpus <path>        seeded corpus directory or seeds.json manifest (for lint / bench)
   --history <file>       regression history JSONL file (default bench/history.jsonl)
+  --profile <name>       readiness profile to evaluate (grade-1)
+  --repo <path>          repository path for readiness code/secret checks (e.g. Check 6)
 
 Live billed runs print a quote, require an interactive terminal cap <= $${DAILY_CAP_USD} daily cap, and need a provider key in your environment. Unbilled local/private OpenAI-compatible endpoints work non-interactively. Secrets in plans are written \${secret.NAME} and read
 from MIQYAS_SECRET_NAME.`;
@@ -148,6 +152,7 @@ const OPTIONS = {
   commit: { type: 'string' },
   corpus: { type: 'string' },
   history: { type: 'string' },
+  profile: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 } as const;
 
@@ -364,6 +369,26 @@ function checkLint(plans: Plan[]): void {
   if (errors.length) throw new PlanError(errors.join('\n'));
 }
 
+function profileSetting(o: Opts): ReadinessProfile | undefined {
+  if (o.profile === undefined) return undefined;
+  try {
+    return parseReadinessProfile(o.profile);
+  } catch (e) {
+    throw new UsageError((e as Error).message);
+  }
+}
+
+function repoSetting(o: Opts): string | undefined {
+  if (o.repo === undefined) return undefined;
+  const trimmed = o.repo.trim();
+  if (!trimmed) throw new UsageError('--repo requires a directory path');
+  const resolved = path.resolve(trimmed);
+  if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+    throw new UsageError(`--repo directory does not exist: ${trimmed}`);
+  }
+  return resolved;
+}
+
 async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number> {
   if (!o.url) throw new UsageError('run needs --url');
   try {
@@ -371,11 +396,14 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
   } catch {
     throw new UsageError(`--url "${o.url}" is not a URL`);
   }
+  const profile = profileSetting(o);
+  const repoPath = profile ? repoSetting(o) : undefined;
+  const crawlEnabled = Boolean(o.crawl || profile === 'grade-1');
   if (o['allow-writes'] && !o.active) {
     throw new UsageError('--allow-writes requires --active');
   }
-  if ((o.crawl || o.active) && o['allow-other-origins']) {
-    throw new UsageError('--allow-other-origins cannot be used with --crawl or --active');
+  if ((crawlEnabled || o.active) && o['allow-other-origins']) {
+    throw new UsageError('--allow-other-origins cannot be used with --crawl, --profile grade-1, or --active');
   }
   const maxScreens = positiveIntOption(o['max-screens'], DEFAULT_CRAWL_MAX_SCREENS, '--max-screens');
   const maxDepth = nonNegativeIntOption(o['max-depth'], DEFAULT_CRAWL_DEPTH, '--max-depth');
@@ -391,18 +419,20 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
       ...inject.hostPolicyDeps,
     });
   }
-  const plans = o.crawl && args.length === 0 ? [] : await loadPlans(args);
+  const plans = crawlEnabled && args.length === 0 ? [] : await loadPlans(args);
   if (plans.length) checkLint(plans);
   const id = runId();
   const runDir = path.resolve(o.out ?? path.join('.miqyas', 'runs', id));
   const failOn = failOnSetting(o);
   const settings = {
     concurrency: concurrency(o),
-    allowOtherOrigins: o.crawl || o.active ? false : o['allow-other-origins'],
+    allowOtherOrigins: crawlEnabled || o.active ? false : o['allow-other-origins'],
     headed: o.headed,
     ...(o.strict ? { strict: true } : {}),
     ...(failOn !== 'none' ? { failOn } : {}),
-    ...(o.crawl ? { crawl: true, maxScreens, maxDepth, maxRps } : {}),
+    ...(profile ? { profile } : {}),
+    ...(repoPath ? { repoProvided: true } : {}),
+    ...(crawlEnabled ? { crawl: true, maxScreens, maxDepth, maxRps } : {}),
     ...(o.active ? { active: true } : {}),
     ...(o['allow-writes'] ? { allowWrites: true } : {}),
     ...(o['allow-host'] ? { allowHost: o['allow-host'] } : {}),
@@ -418,7 +448,9 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
       : o.replay
         ? ` (replay ${path.basename(o.replay)})`
         : ` with ${exec.agent?.info?.model}${exec.agent?.info?.endpointHost && exec.agent.info.provider !== 'anthropic' ? ` (${exec.agent.info.provider} @ ${exec.agent.info.endpointHost})` : ''}`;
-  if (!o.json) process.stderr.write(`miqyas: ${plans.length} plan(s)${o.crawl ? ' + crawl' : ''} against ${o.url}${modeLabel}; run folder ${runDir}\n`);
+  const scopeLabel = profile ? ` + profile ${profile}` : crawlEnabled ? ' + crawl' : '';
+  if (exec.noModel && exec.quote && !o.json) process.stderr.write(formatQuote(exec.quote) + '\n');
+  if (!o.json) process.stderr.write(`miqyas: ${plans.length} plan(s)${scopeLabel} against ${o.url}${modeLabel}; run folder ${runDir}\n`);
 
   const driver = await openWebSurfaceDriver({ headed: settings.headed, allowOtherOrigins: settings.allowOtherOrigins });
   try {
@@ -435,6 +467,7 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
       scrub,
       scrubMethod,
       settings,
+      ...(repoPath ? { repoPath } : {}),
       ...(inject.hostPolicyDeps ? { hostPolicyDeps: inject.hostPolicyDeps } : {}),
       onPlan: (r) => !o.json && process.stderr.write(`  ${r.planId}: ${o['dry-run'] ? dryRunStatus(r.error, r.verdict) : r.verdict} (${(r.durationMs / 1000).toFixed(1)} s)\n`),
     });
@@ -1044,6 +1077,12 @@ async function cmdDoctor(o: Opts): Promise<number> {
         ? `${route.endpoint}${route.customEndpoint && route.endpointHost ? ` (custom host ${route.endpointHost})` : ''}`
         : 'not set (set OPENAI_BASE_URL or --endpoint)'
     }\n`,
+  );
+  const gitleaksVer = await probeGitleaksVersion();
+  process.stdout.write(
+    gitleaksVer
+      ? `gitleaks ${gitleaksVer}: ok\n`
+      : 'gitleaks: missing (optional; install gitleaks for Grade 1 Checks 5-6)\n',
   );
   return major >= 20 && browserOk ? 0 : 3;
 }

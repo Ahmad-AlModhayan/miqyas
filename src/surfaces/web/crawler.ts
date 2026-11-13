@@ -4,7 +4,7 @@
 // Never submits forms, skips English & Arabic destructive controls, enforces same-origin isolation, and halts on 429/503.
 
 import type { BrowserContext, Page } from 'playwright';
-import type { CrawlOptions, CrawlResult, CrawlScreen, Observation } from '../session.js';
+import type { CrawlOptions, CrawlResult, CrawlScreen, Observation, ServedArtifact } from '../session.js';
 import { attachWebDetectors } from './detectors.js';
 import { observe, type ObserveOptions } from './observe.js';
 import { hasCaptchaOrWafSignal, isDestructiveControl, type ControlDescriptor } from './policy.js';
@@ -203,6 +203,61 @@ interface QueueItem {
   trigger?: string;
 }
 
+const MAX_ARTIFACT_BYTES = 512 * 1024;
+const MAX_ARTIFACTS_COUNT = 200;
+const MAX_TOTAL_ARTIFACT_BYTES = 4 * 1024 * 1024;
+
+function extractSourceMapUrls(body: string, headerVal: string | undefined, resourceUrl: string, baseOrigin: string): string[] {
+  const refs: string[] = [];
+  if (headerVal?.trim()) refs.push(headerVal.trim());
+  for (const m of body.matchAll(/(?:\/\/[@#]|\/\*#)\s*sourceMappingURL=([^\s*]+)/g)) {
+    if (m[1]) refs.push(m[1].trim());
+  }
+  const out: string[] = [];
+  for (const raw of refs) {
+    if (/^(?:data|blob|javascript):/i.test(raw)) continue;
+    try {
+      const u = new URL(raw, resourceUrl);
+      if (u.origin === baseOrigin && (u.protocol === 'http:' || u.protocol === 'https:')) {
+        out.push(u.href);
+      }
+    } catch {
+      // ignore invalid sourceMappingURL
+    }
+  }
+  return out;
+}
+
+const COLLECT_SCREEN_ARTIFACTS_FN = `() => {
+  const domParts = [];
+  if (document.body && document.body.innerText) domParts.push(document.body.innerText.slice(0, 128000));
+  const scripts = document.querySelectorAll('script:not([src])');
+  for (let i = 0; i < scripts.length; i++) {
+    const t = scripts[i].textContent || '';
+    if (t) domParts.push(t.slice(0, 128000));
+  }
+  const inputs = document.querySelectorAll('input, textarea');
+  for (let i = 0; i < inputs.length; i++) {
+    const v = inputs[i].value;
+    if (v) domParts.push(String(v).slice(0, 8192));
+  }
+  const storageLines = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k) storageLines.push('localStorage.' + k + '=' + String(localStorage.getItem(k) || ''));
+    }
+  } catch {}
+  try {
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i);
+      if (k) storageLines.push('sessionStorage.' + k + '=' + String(sessionStorage.getItem(k) || ''));
+    }
+  } catch {}
+  if (document.cookie) storageLines.push('cookie=' + document.cookie);
+  return { url: location.href, dom: domParts.join('\\n'), storage: storageLines.join('\\n') };
+}`;
+
 /** Execute bounded code-driven same-origin crawl under isolated proxy context. */
 export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Promise<CrawlResult> {
   const maxScreens = opts.maxScreens ?? DEFAULT_CRAWL_MAX_SCREENS;
@@ -232,6 +287,35 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
   let skippedControls = 0;
   let skippedOffOriginLinks = 0;
 
+  const servedArtifacts: ServedArtifact[] = [];
+  const seenArtifactKeys = new Set<string>();
+  const fetchedSourceMaps = new Set<string>();
+  const pendingArtifactTasks = new Set<Promise<void>>();
+  let artifactBytes = 0;
+  let truncatedArtifacts = 0;
+
+  const atArtifactCap = () =>
+    servedArtifacts.length >= MAX_ARTIFACTS_COUNT || artifactBytes >= MAX_TOTAL_ARTIFACT_BYTES;
+
+  const pushArtifact = (art: ServedArtifact) => {
+    if (!opts.collectServedArtifacts || !art.text) return;
+    if (atArtifactCap()) {
+      truncatedArtifacts++;
+      return;
+    }
+    let textToStore = art.text;
+    if (textToStore.length > MAX_ARTIFACT_BYTES) {
+      truncatedArtifacts++;
+      const half = Math.floor(MAX_ARTIFACT_BYTES / 2);
+      textToStore = `${textToStore.slice(0, half)}\n/* ...truncated... */\n${textToStore.slice(-half)}`;
+    }
+    const key = `${art.kind}|${art.url}|${art.name}`;
+    if (seenArtifactKeys.has(key)) return;
+    seenArtifactKeys.add(key);
+    artifactBytes += textToStore.length;
+    servedArtifacts.push({ ...art, text: textToStore });
+  };
+
   try {
     // Safety floor inside the page: never submit non-GET/HEAD top-frame form navigations during crawl.
     await page.route('**/*', (route) => {
@@ -249,6 +333,56 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
       }
       if (st === 429 && !haltedReason) haltedReason = 'http-429';
       else if (st === 503 && !haltedReason) haltedReason = 'http-503';
+
+      if (!opts.collectServedArtifacts || st < 200 || st >= 400 || atArtifactCap()) return;
+      let u: URL;
+      try {
+        u = new URL(res.url());
+      } catch {
+        return;
+      }
+      if (u.origin !== baseOrigin) return;
+      const ct = res.headers()['content-type'] ?? '';
+      if (!/(?:text\/|javascript|ecmascript|json|xml|svg)/i.test(ct) && !u.pathname.endsWith('.map')) return;
+      const task = (async () => {
+        try {
+          if (atArtifactCap()) return;
+          const body = await res.text();
+          if (!body) return;
+          const isMap = u.pathname.endsWith('.map');
+          const rtype = res.request().resourceType();
+          const kind: ServedArtifact['kind'] = isMap ? 'source-map' : rtype === 'script' || rtype === 'stylesheet' ? 'bundle' : 'response';
+          pushArtifact({ kind, name: u.pathname || '/', url: u.href, text: body });
+          const mapHeader = res.headers().sourcemap ?? res.headers()['x-sourcemap'];
+          for (const mapUrl of extractSourceMapUrls(body, mapHeader, u.href, baseOrigin)) {
+            if (fetchedSourceMaps.has(mapUrl) || atArtifactCap()) continue;
+            fetchedSourceMaps.add(mapUrl);
+            try {
+              const mapRes = await context.request.get(mapUrl, { maxRedirects: 0, timeout: Math.min(navTimeoutMs, 5000) });
+              if (mapRes.ok()) {
+                const resolvedMapUrl = new URL(mapRes.url());
+                if (resolvedMapUrl.origin === baseOrigin) {
+                  const mapText = await mapRes.text();
+                  if (mapText) {
+                    pushArtifact({
+                      kind: 'source-map',
+                      name: resolvedMapUrl.pathname || 'source.map',
+                      url: resolvedMapUrl.href,
+                      text: mapText,
+                    });
+                  }
+                }
+              }
+            } catch {
+              // ignore unreachable optional source map
+            }
+          }
+        } catch {
+          // ignore unreadable closed response bodies
+        }
+      })();
+      pendingArtifactTasks.add(task);
+      void task.finally(() => pendingArtifactTasks.delete(task));
     });
 
     const look: ObserveOptions & { hide?: (t: string) => string } = {
@@ -291,6 +425,25 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
       if (seenScreenKeys.has(key)) return null;
       seenScreenKeys.add(key);
 
+      if (opts.collectServedArtifacts && !haltedReason) {
+        const snapArt = (await page.evaluate(`(${COLLECT_SCREEN_ARTIFACTS_FN})()`).catch(() => null)) as
+          | { url?: string; dom?: string; storage?: string }
+          | null;
+        if (snapArt) {
+          const curUrl = snapArt.url || baseObs.url;
+          let pathname = '/';
+          try {
+            pathname = new URL(curUrl).pathname || '/';
+          } catch {
+            // keep default path label
+          }
+          const screenSeq = screens.length + 1;
+          pushArtifact({ kind: 'url', name: `url-${screenSeq}`, url: curUrl, text: curUrl });
+          if (snapArt.dom) pushArtifact({ kind: 'dom', name: `dom-${screenSeq}-${pathname}`, url: curUrl, text: snapArt.dom });
+          if (snapArt.storage) pushArtifact({ kind: 'storage', name: `storage-${screenSeq}-${pathname}`, url: curUrl, text: snapArt.storage });
+        }
+      }
+
       screens.push({
         url: obs.url,
         depth,
@@ -323,8 +476,13 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
       await limiter.acquire();
       if (haltedReason) break;
       lastHttpStatus = undefined;
-      await page.goto(item.url, { waitUntil: 'domcontentloaded', timeout: navTimeoutMs }).catch(() => {});
+      let navOk = true;
+      await page.goto(item.url, { waitUntil: 'domcontentloaded', timeout: navTimeoutMs }).catch(() => {
+        navOk = false;
+      });
       if (haltedReason) break;
+      const loadedUrl = page.url();
+      if (!navOk || !loadedUrl || loadedUrl === 'about:blank' || loadedUrl.startsWith('chrome-error://')) continue;
 
       const obs = await captureScreen(item.depth, item.trigger);
       if (haltedReason || !obs || screens.length >= maxScreens) break;
@@ -383,6 +541,9 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
         }
       }
     }
+    if (pendingArtifactTasks.size > 0) {
+      await Promise.allSettled([...pendingArtifactTasks]);
+    }
   } finally {
     await page.close().catch(() => {});
     await context.close().catch(() => {});
@@ -393,5 +554,7 @@ export async function crawlWebApp(opts: CrawlOptions, deps: RunCrawlerDeps): Pro
     skippedControls,
     skippedOffOriginLinks,
     ...(haltedReason ? { haltedReason } : {}),
+    ...(opts.collectServedArtifacts ? { servedArtifacts } : {}),
+    ...(truncatedArtifacts > 0 ? { truncatedArtifacts } : {}),
   };
 }

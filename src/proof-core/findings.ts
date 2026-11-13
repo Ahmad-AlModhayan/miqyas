@@ -221,6 +221,11 @@ export function normalizeProposedFindings(
   }));
 }
 
+/** Canonical deduplication signature shared by dedupeFindings and readiness evidence linking. */
+export function findingDedupeKey(f: Pick<Finding, 'category' | 'severity' | 'url' | 'evidence'>): string {
+  return `${f.category}|${f.severity}|${f.url ?? ''}|${f.evidence}`;
+}
+
 /** Deduplicate findings across observations/plans; model proposals stay unconfirmed unless corroborated by a code finding. */
 export function dedupeFindings(list: readonly Finding[]): Finding[] {
   const confirmedCodeMaxRank = new Map<string, number>();
@@ -236,7 +241,7 @@ export function dedupeFindings(list: readonly Finding[]): Finding[] {
     const maxRank = confirmedCodeMaxRank.get(`${raw.category}|${raw.url ?? ''}`) ?? 0;
     const corroborated = raw.source === 'model' && !raw.confirmed && maxRank >= SEVERITY_RANK[raw.severity];
     const f = corroborated ? { ...raw, confirmed: true } : raw;
-    const k = `${f.category}|${f.severity}|${f.url ?? ''}|${f.evidence}`;
+    const k = findingDedupeKey(f);
     if (seen.has(k)) continue;
     seen.add(k);
     out.push({ ...f, id: `${f.category}-${out.length + 1}` });

@@ -5,6 +5,7 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runAdapters, type Adapter, type AdapterResult } from '../adapters/adapter.js';
+import type { GitleaksExecOptions } from '../adapters/gitleaks.js';
 import type { ActTool, Agent, ModelInfo, StepHistory, ToolExecution, Usage } from '../agents/agent.js';
 import { isCandidateAction, nonCandidateRefMessage, selectActCandidates } from '../agents/protocol.js';
 import { BudgetError, type RunQuote, type SpendGuard } from '../agents/spend.js';
@@ -54,10 +55,12 @@ import {
   renderMethod,
   SCREENSHOTS,
   TOOL_VERSION,
+  type AdapterMethodInfo,
   type Method,
   type RunReport,
   type SpendReport,
 } from './report.js';
+import { evaluateGrade1Profile, linkReadinessEvidenceIds, type ReadinessProfile, type ReadinessReport } from './readiness.js';
 
 export interface RunSettings {
   concurrency?: number;
@@ -74,6 +77,9 @@ export interface RunSettings {
   allowWrites?: boolean;
   allowHost?: string;
   hostToken?: string;
+  profile?: ReadinessProfile;
+  repoProvided?: boolean;
+  noModel?: boolean;
   viewport?: { width: number; height: number };
   planTimeoutMs?: number;
   navTimeoutMs?: number;
@@ -123,6 +129,8 @@ export interface VerificationRunOptions {
   scrubMethod: Method['scrub'];
   adapters?: Adapter[];
   settings?: RunSettings;
+  repoPath?: string;
+  gitleaksOpts?: GitleaksExecOptions;
   env?: NodeJS.ProcessEnv;
   hostPolicyDeps?: Pick<HostOwnershipOptions, 'spendDir' | 'fetchImpl' | 'resolveTxtImpl'>;
   writeReports?: boolean;
@@ -142,6 +150,7 @@ export interface RunResult {
   adapters: AdapterResult[];
   findings?: Finding[];
   crawl?: CrawlResult;
+  readiness?: ReadinessReport;
   report: RunReport;
   durationMs: number;
 }
@@ -211,7 +220,7 @@ const DEFAULT_LIMITS = { maxTokens: 16000, maxTurns: 12 };
 
 function pickRunSettings(s?: RunSettings): RunSettings {
   if (!s) return {};
-  const forceSameOrigin = Boolean(s.crawl || s.active);
+  const forceSameOrigin = Boolean(s.crawl || s.active || s.profile === 'grade-1');
   return {
     ...(s.concurrency !== undefined ? { concurrency: s.concurrency } : {}),
     ...(s.headed !== undefined ? { headed: s.headed } : {}),
@@ -226,6 +235,9 @@ function pickRunSettings(s?: RunSettings): RunSettings {
     ...(s.active !== undefined ? { active: s.active } : {}),
     ...(s.allowWrites !== undefined ? { allowWrites: s.allowWrites } : {}),
     ...(s.allowHost !== undefined ? { allowHost: s.allowHost } : {}),
+    ...(s.profile !== undefined ? { profile: s.profile } : {}),
+    ...(s.repoProvided !== undefined ? { repoProvided: s.repoProvided } : {}),
+    ...(s.noModel !== undefined ? { noModel: s.noModel } : {}),
     ...(s.viewport !== undefined ? { viewport: s.viewport } : {}),
     ...(s.planTimeoutMs !== undefined ? { planTimeoutMs: s.planTimeoutMs } : {}),
     ...(s.navTimeoutMs !== undefined ? { navTimeoutMs: s.navTimeoutMs } : {}),
@@ -245,7 +257,7 @@ export function buildMethodMetadata(
     navTimeoutMs: NAV_TIMEOUT_MS,
     actionTimeoutMs: ACTION_TIMEOUT_MS,
   };
-  const forceSameOrigin = Boolean(settings.crawl || settings.active);
+  const forceSameOrigin = Boolean(settings.crawl || settings.active || settings.profile === 'grade-1');
   return {
     ...environment(driver.version),
     model: agent?.info ? { ...agent.info, ...(agent.limits ?? DEFAULT_LIMITS) } : null,
@@ -262,6 +274,9 @@ export function buildMethodMetadata(
       ...(settings.active ? { active: true } : {}),
       ...(settings.allowWrites ? { allowWrites: true } : {}),
       ...(settings.allowHost ? { allowHost: settings.allowHost } : {}),
+      ...(settings.profile ? { profile: settings.profile } : {}),
+      ...(settings.repoProvided ? { repoProvided: true } : {}),
+      ...(settings.noModel ? { noModel: true } : {}),
       viewport: settings.viewport ?? defaults.viewport,
       timeouts: {
         planMs: settings.planTimeoutMs ?? defaults.planTimeoutMs,
@@ -591,19 +606,21 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     opts.onFinding?.(f);
   };
 
+  const shouldCrawl = Boolean((opts.settings?.crawl || opts.settings?.profile === 'grade-1') && !dryRun);
   let crawlResult: CrawlResult | undefined;
-  if (opts.settings?.crawl && opts.driver.crawl) {
+  if (shouldCrawl && opts.driver.crawl) {
     const crawlRules = withSecrets(opts.scrub, [], opts.env ?? process.env);
     const crawlScrub = (t: string) => scrubText(t, crawlRules);
     const crawlRescan = (t: string) => ruleHits(t, crawlRules);
     const crawlHide = (t: string) => scrubText(t, NO_SCRUB);
     crawlResult = await opts.driver.crawl({
       url: opts.url,
-      ...(opts.settings.maxScreens !== undefined ? { maxScreens: opts.settings.maxScreens } : {}),
-      ...(opts.settings.maxDepth !== undefined ? { maxDepth: opts.settings.maxDepth } : {}),
-      ...(opts.settings.maxRps !== undefined ? { maxRps: opts.settings.maxRps } : {}),
-      viewport: opts.settings.viewport ?? DEFAULT_VIEWPORT,
-      navTimeoutMs: opts.settings.navTimeoutMs ?? NAV_TIMEOUT_MS,
+      ...(opts.settings?.maxScreens !== undefined ? { maxScreens: opts.settings.maxScreens } : {}),
+      ...(opts.settings?.maxDepth !== undefined ? { maxDepth: opts.settings.maxDepth } : {}),
+      ...(opts.settings?.maxRps !== undefined ? { maxRps: opts.settings.maxRps } : {}),
+      ...(opts.settings?.profile === 'grade-1' ? { collectServedArtifacts: true } : {}),
+      viewport: opts.settings?.viewport ?? DEFAULT_VIEWPORT,
+      navTimeoutMs: opts.settings?.navTimeoutMs ?? NAV_TIMEOUT_MS,
       hide: crawlHide,
       onScreen: async (obs) => {
         const stepId = `crawl-c${obs.capture}`;
@@ -640,15 +657,56 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     ...(opts.onPlan !== undefined ? { onPlan: opts.onPlan } : {}),
     onFinding: pushFinding,
   });
-  const findings = dedupeFindings(rawFindings);
 
   const adapterOutputs = opts.adapters?.length
-    ? await runAdapters(opts.adapters, { surface: opts.driver.surface, url: opts.url, runDir: opts.runDir })
+    ? await runAdapters(opts.adapters, { surface: opts.driver.surface, url: opts.url, runDir: opts.runDir, ...(opts.repoPath ? { buildDir: opts.repoPath } : {}) })
     : [];
+  const methodAdapters: AdapterMethodInfo[] = adapterOutputs.map((a) => ({
+    id: a.adapterId,
+    version: a.version ?? null,
+    coverage: a.coverage ?? (a.detail ?? a.status),
+    status: a.status,
+    ...(a.detail ? { detail: a.detail } : a.error ? { detail: a.error } : {}),
+  }));
+
+  let readinessReport: ReadinessReport | undefined;
+  let allPlans = planResults;
+  let readinessCheckFindingKeys: Map<number, Set<string>> | undefined;
+  if (opts.settings?.profile === 'grade-1') {
+    const evalHide = (t: string) => scrubText(t, withSecrets(opts.scrub, [], opts.env ?? process.env));
+    const readinessRes = await evaluateGrade1Profile({
+      dryRun,
+      ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
+      ...(crawlResult ? { crawl: crawlResult } : {}),
+      ...(opts.repoPath ? { repoPath: opts.repoPath } : {}),
+      ...(opts.settings.active ? { active: true } : {}),
+      hide: evalHide,
+      ...(opts.gitleaksOpts ? { gitleaks: opts.gitleaksOpts } : opts.env ? { gitleaks: { env: opts.env } } : {}),
+    });
+    readinessReport = readinessRes.readiness;
+    readinessCheckFindingKeys = readinessRes.checkFindingKeys;
+    allPlans = [...planResults, readinessRes.ledgerPlan];
+    opts.onPlan?.(readinessRes.ledgerPlan);
+    for (const rf of readinessRes.findings) pushFinding(rf);
+    for (const ra of readinessRes.adapters) {
+      if (!methodAdapters.some((m) => m.id === ra.id)) methodAdapters.push(ra);
+    }
+  }
+  const findings = dedupeFindings(rawFindings);
+  if (readinessReport && readinessCheckFindingKeys) {
+    readinessReport = linkReadinessEvidenceIds(readinessReport, readinessCheckFindingKeys, findings);
+  }
 
   await opts.spendGuard?.flush();
   const finishedAt = new Date();
-  const method = buildMethodMetadata(opts.agent, opts.driver, opts.scrubMethod, null, opts.settings);
+  const effectiveSettings: RunSettings = {
+    ...opts.settings,
+    ...(opts.settings?.profile === 'grade-1' ? { crawl: true } : {}),
+    ...(opts.repoPath ? { repoProvided: true } : {}),
+    ...(opts.noModel ? { noModel: true } : {}),
+  };
+  const method = buildMethodMetadata(opts.agent, opts.driver, opts.scrubMethod, null, effectiveSettings);
+  if (methodAdapters.length) method.adapters = methodAdapters;
   const model = opts.agent?.info ?? null;
   const usage = opts.agent?.usage ?? { calls: 0, inputTokens: 0, outputTokens: 0 };
   const spend = buildSpendReport({
@@ -678,8 +736,9 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     usage,
     ...(spend ? { spend } : {}),
     method,
-    plans: planResults,
+    plans: allPlans,
     ...(crawlSummary ? { crawl: crawlSummary } : {}),
+    ...(readinessReport ? { readiness: readinessReport } : {}),
     ...(findings.length ? { findings } : {}),
     ...(opts.settings?.failOn ? { failOn: opts.settings.failOn } : {}),
   });
@@ -691,7 +750,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
 
   let exitCode: number;
   if (report.verdict === 'dry_run') {
-    const broken = planResults.filter((r) => !r.error?.startsWith('dry run'));
+    const broken = allPlans.filter((r) => !r.error?.startsWith('dry run'));
     exitCode = broken.length ? 3 : 0;
   } else {
     exitCode = exitCodeFor(report.verdict);
@@ -704,9 +763,10 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     dryRun,
     verdict: report.verdict,
     exitCode,
-    plans: planResults,
+    plans: allPlans,
     adapters: adapterOutputs,
     ...(crawlResult ? { crawl: crawlResult } : {}),
+    ...(readinessReport ? { readiness: readinessReport } : {}),
     ...(findings.length ? { findings } : {}),
     report,
     durationMs: finishedAt.getTime() - startedAt.getTime(),

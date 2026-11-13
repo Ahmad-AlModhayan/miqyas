@@ -10,6 +10,7 @@ import { PLAYWRIGHT_VERSION } from '../surfaces/web/driver.js';
 import type { FailOnThreshold, Finding } from './findings.js';
 import { findingsExceedThreshold } from './findings.js';
 import { countEntries, runVerdict, type PlanCounts, type PlanResult, type RunVerdict } from './ledger.js';
+import type { ReadinessProfile, ReadinessReport } from './readiness.js';
 
 export type { ModelInfo, Usage } from '../agents/agent.js';
 
@@ -28,6 +29,14 @@ export const SCREENSHOTS = {
   redacted: false,
   note: 'Typed secrets were masked on the page before each screenshot; other screenshot content was sent to the model as captured, not redacted; only the served build was scrubbed.',
 } as const;
+
+export interface AdapterMethodInfo {
+  id: string;
+  version: string | null;
+  coverage: string;
+  status: 'ok' | 'skipped' | 'error';
+  detail?: string;
+}
 
 /** How a run was made, so anyone can reproduce it. Records the scrub rules file and its hash, never the terms. */
 export interface Method {
@@ -49,10 +58,14 @@ export interface Method {
     active?: boolean;
     allowWrites?: boolean;
     allowHost?: string;
+    profile?: ReadinessProfile;
+    repoProvided?: boolean;
+    noModel?: boolean;
   };
   /** The mutation preset; null for a plain run. */
   preset: string | null;
   scrub: { file: string | null; sha256: string | null; terms: number };
+  adapters?: AdapterMethodInfo[];
 }
 
 /** The parts of the method block that come from this machine. */
@@ -133,6 +146,7 @@ export interface RunReport {
   method: Method;
   screenshots: typeof SCREENSHOTS;
   crawl?: CrawlReportSummary;
+  readiness?: ReadinessReport;
   plans: PlanResult[];
   findings?: Finding[];
 }
@@ -149,6 +163,7 @@ export function buildReport(input: {
   method: Method;
   plans: PlanResult[];
   crawl?: CrawlReportSummary;
+  readiness?: ReadinessReport;
   findings?: Finding[];
   failOn?: FailOnThreshold;
 }): RunReport {
@@ -189,6 +204,7 @@ export function buildReport(input: {
     method: input.method,
     screenshots: SCREENSHOTS,
     ...(input.crawl ? { crawl: input.crawl } : {}),
+    ...(input.readiness ? { readiness: input.readiness } : {}),
     plans: input.plans,
     ...(input.findings?.length ? { findings: input.findings } : {}),
   };
@@ -228,12 +244,44 @@ export function formatSpendSummary(s: SpendReport): string {
   return `${qText}cap ${fmtUsd(s.capUsd)}; actual ${fmtUsd(s.actualUsd)} (today before ${fmtUsd(s.dailySpentBeforeUsd)} / $${s.dailyCapUsd.toFixed(2)})`;
 }
 
+export function renderReadinessMarkdown(r: ReadinessReport): string[] {
+  const lines: string[] = ['## Readiness', '', `**${cell(r.summary)}**`, ''];
+  for (const pillar of r.pillars) {
+    lines.push(`### ${cell(pillar.name)} (${pillar.passed}/${pillar.total} pass)`);
+    const pChecks = r.checks.filter((c) => c.pillar === pillar.id);
+    if (pChecks.length === 0) {
+      lines.push('', pillar.applicableAtGrade ? '_No checks assigned._' : '_Starts at Grade 2._', '');
+      continue;
+    }
+    lines.push('', '| Check | Mode | Verdict | Coverage | Evidence | Notes |', '|---|---|---|---|---|---|');
+    for (const c of pChecks) {
+      const ev = c.observation || c.reason || '';
+      const notes = [c.securityNotice ?? '', c.whatToAdd ? `Add: ${c.whatToAdd}` : ''].filter(Boolean).join('; ');
+      lines.push(
+        `| ${c.number}. ${cell(c.title)} | ${c.mode} | ${MARK[c.verdict] ?? c.verdict} | ${cell(c.coverage)} | ${cell(ev)} | ${cell(notes)} |`,
+      );
+    }
+    lines.push('');
+  }
+  if (r.whatToAdd.length > 0) {
+    lines.push('### What to add', '');
+    for (const item of r.whatToAdd) {
+      lines.push(`- ${cell(item)}`);
+    }
+    lines.push('');
+  }
+  return lines;
+}
+
 export function renderMarkdown(r: RunReport): string {
   const t = r.totals;
   const lines: string[] = [];
   const failOnHits = findingsExceedThreshold(r.findings ?? [], r.method.settings.failOn).length;
   const failOnNote = failOnHits > 0 ? ` Failed by \`--fail-on ${r.method.settings.failOn}\` (${failOnHits} confirmed finding(s) at or above threshold).` : '';
   lines.push(`# Miqyas run ${r.runId}`, '');
+  if (r.readiness) {
+    lines.push(`**${cell(r.readiness.summary)}**`, '');
+  }
   lines.push(r.dryRun ? `**DRY RUN**: no assertion was judged (${t.notChecked} not checked); ${t.plans} plan(s) resolved and opened.` : `**${MARK[r.verdict]}**: ${t.plansPassed} of ${t.plans} plans passed; ${t.passed} of ${t.assertions} assertions have a recorded pass.${failOnNote}`, '');
   lines.push('| | |', '|---|---|');
   lines.push(`| Target | ${cell(r.target.url)} |`);
@@ -246,6 +294,9 @@ export function renderMarkdown(r: RunReport): string {
   if (r.spend) lines.push(`| Spend | ${formatSpendSummary(r.spend)} |`);
   lines.push(`| Screenshots | ${r.screenshots.note} |`, '');
   lines.push('A plan passes only when every assertion has a recorded pass with evidence. Unverified, blocked and not checked count as failures.', '');
+  if (r.readiness) {
+    lines.push(...renderReadinessMarkdown(r.readiness));
+  }
   lines.push(...renderMethod(r.method));
 
   lines.push('## Plans', '', '| Plan | Verdict | Assertions passed | Time |', '|---|---|---|---|');
@@ -310,6 +361,14 @@ function formatMethodModel(m: NonNullable<Method['model']>): string {
   return cell(parts.join(', '));
 }
 
+function formatMethodAdapters(adapters: readonly AdapterMethodInfo[]): string {
+  return cell(
+    adapters
+      .map((a) => `${a.id} ${a.version ?? 'not installed'} (${a.status}; ${a.coverage})`)
+      .join('; '),
+  );
+}
+
 /** The method section, shared by run and mutation reports. */
 export function renderMethod(m: Method): string[] {
   const v = m.versions;
@@ -322,11 +381,12 @@ export function renderMethod(m: Method): string[] {
     '|---|---|',
     `| Versions | Miqyas ${v.miqyas}, Node ${v.node}, Playwright ${v.playwright}, Chromium ${v.browser ?? 'not launched'} |`,
     `| OS | ${m.os.platform} ${m.os.release} (${m.os.arch}) |`,
-    `| Model | ${m.model ? formatMethodModel(m.model) : 'none (dry run)'} |`,
-    `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'}${s.strict ? ', strict' : ''}${s.failOn && s.failOn !== 'none' ? `, fail-on ${s.failOn}` : ''}${s.crawl ? `, crawl (screens ${s.maxScreens ?? 50}, depth ${s.maxDepth ?? 3}, ${s.maxRps ?? 2} req/s)` : ''}${s.active ? `, active${s.allowWrites ? ' + writes' : ''}${s.allowHost ? ` (allow-host ${cell(s.allowHost)})` : ''}` : ''} |`,
+    `| Model | ${m.model ? formatMethodModel(m.model) : s.noModel ? 'none (--no-model)' : 'none (dry run)'} |`,
+    `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'}${s.strict ? ', strict' : ''}${s.failOn && s.failOn !== 'none' ? `, fail-on ${s.failOn}` : ''}${s.profile ? `, profile ${s.profile}` : ''}${s.repoProvided ? ', repo' : ''}${s.crawl ? `, crawl (screens ${s.maxScreens ?? 50}, depth ${s.maxDepth ?? 3}, ${s.maxRps ?? 2} req/s)` : ''}${s.active ? `, active${s.allowWrites ? ' + writes' : ''}${s.allowHost ? ` (allow-host ${cell(s.allowHost)})` : ''}` : ''} |`,
     `| Timeouts | plan ${t.planMs / 1000} s, navigation ${t.navigationMs / 1000} s, action ${t.actionMs / 1000} s |`,
     `| Preset | ${m.preset ? cell(m.preset) : 'none'} |`,
     `| Scrub rules | ${m.scrub.file ? `${cell(m.scrub.file)}, SHA-256 \`${m.scrub.sha256}\`, ${m.scrub.terms} term(s)` : 'none'} |`,
+    ...(m.adapters?.length ? [`| Adapters | ${formatMethodAdapters(m.adapters)} |`] : []),
     '',
   ];
 }
@@ -334,6 +394,13 @@ export function renderMethod(m: Method): string[] {
 /** Short terminal summary. */
 export function renderHuman(r: RunReport): string {
   const out: string[] = [];
+  if (r.readiness) {
+    out.push(r.readiness.summary);
+    if (r.readiness.whatToAdd.length) {
+      out.push(`What to add: ${r.readiness.whatToAdd.join('; ')}`);
+    }
+    out.push('');
+  }
   for (const p of r.plans) {
     if (r.dryRun) {
       out.push(`DRY    ${p.planId}  (${p.entries.length} steps, ${p.counts.assertions} assertions)${p.error ? `: ${p.error}` : ''}`);
