@@ -949,4 +949,133 @@ describe('CLI', () => {
     expect(docText).toContain(`model endpoint: ${mockEndpoint}`);
     expect(docText).toContain(`custom host 127.0.0.1:${addr.port}`);
   });
+
+  it('records to cassette.jsonl tagged with tier and replays deterministically in non-TTY CI with zero network or keys', async () => {
+    const planFile = path.join(tmp, 'cassette-e2e.json');
+    await writeFile(
+      planFile,
+      JSON.stringify({
+        format: 'miqyas-plan',
+        version: 1,
+        id: 'cas-e2e',
+        steps: [
+          { id: 's1', type: 'action', text: 'Verify page ready' },
+          { id: 'a1', type: 'assertion', text: "'Folder pairs' heading is visible" },
+        ],
+      }),
+    );
+
+    const cassetteFile = path.join(tmp, 'recorded', 'cassette.jsonl');
+    const recDir = path.join(tmp, 'cas-rec-out');
+    const replayDir = path.join(tmp, 'cas-replay-out');
+    const missDir = path.join(tmp, 'cas-miss-out');
+
+    // Phase 1: record using local mock OpenAI-compatible server
+    const mockServer = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { model?: string; messages?: Array<{ role: string; content: unknown }> };
+        const userText = JSON.stringify(body.messages ?? []);
+        const isJudge = userText.includes('Assertion to judge');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        if (!isJudge) {
+          res.end(
+            JSON.stringify({
+              model: body.model ?? 'qwen2.5-vl:7b',
+              choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [{ id: 't1', type: 'function', function: { name: 'step_done', arguments: '{"summary":"Ready"}' } }] } }],
+              usage: { prompt_tokens: 20, completion_tokens: 4 },
+            }),
+          );
+          return;
+        }
+        const refMatch = userText.match(/(c\d+e\d+)\s+heading\s+\\"Folder pairs\\"/);
+        const evidenceRefs = refMatch ? [refMatch[1]!] : ['c2e1'];
+        res.end(
+          JSON.stringify({
+            model: body.model ?? 'qwen2.5-vl:7b',
+            choices: [
+              {
+                finish_reason: 'tool_calls',
+                message: {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [{ id: 't2', type: 'function', function: { name: 'record_verdict', arguments: JSON.stringify({ verdict: 'pass', observation: 'Visible', evidence_refs: evidenceRefs }) } }],
+                },
+              },
+            ],
+            usage: { prompt_tokens: 25, completion_tokens: 5 },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => mockServer.listen(0, '127.0.0.1', () => resolve()));
+    const addr = mockServer.address() as { port: number };
+    const mockEndpoint = `http://127.0.0.1:${addr.port}/v1`;
+
+    try {
+      expect(
+        await main(
+          ['run', planFile, '--url', server.url, '--provider', 'openai', '--endpoint', mockEndpoint, '--model', 'qwen2.5-vl:7b', '--record', cassetteFile, '--out', recDir],
+          { isTTY: false, spendDir: tmp },
+        ),
+      ).toBe(0);
+    } finally {
+      // Shut down the mock model server completely before replay to guarantee zero network dependency!
+      await new Promise<void>((resolve) => mockServer.close(() => resolve()));
+    }
+    expect(existsSync(cassetteFile)).toBe(true);
+
+    // Phase 2: deterministic non-TTY CI replay with zero model keys and zero model server
+    const savedOpenAiKey = process.env.OPENAI_API_KEY;
+    const savedAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      expect(
+        await main(
+          ['run', planFile, '--url', server.url, '--replay', cassetteFile, '--out', replayDir],
+          { isTTY: false, spendDir: tmp },
+        ),
+      ).toBe(0);
+
+      const report = JSON.parse(await readFile(path.join(replayDir, 'report.json'), 'utf8')) as RunReport;
+      expect(report.verdict).toBe('pass');
+      expect(report.method.model).toMatchObject({
+        provider: 'openai',
+        model: 'qwen2.5-vl:7b',
+        replay: {
+          cassette: 'cassette.jsonl',
+          hits: 2,
+          misses: 0,
+          imageMismatches: 0,
+        },
+      });
+      expect(schemaErrors('report', report)).toEqual([]);
+
+      // Phase 3: modified plan step misses the cassette and fails closed with exit 3 (error, never pass/fail)
+      const changedPlan = path.join(tmp, 'cassette-miss.json');
+      await writeFile(
+        changedPlan,
+        JSON.stringify({
+          format: 'miqyas-plan',
+          version: 1,
+          id: 'cas-e2e',
+          steps: [
+            { id: 's1', type: 'action', text: 'Verify DIFFERENT page text' },
+            { id: 'a1', type: 'assertion', text: "'Folder pairs' heading is visible" },
+          ],
+        }),
+      );
+      expect(
+        await main(
+          ['run', changedPlan, '--url', server.url, '--replay', cassetteFile, '--out', missDir],
+          { isTTY: false, spendDir: tmp },
+        ),
+      ).toBe(3);
+    } finally {
+      if (savedOpenAiKey !== undefined) process.env.OPENAI_API_KEY = savedOpenAiKey;
+      if (savedAnthropicKey !== undefined) process.env.ANTHROPIC_API_KEY = savedAnthropicKey;
+    }
+  });
 });

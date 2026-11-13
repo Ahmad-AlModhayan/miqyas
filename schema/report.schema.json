@@ -49,7 +49,19 @@
         "effort": { "type": "string" },
         "tier": { "enum": ["low", "medium", "high"] },
         "endpoint": { "type": "string" },
-        "endpointHost": { "type": "string" }
+        "endpointHost": { "type": "string" },
+        "replay": {
+          "type": "object",
+          "required": ["cassette", "cassetteSha256", "hits", "misses", "imageMismatches"],
+          "additionalProperties": false,
+          "properties": {
+            "cassette": { "type": "string", "minLength": 1 },
+            "cassetteSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "hits": { "$ref": "#/$defs/count" },
+            "misses": { "$ref": "#/$defs/count" },
+            "imageMismatches": { "$ref": "#/$defs/count" }
+          }
+        }
       }
     },
     "spend": {

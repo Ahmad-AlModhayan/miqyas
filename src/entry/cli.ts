@@ -10,9 +10,10 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs, parseEnv } from 'node:util';
 import { createInterface } from 'node:readline/promises';
 import { buildApp, cloneState, exportTree, resolveCommit, SourceError } from '../adapters/bench-source.js';
-import type { Agent, PayloadEntry } from '../agents/agent.js';
+import { AgentError, type Agent, type PayloadEntry } from '../agents/agent.js';
 import { DEFAULT_MODEL } from '../agents/anthropic.js';
-import { DEFAULT_EFFORT } from '../agents/models.js';
+import { RecordingAgent, ReplayAgent } from '../agents/cassette.js';
+import { DEFAULT_EFFORT, validateEffort, validateProviderName, validateTier } from '../agents/models.js';
 import {
   createRoutedAgent,
   resolveRoute,
@@ -75,6 +76,8 @@ Options:
   --tier <level>         low | medium | high (default low -> ${DEFAULT_MODEL})
   --model <id>           pin a specific model id (overrides --tier; required for openai)
   --effort <level>       low | medium | high | xhigh | max (default ${DEFAULT_EFFORT})
+  --record <file>        record model interactions to cassette.jsonl
+  --replay <file>        replay recorded cassette.jsonl offline (zero network, works in CI)
   --concurrency <n>      plans in parallel (default 3)
   --scrub <name|file>    scrub rules applied to every text sent to the model
   --headed               show the browser
@@ -94,6 +97,8 @@ const OPTIONS = {
   tier: { type: 'string' },
   model: { type: 'string' },
   effort: { type: 'string' },
+  record: { type: 'string' },
+  replay: { type: 'string' },
   concurrency: { type: 'string' },
   scrub: { type: 'string' },
   rules: { type: 'string' },
@@ -161,6 +166,15 @@ async function promptTerminalCap(quote: RunQuote): Promise<string> {
   }
 }
 
+function validateCassetteFlags(o: Opts): void {
+  if (o.record !== undefined && !o.record.trim()) throw new UsageError('--record requires a cassette file path');
+  if (o.replay !== undefined && !o.replay.trim()) throw new UsageError('--replay requires a cassette file path');
+  if (o.record && o.replay) throw new UsageError('--record and --replay cannot be combined');
+  if (o.replay && o.endpoint) throw new UsageError('--endpoint cannot be combined with --replay');
+  if (o.replay && (o['dry-run'] || o['no-model'])) throw new UsageError('--replay cannot be combined with --dry-run or --no-model');
+  if (o.record && (o['dry-run'] || o['no-model'])) throw new UsageError('--record cannot be combined with --dry-run or --no-model');
+}
+
 async function prepareExecution(opts: {
   o: Opts;
   plans: Plan[];
@@ -170,6 +184,7 @@ async function prepareExecution(opts: {
   preset?: { mutations: readonly { plan: string }[] };
 }): Promise<{ agent: Agent | null; noModel: boolean; spendGuard?: SpendGuard; quote?: RunQuote }> {
   const { o, plans, runId: id, runDir, inject, preset } = opts;
+  validateCassetteFlags(o);
   if (o['dry-run']) return { agent: null, noModel: false };
   if (o['no-model']) {
     const now = inject.now?.() ?? new Date();
@@ -178,9 +193,29 @@ async function prepareExecution(opts: {
     const quote = quotePlans({ plans, model: null, noModel: true, ...(preset ? { preset } : {}), spentTodayUsd, now });
     return { agent: null, noModel: true, quote };
   }
+  if (o.replay) {
+    let validTier;
+    let validProvider;
+    let validEffort;
+    try {
+      validTier = validateTier(o.tier);
+      validProvider = validateProviderName(o.provider);
+      validEffort = o.effort !== undefined ? validateEffort(o.effort.trim()) : undefined;
+    } catch (e) {
+      throw new UsageError((e as Error).message);
+    }
+    const agent = await ReplayAgent.fromFile(o.replay, {
+      ...(validTier ? { tier: validTier } : {}),
+      ...(o.model ? { model: o.model } : {}),
+      ...(validProvider ? { provider: validProvider } : {}),
+      ...(validEffort ? { effort: validEffort } : {}),
+    });
+    return { agent, noModel: false };
+  }
+  const wrapRecord = (base: Agent): Agent => (o.record ? new RecordingAgent(base, { cassettePath: o.record }) : base);
   if (inject.agent) {
     return {
-      agent: inject.agent,
+      agent: wrapRecord(inject.agent),
       noModel: false,
       ...(inject.spendGuard ? { spendGuard: inject.spendGuard } : {}),
       ...(inject.quote ? { quote: inject.quote } : {}),
@@ -201,12 +236,12 @@ async function prepareExecution(opts: {
   }
 
   const payloads = path.join(runDir, 'payloads.jsonl');
-  const agent = createRoutedAgent({
+  const baseAgent = createRoutedAgent({
     route,
     ...(spendGuard ? { spend: spendGuard } : {}),
     log: (e: PayloadEntry) => appendFileSync(payloads, JSON.stringify(e) + '\n', 'utf8'),
   });
-  return { agent, noModel: false, ...(spendGuard ? { spendGuard } : {}), ...(quote ? { quote } : {}) };
+  return { agent: wrapRecord(baseAgent), noModel: false, ...(spendGuard ? { spendGuard } : {}), ...(quote ? { quote } : {}) };
 }
 
 async function confirmLiveSpend(opts: {
@@ -279,7 +314,9 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
     ? ' (dry run)'
     : exec.noModel
       ? ' (--no-model)'
-      : ` with ${exec.agent?.info?.model}${exec.agent?.info?.endpointHost && exec.agent.info.provider !== 'anthropic' ? ` (${exec.agent.info.provider} @ ${exec.agent.info.endpointHost})` : ''}`;
+      : o.replay
+        ? ` (replay ${path.basename(o.replay)})`
+        : ` with ${exec.agent?.info?.model}${exec.agent?.info?.endpointHost && exec.agent.info.provider !== 'anthropic' ? ` (${exec.agent.info.provider} @ ${exec.agent.info.endpointHost})` : ''}`;
   if (!o.json) process.stderr.write(`miqyas: ${plans.length} plan(s) against ${o.url}${modeLabel}; run folder ${runDir}\n`);
 
   const driver = await openWebSurfaceDriver({ headed: settings.headed, allowOtherOrigins: settings.allowOtherOrigins });
@@ -405,7 +442,10 @@ async function cmdMutate(args: string[], o: Opts, inject: Injected): Promise<num
 async function cmdBench(args: string[], o: Opts, inject: Injected): Promise<number> {
   const bench = BENCHES[args[0] ?? ''];
   if (!bench || args.length > 1) throw new UsageError(`usage: miqyas bench <${Object.keys(BENCHES).join('|')}> [--repo <clone>] [--commit <ref>] [--dry-run]`);
-  for (const k of ['url', 'build', 'preset', 'scrub', 'out'] as const) if (o[k]) throw new UsageError(`bench sets --${k} itself`);
+  for (const k of ['url', 'build', 'preset', 'scrub', 'out', 'record', 'replay'] as const) {
+    if (o[k]) throw new UsageError(k === 'record' || k === 'replay' ? `bench does not support --${k}` : `bench sets --${k} itself`);
+  }
+  validateCassetteFlags(o);
   const needsModel = !o['dry-run'] && !o['no-model'] && !inject.agent;
   // Stop before a long build when a live run can't start anyway.
   const route = resolveCliRoute(o, needsModel);
@@ -614,6 +654,7 @@ export function errorExit(e: unknown): number {
   if (
     e instanceof EnvError ||
     e instanceof RouteEnvError ||
+    e instanceof AgentError ||
     e instanceof BudgetError ||
     e instanceof BuildChangedError ||
     e instanceof SourceError

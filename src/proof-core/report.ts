@@ -248,6 +248,7 @@ function formatMethodModel(m: NonNullable<Method['model']>): string {
   ];
   if (m.tier) parts.push(`tier ${m.tier}`);
   if (m.endpoint) parts.push(`endpoint ${m.endpointHost && m.endpointHost !== 'api.anthropic.com' ? `${m.endpoint} (host ${m.endpointHost})` : m.endpoint}`);
+  if (m.replay) parts.push(`replay ${m.replay.cassette} (${m.replay.hits} hits, ${m.replay.misses} misses, ${m.replay.imageMismatches} visual mismatch(es))`);
   return cell(parts.join(', '));
 }
 
