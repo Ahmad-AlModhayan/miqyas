@@ -3,7 +3,7 @@
 // rendered (computed style, non-zero box larger than 1×1 px, not transparent): text that is only in the markup is
 // not visible (SRS FR-L5), and screen-reader-only copies are not duplicates.
 
-import type { Page } from 'playwright';
+import type { ElementHandle, Page } from 'playwright';
 import { PNG } from 'pngjs';
 import { jsonQuote } from '../../scrub/scrub.js';
 import type { Box, EvidenceNode, Observation, ObserveOptions, SnapNode } from '../session.js';
@@ -87,6 +87,7 @@ const SNAPSHOT_FN = String.raw`(arg) => {
   const INTERACTIVE = new Set(['button', 'link', 'textbox', 'checkbox', 'radio', 'combobox', 'slider', 'switch', 'tab', 'menuitem', 'option', 'searchbox', 'spinbutton']);
   const ALWAYS = new Set(['heading', 'dialog', 'alertdialog', 'alert', 'status', 'navigation', 'main', 'complementary', 'listitem', 'img', 'progressbar', 'tabpanel', 'region', 'table', 'row', 'cell', 'columnheader', 'group', 'legend', 'label', 'tablist', 'menu', 'list', 'form']);
   const out = [];
+  const handles = Object.create(null);
   let n = 0;
   let truncated = false;
   const sx = window.scrollX, sy = window.scrollY;
@@ -104,10 +105,12 @@ const SNAPSHOT_FN = String.raw`(arg) => {
         const r = el.getBoundingClientRect();
         const finalRole = role || (directText ? 'text' : 'generic');
         const ref = prefix + (++n);
-        el.setAttribute('data-miqyas-ref', ref);
+        const testId = el.getAttribute('data-testid') || '';
+        handles[ref] = el;
         const name = finalRole === 'text' ? cut(directText, 160) : nameOf(el, finalRole);
-        out.push({ ref, role: finalRole, name, depth, state: stateOf(el, finalRole),
-          box: { x: Math.round(r.left + sx), y: Math.round(r.top + sy), width: Math.round(r.width), height: Math.round(r.height) } });
+        out[out.length] = { ref, role: finalRole, name, depth, state: stateOf(el, finalRole),
+          ...(testId ? { testId } : {}),
+          box: { x: Math.round(r.left + sx), y: Math.round(r.top + sy), width: Math.round(r.width), height: Math.round(r.height) } };
         childDepth = depth + 1;
         // Leaf controls: their text is their name.
         if (INTERACTIVE.has(finalRole) && finalRole !== 'option') return;
@@ -117,8 +120,15 @@ const SNAPSHOT_FN = String.raw`(arg) => {
   };
   walk(document.body, 0);
   const de = document.documentElement;
-  return { nodes: out, truncated, url: location.href, title: document.title, lang: de.getAttribute('lang') || '', dir: de.getAttribute('dir') || getComputedStyle(document.body).direction,
-    bodyDirection: getComputedStyle(document.body).direction, viewport: { width: innerWidth, height: innerHeight } };
+  const renderedText = cut(collapse((document.body && (document.body.innerText || document.body.textContent)) || ''), 65536);
+  return {
+    meta: {
+      nodes: out, truncated, renderedText, url: location.href, title: document.title, lang: de.getAttribute('lang') || '',
+      dir: de.getAttribute('dir') || getComputedStyle(document.body).direction,
+      bodyDirection: getComputedStyle(document.body).direction, viewport: { width: innerWidth, height: innerHeight },
+    },
+    handles,
+  };
 }`;
 
 // Runs in each frame just before the screenshot: paints over secret values so the pixels don't carry them, without
@@ -247,6 +257,7 @@ function fromPage(raw: unknown, capture: number, hide: (t: string) => string) {
     seen.add(n.ref);
     const role = str(n.role, 40).toLowerCase();
     const b = obj(n.box);
+    const testId = str(n.testId, 100);
     nodes.push({
       ref: n.ref,
       role: /^[a-z-]+$/.test(role) ? role : 'generic',
@@ -254,52 +265,110 @@ function fromPage(raw: unknown, capture: number, hide: (t: string) => string) {
       depth: int(n.depth, 0, 100),
       box: { x: int(b.x, -1e6, 1e6), y: int(b.y, -1e6, 1e6), width: int(b.width, 0, 1e6), height: int(b.height, 0, 1e6) },
       state: stateText(n.state, hide),
+      ...(testId ? { testId } : {}),
     });
   }
   const vp = obj(r.viewport);
-  return { nodes, truncated: r.truncated === true, url: str(r.url), title: str(r.title, 500), lang: str(r.lang, 40), dir: str(r.dir, 10), viewport: { width: int(vp.width, 0, 1e5), height: int(vp.height, 0, 1e5) } };
+  const renderedText = hide(str(r.renderedText, 65536));
+  return { nodes, truncated: r.truncated === true, ...(renderedText ? { renderedText } : {}), url: str(r.url), title: str(r.title, 500), lang: str(r.lang, 40), dir: str(r.dir, 10), viewport: { width: int(vp.width, 0, 1e5), height: int(vp.height, 0, 1e5) } };
 }
 
-export async function observe(page: Page, opts: ObserveOptions = {}): Promise<Observation> {
+export interface SnapshotWithHandles {
+  observation: Observation;
+  handles: Map<string, ElementHandle<Element>>;
+}
+
+export async function observeWithHandles(page: Page, opts: ObserveOptions = {}): Promise<SnapshotWithHandles> {
   const capture = ++captureCounter;
-  const raw = fromPage(await page.evaluate(`(${SNAPSHOT_FN})(${JSON.stringify({ capture, max: opts.maxNodes ?? 700 })})`), capture, opts.hide ?? ((t) => t));
-  const blind = opts.secrets ? await maskSecrets(page, opts.secrets) : 0;
+  const hide = opts.hide ?? ((t) => t);
+  const result = await page.evaluateHandle(`(${SNAPSHOT_FN})(${JSON.stringify({ capture, max: opts.maxNodes ?? 700 })})`);
+  const handles = new Map<string, ElementHandle<Element>>();
+  let raw: ReturnType<typeof fromPage>;
+  try {
+    let metaHandle: Awaited<ReturnType<typeof result.getProperty>> | undefined;
+    let handlesHandle: Awaited<ReturnType<typeof result.getProperty>> | undefined;
+    try {
+      metaHandle = await result.getProperty('meta');
+      handlesHandle = await result.getProperty('handles');
+      raw = fromPage(await metaHandle.jsonValue(), capture, hide);
+      const props = await handlesHandle.getProperties();
+      const validRefs = new Set(raw.nodes.map((n) => n.ref));
+      for (const [k, prop] of props.entries()) {
+        const el = prop.asElement();
+        if (el && validRefs.has(k)) {
+          handles.set(k, el);
+        } else {
+          await prop.dispose().catch(() => {});
+        }
+      }
+    } finally {
+      await metaHandle?.dispose().catch(() => {});
+      await handlesHandle?.dispose().catch(() => {});
+    }
+  } catch (e) {
+    for (const h of handles.values()) await h.dispose().catch(() => {});
+    handles.clear();
+    throw e;
+  } finally {
+    await result.dispose().catch(() => {});
+  }
+
+  let blind = 0;
   let png: Buffer;
   try {
+    blind = opts.secrets ? await maskSecrets(page, opts.secrets) : 0;
     png = await page.screenshot({ fullPage: true, type: 'png', animations: 'disabled', caret: 'hide' });
+  } catch (e) {
+    for (const h of handles.values()) await h.dispose().catch(() => {});
+    handles.clear();
+    throw e;
   } finally {
     if (opts.secrets) await Promise.all(page.frames().map((f) => f.evaluate(UNMASK).catch(() => {})));
   }
   return {
-    capture,
-    url: raw.url,
-    title: raw.title,
-    lang: raw.lang,
-    dir: raw.dir,
-    viewport: raw.viewport,
-    nodes: raw.nodes.map((n) => ({ ...n, locator: locatorFor(n.role, n.name) })),
-    truncated: raw.truncated,
-    png,
-    capturedAt: new Date(),
-    ...(blind ? { unmasked: `screenshot may show an unmasked secret: ${blind} canvas, embed or frame not checked` } : {}),
+    observation: {
+      capture,
+      url: raw.url,
+      title: raw.title,
+      lang: raw.lang,
+      dir: raw.dir,
+      viewport: raw.viewport,
+      nodes: raw.nodes.map((n) => ({ ...n, locator: locatorFor(n.role, n.name) })),
+      truncated: raw.truncated,
+      ...(raw.renderedText ? { renderedText: raw.renderedText } : {}),
+      png,
+      capturedAt: new Date(),
+      ...(blind ? { unmasked: `screenshot may show an unmasked secret: ${blind} canvas, embed or frame not checked` } : {}),
+    },
+    handles,
   };
+}
+
+export async function observe(page: Page, opts: ObserveOptions = {}): Promise<Observation> {
+  const { observation, handles } = await observeWithHandles(page, opts);
+  for (const h of handles.values()) await h.dispose().catch(() => {});
+  return observation;
 }
 
 /** The snapshot as text for the model: one line per rendered node, indented by nesting. Page text (url, title, lang,
  * dir, names, and the values in a state) is written as JSON strings, so it can't end its field or its line. */
-export function snapshotText(o: Observation): string {
+export function snapshotText(o: Observation, nodesOverride?: readonly SnapNode[]): string {
   const head = `capture ${o.capture} · ${jsonQuote(o.url)} · title ${jsonQuote(o.title)} · lang=${jsonQuote(o.lang)} dir=${jsonQuote(o.dir)} · viewport ${o.viewport.width}x${o.viewport.height}`;
-  const lines = o.nodes.map((n) => {
+  const list = nodesOverride ?? o.nodes;
+  const lines = list.map((n) => {
     const b = n.box;
     return `${'  '.repeat(Math.min(n.depth, 12))}${n.ref} ${n.role}${n.name ? ` ${jsonQuote(n.name)}` : ''}${n.state ? ` [${n.state}]` : ''} @${b.x},${b.y} ${b.width}x${b.height}`;
   });
-  if (o.truncated) lines.push('(snapshot truncated)');
+  if (o.truncated || (nodesOverride && nodesOverride.length < o.nodes.length)) {
+    lines.push('(snapshot truncated)');
+  }
   return [head, ...lines].join('\n');
 }
 
 export function toEvidenceNode(n: SnapNode): EvidenceNode {
   const e: EvidenceNode = { ref: n.ref, role: n.role, name: n.name, box: n.box };
   if (n.state) e.state = n.state;
+  if (n.testId) e.testId = n.testId;
   return e;
 }
 

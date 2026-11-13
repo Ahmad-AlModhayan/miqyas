@@ -15,6 +15,7 @@ export interface EvidenceNode {
   role: string;
   name: string;
   state?: string;
+  testId?: string;
   box: Box;
 }
 
@@ -58,6 +59,8 @@ export interface SnapNode {
   state: string;
   /** Surface locator expression by role and accessible name (or text), for exports and action logs. */
   locator: string;
+  /** Optional `data-testid` attribute captured at snapshot time (bounded, scrubbed). */
+  testId?: string;
 }
 
 export interface Observation {
@@ -71,6 +74,8 @@ export interface Observation {
   truncated: boolean;
   png: Buffer;
   capturedAt: Date;
+  /** Full rendered page text (scrubbed/bounded) scanned by Proof Core detectors so truncated nodes cannot hide injections. */
+  renderedText?: string;
   /** Set when the screenshot may show a secret that could not be masked (a canvas, embed, or unreadable frame). */
   unmasked?: string;
 }

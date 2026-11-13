@@ -2,7 +2,7 @@
 // OpenAI-compatible chat-with-images provider (Ollama, vLLM, OpenAI-compatible endpoints) behind the Agent seam.
 // Re-scans scrubbed payloads, checks spend, and logs to payloads.jsonl via gateCall BEFORE any HTTP request leaves.
 
-import type { Observation } from '../surfaces/session.js';
+import type { Observation, SnapNode } from '../surfaces/session.js';
 import {
   AgentError,
   gateCall,
@@ -20,17 +20,22 @@ import {
 import { sanitizeEndpointUrl } from './models.js';
 import {
   ACT_SYSTEM,
-  ACT_TOOL_SPECS,
   JUDGE_SYSTEM,
-  JUDGE_TOOL_SPECS,
   actInitialText,
+  buildActToolSpecs,
+  buildJudgeToolSpecs,
   captureText,
   croppedPngBase64,
+  isCandidateAction,
   isPlainObject,
   judgeInitialText,
+  nonCandidateRefMessage,
   parseLookAgainSeconds,
   parseVerdictInput,
   recordAgentUsage,
+  restrictJudgeEvidence,
+  selectActCandidates,
+  selectJudgeCandidates,
   toAction,
   type ToolSpec,
 } from './protocol.js';
@@ -86,9 +91,6 @@ const toOpenAITools = (specs: readonly ToolSpec[]): OpenAITool[] =>
     function: { name: s.name, description: s.description, parameters: s.input_schema },
   }));
 
-const ACT_TOOLS = toOpenAITools(ACT_TOOL_SPECS);
-const JUDGE_TOOLS = toOpenAITools(JUDGE_TOOL_SPECS);
-
 export function chatCompletionsUrl(baseEndpoint: string): string {
   const clean = sanitizeEndpointUrl(baseEndpoint);
   const u = new URL(clean.endpoint);
@@ -99,10 +101,10 @@ export function chatCompletionsUrl(baseEndpoint: string): string {
   return u.href;
 }
 
-function captureParts(label: string, o: Observation, scrub: (s: string) => string): ContentPart[] {
+function captureParts(label: string, o: Observation, scrub: (s: string) => string, candidates?: readonly SnapNode[]): ContentPart[] {
   const { base64 } = croppedPngBase64(o);
   return [
-    { type: 'text', text: captureText(label, o, scrub) },
+    { type: 'text', text: captureText(label, o, scrub, candidates) },
     { type: 'image_url', image_url: { url: `data:image/png;base64,${base64}` } },
   ];
 }
@@ -260,16 +262,21 @@ export class OpenAIAgent implements Agent {
   }
 
   async act(ctx: ActContext): Promise<ActOutcome> {
+    let latestObs = ctx.observation;
+    let candidates = selectActCandidates(latestObs, ctx.step);
     const firstUser: ChatMessage = {
       role: 'user',
-      content: [{ type: 'text', text: actInitialText(ctx) }, ...captureParts('Latest capture:', ctx.observation, ctx.scrub)],
+      content: [{ type: 'text', text: actInitialText(ctx) }, ...captureParts('Latest capture:', latestObs, ctx.scrub, candidates)],
     };
     const messages: ChatMessage[] = [{ role: 'system', content: ACT_SYSTEM }, firstUser];
     let pendingNewest: ChatMessage[] = [firstUser];
     let nudged = false;
 
     for (let turn = 0; turn < this.maxActTurns; turn++) {
-      const reply = await this.call('act', ctx, ACT_TOOLS, messages, pendingNewest);
+      const candidateRefs = candidates.map((n) => n.ref);
+      const candidateRefSet = new Set(candidateRefs);
+      const tools = toOpenAITools(buildActToolSpecs(candidateRefs));
+      const reply = await this.call('act', ctx, tools, messages, pendingNewest);
       messages.push({
         role: 'assistant',
         content: reply.content ?? (reply.toolCalls.length ? null : ''),
@@ -286,7 +293,7 @@ export class OpenAIAgent implements Agent {
       }
 
       const added: ChatMessage[] = [];
-      let lastObs: Observation | undefined;
+      let executedObs: Observation | undefined;
       for (const tc of reply.toolCalls) {
         let input: unknown;
         try {
@@ -307,13 +314,25 @@ export class OpenAIAgent implements Agent {
           added.push({ role: 'tool', tool_call_id: tc.id, content: `unknown tool ${tc.function.name}` });
           continue;
         }
+        if (!isCandidateAction(action, candidateRefSet)) {
+          added.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            content: ctx.scrub(nonCandidateRefMessage(action)),
+          });
+          continue;
+        }
         const r = await ctx.execute(action);
-        lastObs = r.observation;
+        latestObs = r.observation;
+        executedObs = r.observation;
+        candidates = selectActCandidates(latestObs, ctx.step);
+        candidateRefSet.clear();
+        for (const n of candidates) candidateRefSet.add(n.ref);
         added.push({ role: 'tool', tool_call_id: tc.id, content: ctx.scrub(r.ok ? r.message : `error: ${r.message}`) });
       }
       // OpenAI chat completions expects role:'tool' to be plain text; attach the post-action screenshot in a user message.
-      if (lastObs) {
-        added.push({ role: 'user', content: captureParts('Capture after this action:', lastObs, ctx.scrub) });
+      if (executedObs) {
+        added.push({ role: 'user', content: captureParts('Capture after this action:', executedObs, ctx.scrub, candidates) });
       }
       messages.push(...added);
       pendingNewest = added;
@@ -323,17 +342,22 @@ export class OpenAIAgent implements Agent {
 
   async judge(ctx: JudgeContext): Promise<JudgeOutcome> {
     const parts: ContentPart[] = [{ type: 'text', text: judgeInitialText(ctx) }];
+    const shownRefs = new Set<string>();
+    const addJudgeCapture = (label: string, obs: Observation) => {
+      const candidates = selectJudgeCandidates(obs, ctx.step);
+      for (const n of candidates) shownRefs.add(n.ref);
+      return captureParts(label, obs, ctx.scrub, candidates);
+    };
     if (ctx.postAction && ctx.postAction.capture !== ctx.current.capture) {
       const ago = ((ctx.current.capturedAt.getTime() - ctx.postAction.capturedAt.getTime()) / 1000).toFixed(1);
       parts.push(
-        ...captureParts(
+        ...addJudgeCapture(
           `Capture ${ctx.postAction.capture}, taken right after the previous action (${ago} s before the current one):`,
           ctx.postAction,
-          ctx.scrub,
         ),
       );
     }
-    parts.push(...captureParts(`Capture ${ctx.current.capture}, current state:`, ctx.current, ctx.scrub));
+    parts.push(...addJudgeCapture(`Capture ${ctx.current.capture}, current state:`, ctx.current));
 
     const firstUser: ChatMessage = { role: 'user', content: parts };
     const messages: ChatMessage[] = [{ role: 'system', content: JUDGE_SYSTEM }, firstUser];
@@ -342,7 +366,8 @@ export class OpenAIAgent implements Agent {
     let nudged = false;
 
     for (let turn = 0; turn < 5; turn++) {
-      const reply = await this.call('judge', ctx, JUDGE_TOOLS, messages, pendingNewest);
+      const tools = toOpenAITools(buildJudgeToolSpecs([...shownRefs]));
+      const reply = await this.call('judge', ctx, tools, messages, pendingNewest);
       messages.push({
         role: 'assistant',
         content: reply.content ?? (reply.toolCalls.length ? null : ''),
@@ -357,7 +382,7 @@ export class OpenAIAgent implements Agent {
         } catch {
           return { verdict: 'none', reason: 'record_verdict with invalid JSON arguments' };
         }
-        return parseVerdictInput(parsed);
+        return restrictJudgeEvidence(parseVerdictInput(parsed), shownRefs);
       }
 
       if (reply.toolCalls.length === 0) {
@@ -394,7 +419,7 @@ export class OpenAIAgent implements Agent {
       if (lastLook) {
         added.push({
           role: 'user',
-          content: captureParts(`Capture ${lastLook.obs.capture}, after ${lastLook.secs} s:`, lastLook.obs, ctx.scrub),
+          content: addJudgeCapture(`Capture ${lastLook.obs.capture}, after ${lastLook.secs} s:`, lastLook.obs),
         });
       }
       messages.push(...added);

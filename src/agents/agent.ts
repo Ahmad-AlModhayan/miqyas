@@ -2,7 +2,7 @@
 // The agent interface: a provider carries out action steps (act) and judges assertions (judge). Providers are
 // pluggable; Anthropic is the default. The runner owns the browser; agents only see observations and call tools.
 
-import type { ActTool, Check, Observation } from '../surfaces/session.js';
+import type { ActTool, Check, Locator, Observation } from '../surfaces/session.js';
 import { AgentError, type Tier } from './models.js';
 import type { SpendBucket, SpendGuard } from './spend.js';
 
@@ -40,6 +40,7 @@ export interface AgentStep {
   type: 'action' | 'assertion';
   text: string;
   check?: Check;
+  cite?: Locator;
 }
 
 export interface ToolExecution {

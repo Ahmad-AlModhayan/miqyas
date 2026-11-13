@@ -3,7 +3,8 @@
 // has a recorded pass; the verdict is computed from the entries, never taken from a model's overall impression.
 
 import path from 'node:path';
-import type { Box, EvidenceNode } from '../surfaces/session.js';
+import { extractQuotedTexts, matchesCiteLocator } from '../agents/protocol.js';
+import type { Box, EvidenceNode, Locator } from '../surfaces/session.js';
 import type { Plan, Step } from './plan.js';
 
 export type { Box, EvidenceNode } from '../surfaces/session.js';
@@ -31,6 +32,8 @@ export interface AssertionEntry {
   observation: string;
   /** Why the verdict is not a plain pass or fail (blocked, unverified, not checked). */
   reason?: string;
+  /** True when the assertion had neither a `cite` locator nor quoted text to verify in code. */
+  modelOnly?: boolean;
   evidence?: Evidence;
   durationMs?: number;
 }
@@ -68,6 +71,7 @@ export interface PlanCounts {
   notChecked: number;
   blocked: number;
   unverified: number;
+  modelOnly?: number;
 }
 
 export interface PlanResult {
@@ -82,16 +86,34 @@ export interface PlanResult {
   durationMs: number;
 }
 
+function normalizeMatchText(s: string): string {
+  return s.trim().replace(/^[\s.,:;!?'"()[\]]+|[\s.,:;!?'"()[\]]+$/g, '').toLowerCase();
+}
+
+function nodeMatchesQuotedText(node: EvidenceNode, rawQuoted: string): boolean {
+  const hayRaw = `${node.name}\n${node.state ?? ''}`.toLowerCase();
+  if (hayRaw.includes(rawQuoted.trim().toLowerCase())) return true;
+  const qNorm = normalizeMatchText(rawQuoted);
+  if (!qNorm) return false;
+  return normalizeMatchText(node.name).includes(qNorm) || normalizeMatchText(node.state ?? '').includes(qNorm);
+}
+
 /**
- * A judge's raw opinion becomes a ledger verdict here. A "pass" counts only with an observation and at least one
- * cited node that resolved to something on the page: otherwise it is `unverified`, which fails the plan.
+ * A judge's raw opinion becomes a ledger verdict here. A "pass" counts only with an observation, at least one
+ * cited node on the page, and (when quoted text or a `cite` locator is present) a code-verified match; otherwise
+ * it becomes `unverified`. Assertions with nothing to cite are marked `modelOnly` (`--strict` or page injection
+ * downgrades them to `unverified`).
  */
 export function settleJudgement(j: {
   verdict: 'pass' | 'fail';
   observation: string;
   nodes: EvidenceNode[];
+  allResolvedNodes?: EvidenceNode[];
   unresolvedRefs: string[];
-}): { verdict: Verdict; reason?: string } {
+  assertion?: { text: string; cite?: Locator };
+  strict?: boolean;
+  injectionDetected?: boolean;
+}): { verdict: Verdict; modelOnly?: boolean; reason?: string } {
   if (j.verdict === 'fail') return { verdict: 'fail' };
   if (!j.observation.trim()) return { verdict: 'unverified', reason: 'the judge passed it without saying what it saw' };
   if (j.nodes.length === 0) {
@@ -100,7 +122,47 @@ export function settleJudgement(j: {
       : 'the judge passed it without citing a node';
     return { verdict: 'unverified', reason: why };
   }
-  return { verdict: 'pass' };
+  if (!j.assertion) return { verdict: 'pass' };
+
+  const pool = j.allResolvedNodes?.length ? j.allResolvedNodes : j.nodes;
+  const quoted = extractQuotedTexts(j.assertion.text);
+  if (j.assertion.cite) {
+    const matched = pool.some((n) => matchesCiteLocator(n, j.assertion!.cite!));
+    if (!matched) {
+      return {
+        verdict: 'unverified',
+        reason: `cited node(s) did not match cite locator ${JSON.stringify(j.assertion.cite)}`,
+      };
+    }
+  }
+  if (quoted.length > 0) {
+    const missing = quoted.filter((q) => !pool.some((n) => nodeMatchesQuotedText(n, q)));
+    if (missing.length > 0) {
+      return {
+        verdict: 'unverified',
+        reason: `cited node(s) did not match quoted assertion text (${missing.map((m) => `'${m}'`).join(', ')})`,
+      };
+    }
+  }
+  if (j.assertion.cite || quoted.length > 0) {
+    return { verdict: 'pass' };
+  }
+
+  if (j.injectionDetected) {
+    return {
+      verdict: 'unverified',
+      modelOnly: true,
+      reason: 'model-only pass invalidated by prompt-injection text on this screen',
+    };
+  }
+  if (j.strict) {
+    return {
+      verdict: 'unverified',
+      modelOnly: true,
+      reason: 'model-only pass rejected by --strict (add quoted text, a cite locator, or a code check)',
+    };
+  }
+  return { verdict: 'pass', modelOnly: true };
 }
 
 export class PlanLedger {
@@ -173,12 +235,14 @@ export class PlanLedger {
 }
 
 export function countEntries(entries: LedgerEntry[]): PlanCounts {
-  const c: PlanCounts = { assertions: 0, passed: 0, failed: 0, notChecked: 0, blocked: 0, unverified: 0 };
+  const c: PlanCounts = { assertions: 0, passed: 0, failed: 0, notChecked: 0, blocked: 0, unverified: 0, modelOnly: 0 };
   for (const e of entries) {
     if (e.kind !== 'assertion') continue;
     c.assertions++;
-    if (e.verdict === 'pass') c.passed++;
-    else if (e.verdict === 'fail') c.failed++;
+    if (e.verdict === 'pass') {
+      c.passed++;
+      if (e.modelOnly) c.modelOnly = (c.modelOnly ?? 0) + 1;
+    } else if (e.verdict === 'fail') c.failed++;
     else if (e.verdict === 'not_checked') c.notChecked++;
     else if (e.verdict === 'blocked') c.blocked++;
     else c.unverified++;

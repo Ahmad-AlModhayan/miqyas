@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: PolyForm-Shield-1.0.0
 // Shared Miqyas agent prompts, strict tool schemas, capture formatting, usage accounting, and action mapping.
 
-import type { Observation } from '../surfaces/session.js';
+import type { EvidenceNode, Locator, Observation, SnapNode } from '../surfaces/session.js';
 import { cropPng, snapshotText } from '../surfaces/web/observe.js';
 import {
   AgentError,
   type ActContext,
   type ActTool,
+  type AgentStep,
   type JudgeOutcome,
   type StepHistory,
   type Usage,
@@ -123,9 +124,210 @@ export function judgeInitialText(ctx: Pick<ActContext, 'plan' | 'history' | 'ste
   return ctx.scrub(`Plan: ${ctx.plan.name}\nSteps so far:\n${historyText(ctx.history)}\n\nAssertion to judge (${ctx.step.id}): ${ctx.step.text}`);
 }
 
+const MAX_ACT_CANDIDATES = 250;
+const MAX_JUDGE_CANDIDATES = 80;
+
+const ACTABLE_ROLES = new Set([
+  'button', 'link', 'textbox', 'checkbox', 'radio', 'combobox', 'slider', 'switch',
+  'tab', 'menuitem', 'option', 'searchbox', 'spinbutton',
+]);
+
+const JUDGE_SEMANTIC_ROLES = new Set([
+  ...ACTABLE_ROLES,
+  'heading', 'alert', 'alertdialog', 'dialog', 'status', 'navigation', 'main',
+  'listitem', 'img', 'progressbar', 'tabpanel', 'region', 'table', 'row',
+  'cell', 'columnheader', 'label',
+]);
+
+const STEP_STOPWORDS = new Set([
+  'the', 'and', 'for', 'are', 'with', 'that', 'this', 'from', 'into', 'onto',
+  'shown', 'visible', 'hidden', 'present', 'displayed', 'appears', 'heading',
+  'screen', 'page', 'button', 'link', 'field', 'input', 'click', 'type',
+  'select', 'wait', 'until', 'again', 'should', 'must', 'lists', 'list',
+]);
+
+export function extractQuotedTexts(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (raw: string) => {
+    const clean = raw.trim();
+    if (clean && !seen.has(clean)) {
+      seen.add(clean);
+      out.push(clean);
+    }
+  };
+  for (const m of text.matchAll(/(?:^|[^\p{L}\p{N}_])'([^'\n]+)'|"([^"\n]+)"/gu)) add((m[1] ?? m[2])!);
+  return out;
+}
+
+function stepKeywords(text: string): string[] {
+  const words = text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+  return [...new Set(words.filter((w) => !STEP_STOPWORDS.has(w)))];
+}
+
+export function matchesCiteLocator(
+  node: Pick<EvidenceNode, 'role' | 'name' | 'state' | 'testId'>,
+  loc: Locator,
+): boolean {
+  let constrained = false;
+  if (loc.role !== undefined) {
+    constrained = true;
+    if (node.role.toLowerCase() !== loc.role.trim().toLowerCase()) return false;
+  }
+  if (loc.name !== undefined) {
+    constrained = true;
+    if (!node.name.toLowerCase().includes(loc.name.trim().toLowerCase())) return false;
+  }
+  if (loc.text !== undefined) {
+    constrained = true;
+    const target = loc.text.trim().toLowerCase();
+    const hay = `${node.name}\n${node.state ?? ''}`.toLowerCase();
+    if (!hay.includes(target)) return false;
+  }
+  if (loc.label !== undefined) {
+    constrained = true;
+    if (!node.name.toLowerCase().includes(loc.label.trim().toLowerCase())) return false;
+  }
+  if (loc.testId !== undefined) {
+    constrained = true;
+    if ((node.testId ?? '').trim().toLowerCase() !== loc.testId.trim().toLowerCase()) return false;
+  }
+  return constrained;
+}
+
+function isRenderedNode(n: SnapNode): boolean {
+  return n.box.width > 1 && n.box.height > 1;
+}
+
+function matchesAnyQuery(n: SnapNode, phrases: readonly string[]): boolean {
+  if (phrases.length === 0) return false;
+  const hay = `${n.name}\n${n.state}`.toLowerCase();
+  return phrases.some((p) => hay.includes(p.toLowerCase()));
+}
+
+/** Narrow an observation down to code-supplied actionable/relevant candidate nodes for `act`. */
+export function selectActCandidates(obs: Observation, step: Pick<AgentStep, 'text'>): SnapNode[] {
+  const quoted = extractQuotedTexts(step.text);
+  const keywords = stepKeywords(step.text);
+  const hasWait = /\bwait\b/i.test(step.text);
+  const picked: SnapNode[] = [];
+  for (const n of obs.nodes) {
+    if (!isRenderedNode(n)) continue;
+    const isInteractive = ACTABLE_ROLES.has(n.role);
+    const matchesQuoted = matchesAnyQuery(n, quoted);
+    const matchesWait = hasWait && (['alert', 'alertdialog', 'dialog', 'status', 'heading', 'progressbar'].includes(n.role) || matchesAnyQuery(n, keywords));
+    const matchesNamedControl = (n.role === 'label' || n.role === 'listitem' || n.role === 'row' || n.role === 'text') && matchesQuoted;
+    if (isInteractive || matchesQuoted || matchesWait || matchesNamedControl) {
+      picked.push(n);
+      if (picked.length >= MAX_ACT_CANDIDATES) break;
+    }
+  }
+  return picked;
+}
+
+/** Narrow an observation down to rendered candidate nodes relevant for `judge` inside `<page_data>`. */
+export function selectJudgeCandidates(obs: Observation, step: Pick<AgentStep, 'text' | 'cite'>): SnapNode[] {
+  const quoted = extractQuotedTexts(step.text);
+  const keywords = stepKeywords(step.text);
+  const scored: { node: SnapNode; idx: number; score: number }[] = [];
+  obs.nodes.forEach((n, idx) => {
+    if (!isRenderedNode(n)) return;
+    if (n.role === 'generic' && !n.name && !n.state) return;
+    let score = 0;
+    if (step.cite && matchesCiteLocator(n, step.cite)) score += 100;
+    if (matchesAnyQuery(n, quoted)) score += 80;
+    if (matchesAnyQuery(n, keywords)) score += 20;
+    if (JUDGE_SEMANTIC_ROLES.has(n.role)) score += 10;
+    scored.push({ node: n, idx, score });
+  });
+  const positive = scored.filter((s) => s.score > 0);
+  const pool = positive.length > 0 ? positive : scored;
+  if (pool.length <= MAX_JUDGE_CANDIDATES) return pool.map((s) => s.node);
+  return pool
+    .slice()
+    .sort((a, b) => b.score - a.score || a.idx - b.idx)
+    .slice(0, MAX_JUDGE_CANDIDATES)
+    .sort((a, b) => a.idx - b.idx)
+    .map((s) => s.node);
+}
+
+/** Build `act` tool definitions with ref parameters locked to code-supplied candidates. */
+export function buildActToolSpecs(candidateRefs: readonly string[]): ToolSpec[] {
+  const refSchema = candidateRefs.length > 0
+    ? { ...REF, enum: [...candidateRefs] }
+    : undefined;
+  const scrollRefSchema = candidateRefs.length > 0
+    ? { type: 'string', enum: ['', ...candidateRefs], description: 'A candidate ref to bring into view, or "" to scroll the page' }
+    : { type: 'string', enum: [''], description: 'Use "" to scroll the page' };
+
+  const out: ToolSpec[] = [];
+  for (const spec of ACT_TOOL_SPECS) {
+    if (spec.name === 'click' || spec.name === 'fill' || spec.name === 'select_option') {
+      if (!refSchema) continue;
+      out.push({
+        ...spec,
+        input_schema: strictObject({ ...spec.input_schema.properties, ref: refSchema }, spec.input_schema.required),
+      });
+    } else if (spec.name === 'scroll') {
+      out.push({
+        ...spec,
+        input_schema: strictObject({ ...spec.input_schema.properties, ref: scrollRefSchema }, spec.input_schema.required),
+      });
+    } else {
+      out.push(spec);
+    }
+  }
+  return out;
+}
+
+/** Build `judge` tool definitions constraining `evidence_refs` to shown candidate refs when present. */
+export function buildJudgeToolSpecs(candidateRefs: readonly string[]): ToolSpec[] {
+  return JUDGE_TOOL_SPECS.map((spec) => {
+    if (spec.name !== 'record_verdict' || candidateRefs.length === 0) return spec;
+    return {
+      ...spec,
+      input_schema: strictObject(
+        {
+          ...spec.input_schema.properties,
+          evidence_refs: {
+            type: 'array',
+            items: { type: 'string', enum: [...candidateRefs] },
+            description: 'Refs of the candidate nodes shown inside <page_data> that prove your verdict.',
+          },
+        },
+        spec.input_schema.required,
+      ),
+    };
+  });
+}
+
+/** Verify a model-proposed action uses only a code-supplied candidate ref (or needs no ref). */
+export function isCandidateAction(action: ActTool, candidateRefs: ReadonlySet<string>): boolean {
+  if (action.tool === 'scroll') return !action.ref || candidateRefs.has(action.ref);
+  if (!('ref' in action)) return true;
+  return Boolean(action.ref) && candidateRefs.has(action.ref);
+}
+
+/** Shared error text when a model requests an action ref outside the code-supplied candidates. */
+export function nonCandidateRefMessage(action: ActTool): string {
+  const ref = 'ref' in action && action.ref ? action.ref : action.tool;
+  return `error: ${ref} is not in the code-supplied candidates`;
+}
+
+/** Restrict a judge `pass` outcome so only refs shown in `<page_data>` can count as cited evidence. */
+export function restrictJudgeEvidence(outcome: JudgeOutcome, shownRefs: ReadonlySet<string>): JudgeOutcome {
+  if (outcome.verdict !== 'pass') return outcome;
+  return { ...outcome, evidenceRefs: outcome.evidenceRefs.filter((r) => shownRefs.has(r)) };
+}
+
 /** Fenced snapshot text; page text is quoted/escaped so it cannot inject fence lines. */
-export function captureText(label: string, o: Observation, scrub: (s: string) => string): string {
-  return `${label}\n<page_data>\n${scrub(snapshotText(o))}\n</page_data>`;
+export function captureText(
+  label: string,
+  o: Observation,
+  scrub: (s: string) => string,
+  nodesOverride?: readonly SnapNode[],
+): string {
+  return `${label}\n<page_data>\n${scrub(snapshotText(o, nodesOverride))}\n</page_data>`;
 }
 
 /** Very tall pages are cut to their top 3000 px for the model; the full screenshot stays on disk. */

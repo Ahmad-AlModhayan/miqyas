@@ -2,7 +2,7 @@
 // Playwright web surface driver: implements SurfaceDriver & SurfaceSession without importing Proof Core or agents.
 
 import { createRequire } from 'node:module';
-import { chromium, type Browser, type BrowserContext, type Page, type Request } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type ElementHandle, type Page, type Request } from 'playwright';
 
 const require = createRequire(import.meta.url);
 export const PLAYWRIGHT_VERSION: string = require('playwright/package.json').version;
@@ -20,7 +20,7 @@ import type {
   SurfaceSession,
   SurfaceSessionOptions,
 } from '../session.js';
-import { observe, type ObserveOptions } from './observe.js';
+import { observeWithHandles, type ObserveOptions, type SnapshotWithHandles } from './observe.js';
 import { originProxy } from './proxy.js';
 
 export const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
@@ -29,6 +29,7 @@ export const NAV_TIMEOUT_MS = 30_000;
 export const ACTION_TIMEOUT_MS = 5000;
 const QUIET_MS = 400;
 const OBSERVE_TRIES = 2;
+const MOVE_TOLERANCE_PX = 4;
 
 async function settle(page: Page, capMs = 2000, quietMs = QUIET_MS): Promise<void> {
   await page.waitForLoadState('domcontentloaded').catch(() => {});
@@ -78,7 +79,16 @@ export function inFlight(page: Page, timeoutMs = NAV_TIMEOUT_MS): NavTracker {
 }
 
 /** Observe once no main-frame navigation is in flight, retrying if the context closes mid-observe on a redirect. */
-export async function observeSettled(page: Page, navs: NavTracker, opts: ObserveOptions = {}, look = observe): Promise<Observation> {
+export async function observeSettled(
+  page: Page,
+  navs: NavTracker,
+  opts: ObserveOptions = {},
+  look: (page: Page, opts: ObserveOptions) => Promise<Observation> = async (p, o) => {
+    const { observation, handles } = await observeWithHandles(p, o);
+    for (const h of handles.values()) await h.dispose().catch(() => {});
+    return observation;
+  },
+): Promise<Observation> {
   for (let i = 1; ; i++) {
     const pending = await navs.idle();
     if (pending.length) throw new Error(`a navigation to ${(opts.hide ?? ((t) => t))(pending.join(', '))} was still pending after ${Math.round(navs.timeoutMs / 1000)} s`);
@@ -89,6 +99,15 @@ export async function observeSettled(page: Page, navs: NavTracker, opts: Observe
       await page.waitForLoadState('load', { timeout: NAV_TIMEOUT_MS }).catch(() => {});
     }
   }
+}
+
+async function observeSettledWithHandles(page: Page, navs: NavTracker, opts: ObserveOptions = {}): Promise<SnapshotWithHandles> {
+  let out!: SnapshotWithHandles;
+  await observeSettled(page, navs, opts, async (p, o) => {
+    out = await observeWithHandles(p, o);
+    return out.observation;
+  });
+  return out;
 }
 
 /** After a page load: wait for the app to finish starting (spinners, "connecting…" screens). */
@@ -139,15 +158,51 @@ function playwrightLocator(page: Page, loc: Locator) {
   return page.getByText(loc.text!);
 }
 
-/** Deterministic check. Visible means the element made it into the rendered snapshot (it carries a ref). */
-async function evaluateCheck(page: Page, check: Check, obs: Observation): Promise<SurfaceCheckResult> {
-  const refs = await playwrightLocator(page, check.locator).evaluateAll((els) => els.map((e) => e.getAttribute('data-miqyas-ref')));
-  const byRef = new Map(obs.nodes.map((n) => [n.ref, n]));
-  const nodes = refs.map((r) => (r ? byRef.get(r) : undefined)).filter((n): n is SnapNode => !!n);
+/** Deterministic check. Visible means the locator element resolves to a live locked handle captured at observation time. */
+async function evaluateCheck(
+  page: Page,
+  check: Check,
+  obs: Observation,
+  handles: Map<string, ElementHandle<Element>>,
+): Promise<SurfaceCheckResult> {
+  const locHandles = await playwrightLocator(page, check.locator).elementHandles();
   const what = JSON.stringify(check.locator);
+  let matchedRefs: (string | null)[] = [];
+  try {
+    if (locHandles.length > 0 && handles.size > 0) {
+      const lockedEntries = [...handles.entries()];
+      const lockedEls = lockedEntries.map(([, h]) => h);
+      // Primitive indexed loop with strict object identity prevents Array.prototype.map/indexOf tampering in page realm.
+      const indices = await page.evaluate(
+        ({ targets, locked }) => {
+          const out = new Array<number>(targets.length);
+          for (let i = 0; i < targets.length; i++) {
+            const t = targets[i];
+            let found = -1;
+            for (let j = 0; j < locked.length; j++) {
+              if (locked[j] === t) {
+                found = j;
+                break;
+              }
+            }
+            out[i] = found;
+          }
+          return out;
+        },
+        { targets: locHandles, locked: lockedEls },
+      );
+      matchedRefs = Array.isArray(indices)
+        ? indices.map((idx) => (typeof idx === 'number' && Number.isInteger(idx) && idx >= 0 && idx < lockedEntries.length ? (lockedEntries[idx]?.[0] ?? null) : null))
+        : [];
+    }
+  } finally {
+    await Promise.all(locHandles.map((h) => h.dispose().catch(() => {})));
+  }
+  const byRef = new Map(obs.nodes.map((n) => [n.ref, n]));
+  const nodes = matchedRefs.map((r) => (r ? byRef.get(r) : undefined)).filter((n): n is SnapNode => !!n);
   const e = check.expect;
-  if (e === 'visible') return { pass: nodes.length > 0, observation: `${nodes.length} rendered match(es) of ${what} (${refs.length} in the DOM)`, nodes };
-  if (e === 'hidden') return { pass: nodes.length === 0, observation: `${nodes.length} rendered match(es) of ${what} (${refs.length} in the DOM)`, nodes };
+  if (e === 'visible') return { pass: nodes.length > 0, observation: `${nodes.length} rendered match(es) of ${what} (${locHandles.length} in the DOM)`, nodes };
+  if (e === 'hidden') return { pass: nodes.length === 0, observation: `${nodes.length} rendered match(es) of ${what} (${locHandles.length} in the DOM)`, nodes };
   if ('count' in e) return { pass: nodes.length === e.count, observation: `${nodes.length} rendered match(es) of ${what}, expected ${e.count}`, nodes };
   const hit = nodes.filter((n) => n.name.toLowerCase().includes(e.text.toLowerCase()));
   return { pass: hit.length > 0, observation: hit.length ? `"${hit[0]!.name}" rendered` : `no rendered match of ${what} contains "${e.text}"`, nodes: hit.length ? hit : nodes };
@@ -184,6 +239,40 @@ export async function measureProbe(browser: Browser, url: string, probe: Probe):
   }
 }
 
+async function verifyHandleFresh(handle: ElementHandle<Element>, node: SnapNode): Promise<void> {
+  const visible = await handle.isVisible().catch(() => false);
+  const check = await handle
+    .evaluate(
+      (el, { origBox, tolerance }) => {
+        if (!el.isConnected) return 'detached from DOM';
+        if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return 'no longer visible';
+        const r = el.getBoundingClientRect();
+        const x = Math.round(r.left + window.scrollX);
+        const y = Math.round(r.top + window.scrollY);
+        const w = Math.round(r.width);
+        const h = Math.round(r.height);
+        if (w <= 1 || h <= 1) return 'collapsed';
+        const moved =
+          Math.abs(x - origBox.x) > tolerance ||
+          Math.abs(y - origBox.y) > tolerance ||
+          Math.abs(w - origBox.width) > tolerance ||
+          Math.abs(h - origBox.height) > tolerance;
+        if (moved) return `moved or resized (was @${origBox.x},${origBox.y} ${origBox.width}x${origBox.height}, now @${x},${y} ${w}x${h})`;
+        return '';
+      },
+      { origBox: node.box, tolerance: MOVE_TOLERANCE_PX },
+    )
+    .catch(() => 'detached from DOM');
+  if (!visible || check) {
+    throw new Error(`ref ${node.ref} is stale or moved (${check || 'not visible'}); observe again before acting`);
+  }
+}
+
+async function disposeHandles(handles: Map<string, ElementHandle<Element>>): Promise<void> {
+  await Promise.all([...handles.values()].map((h) => h.dispose().catch(() => {})));
+  handles.clear();
+}
+
 /** Open a Playwright-backed web SurfaceDriver. Caller is responsible for closing it. */
 export async function openWebSurfaceDriver(opts: { headed?: boolean; allowOtherOrigins?: boolean } = {}): Promise<SurfaceDriver> {
   const browser = await launch(opts.headed, !opts.allowOtherOrigins);
@@ -204,9 +293,17 @@ export async function openWebSurfaceDriver(opts: { headed?: boolean; allowOtherO
         throw e;
       });
       const navs = inFlight(page, navTimeoutMs);
-      const snap = () => observeSettled(page, navs, look);
 
       let latest: Observation | undefined;
+      let latestHandles = new Map<string, ElementHandle<Element>>();
+      const snap = async (): Promise<Observation> => {
+        const next = await observeSettledWithHandles(page, navs, look);
+        const prev = latestHandles;
+        latest = next.observation;
+        latestHandles = next.handles;
+        await disposeHandles(prev);
+        return next.observation;
+      };
       let loaded = false;
       const gotoOrigin = async (pathOrUrl: string) => {
         const baseOrigin = new URL(sessionOpts.url).origin;
@@ -223,8 +320,7 @@ export async function openWebSurfaceDriver(opts: { headed?: boolean; allowOtherO
       return {
         async observe() {
           await ensureLoaded();
-          latest = await snap();
-          return latest;
+          return snap();
         },
         async act(a: ActTool, resolveText?: (raw: string) => string): Promise<SurfaceActionResult> {
           await ensureLoaded();
@@ -233,36 +329,44 @@ export async function openWebSurfaceDriver(opts: { headed?: boolean; allowOtherO
           let locator: string | undefined;
           let error: string | undefined;
           try {
+            let handle: ElementHandle<Element> | undefined;
             if ('ref' in a && a.ref) {
               const node = latest?.nodes.find((n) => n.ref === a.ref);
               if (!node) throw new Error(`no node ${a.ref} in capture ${latest?.capture ?? 0}; use refs from the latest capture`);
               if (node.locator) locator = hide(node.locator);
+              handle = latestHandles.get(a.ref);
+              if (!handle) throw new Error(`ref ${a.ref} has no locked element handle`);
+              await verifyHandleFresh(handle, node);
             }
-            const el = 'ref' in a && a.ref ? page.locator(`[data-miqyas-ref="${a.ref}"]`) : undefined;
             switch (a.tool) {
               case 'click':
-                await el!.click({ timeout: actionTimeoutMs }).catch(async (e: Error) => {
+                await handle!.click({ timeout: actionTimeoutMs }).catch(async (e: Error) => {
                   // Styled radios and checkboxes: the input sits under its label, which takes the click.
                   if (!/intercepts pointer events/.test(e.message)) throw e;
-                  const label = el!.locator('xpath=ancestor::label[1]');
-                  if ((await label.count()) === 0) throw e;
-                  await label.click({ timeout: actionTimeoutMs });
-                  message = 'ok (clicked its label, which covers it)';
+                  const labelHandle = await handle!.evaluateHandle((el) => el.closest('label'));
+                  try {
+                    const label = labelHandle.asElement();
+                    if (!label) throw e;
+                    await label.click({ timeout: actionTimeoutMs });
+                    message = 'ok (clicked its label, which covers it)';
+                  } finally {
+                    await labelHandle.dispose().catch(() => {});
+                  }
                 });
                 break;
               case 'fill': {
                 const resolved = resolveText ? resolveText(a.text) : a.text;
-                await el!.fill(resolved, { timeout: actionTimeoutMs });
+                await handle!.fill(resolved, { timeout: actionTimeoutMs });
                 break;
               }
               case 'select_option':
-                await el!.selectOption({ label: a.option }, { timeout: actionTimeoutMs }).catch(() => el!.selectOption(a.option, { timeout: actionTimeoutMs }));
+                await handle!.selectOption({ label: a.option }, { timeout: actionTimeoutMs }).catch(() => handle!.selectOption(a.option, { timeout: actionTimeoutMs }));
                 break;
               case 'press':
                 await page.keyboard.press(a.key);
                 break;
               case 'scroll':
-                if (el) await el.scrollIntoViewIfNeeded({ timeout: actionTimeoutMs });
+                if (handle) await handle.scrollIntoViewIfNeeded({ timeout: actionTimeoutMs });
                 else await page.mouse.wheel(0, a.direction === 'down' ? 600 : -600);
                 break;
               case 'wait':
@@ -279,25 +383,25 @@ export async function openWebSurfaceDriver(opts: { headed?: boolean; allowOtherO
             message = `error: ${error}`;
           }
           await settle(page);
-          latest = await snap();
+          const after = await snap();
           return {
             ok,
             message,
-            observation: latest,
+            observation: after,
             ...(locator ? { locator } : {}),
             ...(error ? { error } : {}),
-            ...(latest.unmasked ? { unmasked: latest.unmasked } : {}),
+            ...(after.unmasked ? { unmasked: after.unmasked } : {}),
           };
         },
         async check(check: Check, obs: Observation): Promise<SurfaceCheckResult> {
-          return evaluateCheck(page, check, obs);
+          return evaluateCheck(page, check, obs, latestHandles);
         },
         async wait(seconds: number): Promise<Observation> {
           await page.waitForTimeout(Math.min(5, Math.max(1, seconds)) * 1000);
-          latest = await snap();
-          return latest;
+          return snap();
         },
         async close() {
+          await disposeHandles(latestHandles);
           await context.close().catch(() => {});
         },
       };

@@ -34,7 +34,10 @@ function makeObservation(capture: number, text: string, url = 'http://app.local/
     lang: 'en',
     dir: 'ltr',
     viewport: { width: 1280, height: 800 },
-    nodes: [{ ref: `c${capture}e1`, role: 'heading', name: text, depth: 1, box: { x: 0, y: 0, width: 10, height: 10 }, state: '', locator: `getByRole('heading', { name: '${text}' })` }],
+    nodes: [
+      { ref: `c${capture}e1`, role: 'heading', name: text, depth: 1, box: { x: 0, y: 0, width: 120, height: 24 }, state: '', locator: `getByRole('heading', { name: '${text}' })` },
+      { ref: `c${capture}e2`, role: 'button', name: 'Save', depth: 1, box: { x: 0, y: 40, width: 80, height: 32 }, state: '', locator: `getByRole('button', { name: 'Save' })` },
+    ],
     truncated: false,
     png: tinyPng(),
     capturedAt: new Date('2026-11-13T10:00:00Z'),
@@ -96,7 +99,8 @@ function fakeAgent(): Agent {
     info: { provider: 'fake', model: 'fake-model' },
     usage: { calls: 0, inputTokens: 0, outputTokens: 0 },
     async act(ctx: ActContext): Promise<ActOutcome> {
-      await ctx.execute({ tool: 'click', ref: ctx.observation.nodes[0]!.ref });
+      const btn = ctx.observation.nodes.find((n) => n.role === 'button') ?? ctx.observation.nodes[0]!;
+      await ctx.execute({ tool: 'click', ref: btn.ref });
       return { status: 'done', summary: 'clicked element' };
     },
     async judge(ctx: JudgeContext): Promise<JudgeOutcome> {
