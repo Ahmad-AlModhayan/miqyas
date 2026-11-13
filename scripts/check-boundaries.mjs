@@ -20,6 +20,7 @@ const VENDOR_LAYER_ONLY = {
   playwright: 'surfaces',
   'axe-core': 'surfaces',
   '@anthropic-ai/sdk': 'agents',
+  'libpg-query': 'adapters',
 };
 
 function normalizePosix(p) {
