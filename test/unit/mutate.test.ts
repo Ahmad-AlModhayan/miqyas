@@ -1,10 +1,10 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PlanLedger, type PlanResult } from '../../src/proof-core/ledger.js';
-import { errorExit } from '../../src/cli.js';
+import { errorExit } from '../../src/entry/cli.js';
 import { applyMutation, BuildChangedError, classify, cssMarker, hashDir, judgeProbe, keepUnchanged, MutationError, parsePreset, renderMutationMarkdown, summarize, type Mutation } from '../../src/proof-core/mutate.js';
 import { parsePlan } from '../../src/proof-core/plan.js';
 

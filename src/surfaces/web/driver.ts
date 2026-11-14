@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: Apache-2.0
 // Playwright web surface driver: implements SurfaceDriver & SurfaceSession without importing Proof Core or agents.
 
 import { createRequire } from 'node:module';

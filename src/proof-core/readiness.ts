@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Grade 1 readiness profile & 8-pillar ledger evaluation (ADR 0004, SRS §3.12 FR-Q1..FR-Q8, PRD §6).
 
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';

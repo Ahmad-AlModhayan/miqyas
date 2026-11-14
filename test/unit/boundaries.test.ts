@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Layer boundary checks (architecture rule): lower layers never import Proof Core, model providers, or entry points.
 
 import { describe, expect, it } from 'vitest';

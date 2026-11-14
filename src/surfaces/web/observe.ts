@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: Apache-2.0
 // Observation of a web page: a full-page screenshot plus a snapshot of rendered nodes only. "Visible" means
 // rendered (computed style, non-zero box larger than 1×1 px, not transparent): text that is only in the markup is
 // not visible (SRS FR-L5), and screen-reader-only copies are not duplicates.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // A deterministic agent for offline end-to-end tests: no model, no network. It clicks the node whose name is
 // quoted in the step, and passes an assertion when every quoted text is rendered (cites those nodes).
 

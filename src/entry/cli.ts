@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // miqyas CLI entry point: handles only args, environment, prompts/output formatting, and exit codes.
 // Verification, mutation suites, surface execution, and model calls are delegated to Proof Core / drivers / agents.
 
@@ -74,7 +74,7 @@ const PRESETS = path.join(ROOT, 'presets');
 class UsageError extends Error {}
 class EnvError extends Error {}
 
-const HELP = `miqyas: AI testing that proves what it checked. PolyForm Shield 1.0.0.
+const HELP = `miqyas: AI testing that proves what it checked. Core engine: AGPL-3.0-only; protocol/drivers/CLI: Apache-2.0.
 
 Usage:
   miqyas run [plans...] --url <url> [options]      run plans, --crawl, or --profile grade-1 against a web app
@@ -1284,4 +1284,18 @@ export async function runCliProcess(argv = process.argv.slice(2)): Promise<never
   loadCliEnv();
   const code = await main(argv);
   process.exit(code);
+}
+
+function isDirectEntryExecution(): boolean {
+  if (!process.argv[1]) return false;
+  const self = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(self);
+  } catch {
+    return path.resolve(process.argv[1]) === path.resolve(self);
+  }
+}
+
+if (isDirectEntryExecution()) {
+  void runCliProcess();
 }

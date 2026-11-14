@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Deterministic cassette record-and-replay at the Agent seam (Layer 2: agents).
 // Cassettes store normalized, scrubbed requests/responses plus image hashes/dHash (never raw PNG pixels).
 // Replay matches on canonical SHA-256 + occurrence index + visual dHash and fails closed on any miss or corruption.

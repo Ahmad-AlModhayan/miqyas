@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: Apache-2.0
 // A small static server for built single-page apps (mutated copies of a build are served from here). Loopback only.
 
 import { createServer, type Server } from 'node:http';

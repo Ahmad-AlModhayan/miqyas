@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Shared Miqyas agent prompts, strict tool schemas, capture formatting, usage accounting, and action mapping.
 
 import type { EvidenceNode, Locator, Observation, SnapNode } from '../surfaces/session.js';

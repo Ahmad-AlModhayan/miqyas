@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // CLI exit codes that need no browser (SRS FR-C1): 2 for a plan or usage error, 3 for a missing model key.
 // Codes 0, 1 and 3 for a blocked run are in test/e2e/runner.test.ts, with a scripted agent.
 
@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { recordDailySpend } from '../../src/agents/spend.js';
-import { main, loadCliEnv } from '../../src/cli.js';
+import { main, loadCliEnv } from '../../src/entry/cli.js';
 
 let tmp: string;
 let good: string;

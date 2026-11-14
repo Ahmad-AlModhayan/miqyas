@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Per-part corpus scoring and regression tracking (FR-B12, #15).
 // Scores asserted mutation-kill, blind unasserted recall, readiness checks,
 // and clean-twin false positives separately without ever blending into one number.

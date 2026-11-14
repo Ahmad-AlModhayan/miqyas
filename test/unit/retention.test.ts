@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';

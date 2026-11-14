@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Active inert parameter probes (Check 11: reflected XSS & open redirect) and
 // unauthenticated spending-route probes (Check 12: LLM/SMS/email auth guard) (Layer 2: adapters).
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // E2E verification for #17: miqyas update-db, offline zero-network Check 13 (osv-scanner) & Check 7 (libpg-query RLS),
 // 3 Check 7 readiness seeds, 3 Check 13 readiness seeds, clean twin, and JSON schema validation.
 
@@ -8,7 +8,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { main } from '../../src/cli.js';
+import { main } from '../../src/entry/cli.js';
 import type { buildReport } from '../../src/proof-core/report.js';
 import { schemaErrors } from '../report-helpers.js';
 

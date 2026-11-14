@@ -1,48 +1,26 @@
-# Miqyas's open model
+# How Miqyas is licensed and offered
 
-## 1. Why
+Miqyas uses a **decoupled open-core** model that separates the verifiable core engine (`AGPL-3.0-only`) from its open integration surfaces and protocols (`Apache-2.0`) and from separate commercial hosted/UI offerings (outside this repository).
 
-Miqyas is built by one person and wants people to help build it: checks, surfaces, fixes, translations and docs. So
-Miqyas is **open code**: its whole source is public under the [PolyForm Shield License 1.0.0](../LICENSE). Anyone may
-read, run, change and share it and send pull requests; nobody may use it to provide a product that competes with
-Miqyas, free or paid. Developers can also check exactly what is scrubbed before anything leaves their machine
-([ADR 0003](adr/0003-what-leaves-the-machine.md)).
+## Code licences in this repository
 
-It is source-available, not open source by the OSI definition, and it never converts to an open-source licence.
-
-The parts that reach into an app are plumbing over tools people already trust (Playwright, WebdriverIO, Appium;
-[ADR 0005](adr/0005-miqyas-orchestrates-existing-runners.md)), useful in other people's test tools too. They are
-planned as an Apache-2.0 package, `miqyas-drivers`.
-
-## 2. Money and code
-
-| Part | Money | Code | Licence |
+| Layer | Paths | Licence | Why |
 |---|---|---|---|
-| Miqyas: proof core (ledger, verdict judging, readiness profiles including the 13 Grade 1 checks, mutation self-check, reports), agent team, CLI, CI gate, MCP server | Free during early access, paid later, for developers | Open code | PolyForm Shield 1.0.0 |
-| `miqyas-drivers` (planned): the `miqyas-worker/1` protocol, surface drivers, RTL checks, scrubbers, fault presets | Free | Open | Apache-2.0 |
+| Core verification engine (`miqyas-core`) | `src/proof-core/`, `src/adapters/`, `src/agents/`, `src/entry/`, `test/` | GNU Affero General Public License v3.0 ([`AGPL-3.0-only`](../LICENSE)) | Strong copyleft keeps the audit trail, assertion ledger, readiness checks, and mutation self-check auditable while preventing competitors from wrapping `miqyas-core` into a closed SaaS without contributing changes back under AGPL-3.0-only §13 or obtaining a commercial licence. |
+| Worker protocol, scrubber, surface drivers, thin CLI, presets, schemas | `src/protocol/`, `src/scrub/`, `src/surfaces/`, `src/cli.ts`, `scripts/`, `presets/`, `schema/` | Apache License 2.0 ([`LICENSE-APACHE`](../LICENSE-APACHE)) | Permissive licence allows teams, CI runners, and custom surface workers (`miqyas-worker/1`) to implement drivers, embed plan schemas, redact secrets, and invoke the CLI without AGPL obligations. |
+| Hosted runner & proprietary UI clients (separate commercial products) | Outside this repository | Proprietary (commercial terms from Kahf Labs) | Managed execution convenience, dashboards, and visual workflows monetize hosted infrastructure and UX without gating local CLI/CI transparency. |
 
-## 3. Plans for the package
+## Strict architecture & SPDX boundaries
 
-1. **One package** holding the `miqyas-worker/1` protocol (SRS §5.2), the web worker now and the Tauri, Android, CLI
-   and engine workers as they land, the RTL checks, the scrubbers (`src/core/scrub.ts`) and the fault presets
-   (`presets/`). Their tests move with them.
-2. **One-way dependency.** Miqyas imports the package; the package never imports the rest of Miqyas. A CI
-   import-boundary check fails on any such import, so the package can't pick up Shield-licensed code. A licence
-   allow-list covers third-party dependencies.
-3. **Same repository.** The package sits in this repository as a folder with its own `LICENSE` (standard Apache-2.0
-   text); Miqyas uses it by path (an npm workspace). A registry publish comes only when others want to install it alone.
+Four rules keep the `Apache-2.0` interface layer free of `AGPL-3.0-only` obligations:
 
-## 4. Contributions
+1. **Process boundary for workers and CLI.** Third-party or proprietary surface workers speak `miqyas-worker/1` JSON lines over stdio (`src/protocol/worker.ts`). `src/cli.ts` (`Apache-2.0`) launches the core entry process (`src/entry/cli.ts`, `AGPL-3.0-only`) as a child process with no JS/TS module import across the boundary.
+2. **One-way static import check + SPDX verification.** `npm run lint` (`scripts/check-boundaries.mjs`) enforces both import direction (`Apache-2.0` layers may never import `AGPL-3.0-only` layers) and per-file `SPDX-License-Identifier` headers across `src/`, `scripts/`, and `test/`.
+3. **Same repository, separate licence files.** Root [`LICENSE`](../LICENSE) carries GNU AGPL v3.0 (`AGPL-3.0-only`) and [`LICENSE-APACHE`](../LICENSE-APACHE) carries Apache License 2.0 (`Apache-2.0`). Third-party notices live in [`NOTICE.md`](../NOTICE.md).
+4. **No third-party dependency leakage into `Apache-2.0` interfaces.** Shared protocol, scrubber, and CLI modules restrict dependencies to permissive Node built-ins or permissive packages; `src/surfaces/web/` bundles unmodified `MPL-2.0` `axe-core` for in-page checks with attribution in [`NOTICE.md`](../NOTICE.md).
 
-Every pull request needs the contributor agreement ([CLA.md](../CLA.md), checked by CLA Assistant on people, not
-paths). PolyForm Shield has no clause for incoming contributions and forbids sublicensing, so without it Kahf Labs
-couldn't sell a contribution in the paid Miqyas or change the licence later. You keep your copyright; neither the
-agreement nor Shield transfers it. Code in `miqyas-drivers`, once it exists, also arrives under Apache-2.0 §5.
+## Contributor agreement & commercial dual-licensing
 
-## 5. Protections
+Every external pull request requires signing [`CLA.md`](../CLA.md). Contributors keep copyright to their work and grant Kahf Labs a licence to distribute it under `AGPL-3.0-only`, `Apache-2.0` (in permissive layers), and **commercial dual-licences** for B2B customers who want to embed `miqyas-core` inside proprietary products or hosted platforms without `AGPL-3.0-only` obligations.
 
-The source is public under PolyForm Shield 1.0.0: nobody may provide a competing product from it, free or paid. A
-trademark policy ([TRADEMARKS.md](../TRADEMARKS.md)) keeps forks from using the Kahf, Wasl, Qasd and Miqyas names and
-logos. No name is registered yet, so the policy rests on unregistered use. Secrets and signing keys never enter the
-repository. Security reports come in privately ([SECURITY.md](../SECURITY.md)) and are fixed before anything is said in
-public; a scrubber miss is treated as a security report.
+For commercial dual-licensing inquiries, contact Kahf Labs.

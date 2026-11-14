@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Mutate mode: break a copy of the served build on purpose, run the plans that should notice, and report the
 // tester's own detection rate. The clean build is never modified.
 

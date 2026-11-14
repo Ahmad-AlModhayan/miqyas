@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Test helpers: a method block for reports built in tests, and the report schemas (schema/*.schema.json) in Ajv.
 
 import { readFileSync } from 'node:fs';

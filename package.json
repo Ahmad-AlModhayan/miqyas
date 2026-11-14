@@ -2,7 +2,7 @@
   "name": "miqyas",
   "version": "0.1.0",
   "description": "AI testing that proves what it checked.",
-  "license": "PolyForm-Shield-1.0.0",
+  "license": "(AGPL-3.0-only AND Apache-2.0)",
   "private": true,
   "type": "module",
   "bin": {
@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "lint": "node scripts/check-boundaries.mjs",
+    "lint": "node scripts/check-boundaries.mjs && node scripts/check-spdx.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run test/unit",
     "test:e2e": "vitest run test/e2e",

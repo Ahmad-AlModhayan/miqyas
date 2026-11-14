@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Benchmarks: rebuild an app at a pinned commit, scrub it, run its plans and mutations, and sum it all up in one
 // summary anyone can rerun. Terms follow the benchmark terms in docs/PRD.md: the mutation score is
 // Stryker's, and every number here is a product KPI (our own plans and mutants), not a recognised benchmark suite.

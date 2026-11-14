@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: Apache-2.0
 // Scrubber: replaces configured terms (organisation, project and person names) in text sent to a model and in
 // served bundles, then re-scans. Unicode-aware: patterns are matched as JavaScript strings over UTF-8-decoded text,
 // so Arabic terms work (the perl scrub in the Wasl log missed «هاتف فلان» without -Mutf8).
