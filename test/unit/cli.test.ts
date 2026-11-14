@@ -536,4 +536,59 @@ describe('CLI exit codes', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('miqyas bench evaluates clone/cwd prerequisites before checking live API keys (#21)', async () => {
+    const stderrChunks: string[] = [];
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      stderrChunks.push(String(chunk));
+      return true;
+    });
+    const prevKey = process.env.ANTHROPIC_API_KEY;
+    const prevToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+
+    try {
+      // Missing git clone must fail with UsageError (2) before checking live API keys (3).
+      const missingRepo = path.join(tmp, 'not-a-clone');
+      const codeMissing = await main(['bench', 'wasl-tray', '--repo', missingRepo]);
+      expect(codeMissing).toBe(2);
+      expect(stderrChunks.join('')).toContain('is not a git clone');
+
+      // Running from inside the target repo must also fail with UsageError (2) before API key check (3).
+      const fakeRepo = path.join(tmp, 'fake-git-clone');
+      mkdirSync(path.join(fakeRepo, '.git'), { recursive: true });
+      const origCwd = process.cwd();
+      try {
+        process.chdir(fakeRepo);
+        stderrChunks.length = 0;
+        const codeInside = await main(['bench', 'wasl-tray', '--repo', fakeRepo]);
+        expect(codeInside).toBe(2);
+        expect(stderrChunks.join('')).toContain('outside');
+      } finally {
+        process.chdir(origCwd);
+      }
+
+      // Invalid --retention-days (including blank/whitespace strings) returns exit code 2; invalid MIQYAS_RETENTION_DAYS returns exit code 3.
+      expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--dry-run', '--retention-days', '-1'])).toBe(2);
+      expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--dry-run', '--retention-days', ''])).toBe(2);
+      expect(await main(['run', good, '--url', 'http://127.0.0.1:9/', '--dry-run', '--retention-days', '   '])).toBe(2);
+
+      const prevRet = process.env.MIQYAS_RETENTION_DAYS;
+      process.env.MIQYAS_RETENTION_DAYS = 'invalid-days';
+      try {
+        expect(
+          await main(['run', good, '--url', 'http://127.0.0.1:9/', '--dry-run', '--out', path.join(tmp, 'ret-env-out')]),
+        ).toBe(3);
+      } finally {
+        if (prevRet === undefined) delete process.env.MIQYAS_RETENTION_DAYS;
+        else process.env.MIQYAS_RETENTION_DAYS = prevRet;
+      }
+    } finally {
+      stderrSpy.mockRestore();
+      vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      if (prevKey !== undefined) process.env.ANTHROPIC_API_KEY = prevKey;
+      if (prevToken !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = prevToken;
+    }
+  });
 });

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Shield-1.0.0
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PlanLedger } from '../../src/proof-core/ledger.js';
 import { parsePlan } from '../../src/proof-core/plan.js';
-import { readFileSync } from 'node:fs';
 import { buildReport, cell, renderHuman, renderMarkdown, TOOL_VERSION } from '../../src/proof-core/report.js';
 import { schemaErrors, testMethod } from '../report-helpers.js';
 
@@ -163,5 +164,41 @@ describe('report method and schema', () => {
       plans: [result('pass')],
     });
     expect(schemaErrors('report', withBudget)).toEqual([]);
+  });
+
+  it('normalizes plans[].file in both JSON and Markdown to relative paths without leaking machine prefixes', () => {
+    const repoBase = path.resolve(process.cwd(), '..', 'external-target-repo');
+    const leaked = {
+      ...result('pass'),
+      file: path.join(repoBase, 'plans', 'auth', '01-login.json'),
+    };
+    const outsidePosix = {
+      ...result('pass'),
+      planId: 'outside-posix',
+      file: '/home/devuser/workspace/secret-app/plans/checkout.json',
+    };
+    const outsideWin = {
+      ...result('pass'),
+      planId: 'outside-win',
+      file: 'C:\\work\\devuser\\secret-app\\plans\\win-plan.json',
+    };
+    const r = buildReport({
+      ...base,
+      method,
+      plans: [leaked, outsidePosix, outsideWin],
+      reportBases: [process.cwd(), repoBase],
+    });
+    expect(schemaErrors('report', r)).toEqual([]);
+    expect(r.plans.map((p) => p.file)).toEqual([
+      'plans/auth/01-login.json',
+      'checkout.json',
+      'win-plan.json',
+    ]);
+    const md = renderMarkdown(r);
+    expect(md).toContain('plans/auth/01-login.json');
+    expect(md).toContain('checkout.json');
+    expect(md).toContain('win-plan.json');
+    expect(md).not.toContain('devuser');
+    expect(md).not.toContain('C:\\work');
   });
 });

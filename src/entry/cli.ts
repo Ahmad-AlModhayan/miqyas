@@ -43,12 +43,13 @@ import {
 import { BENCHES, buildBenchSummary, renderBenchMarkdown, type BenchSummary } from '../proof-core/bench.js';
 import { CorpusError, lintCorpus, loadCorpusFromPath, resolveContainedCorpusPath, seedToMutation, verifyCorpusProbes, type CorpusManifest, type CorpusSeed } from '../proof-core/corpus.js';
 import { parseFailOn, type FailOnThreshold, type Finding } from '../proof-core/findings.js';
-import { reportPath, type PlanResult } from '../proof-core/ledger.js';
+import { isDryRunStatus, reportPath, type PlanResult } from '../proof-core/ledger.js';
 import { applyMutation, BuildChangedError, classify, parsePreset, summarize, type Mutation, type MutationPreset, type MutationResult } from '../proof-core/mutate.js';
 import { executePlans, runMutations, runVerification } from '../proof-core/orchestrator.js';
 import { lintPlan, loadPlanFile, loadPlans, PlanError, resolvePlanFiles, serializePlan, type Plan } from '../proof-core/plan.js';
 import { parseReadinessProfile, type ReadinessProfile } from '../proof-core/readiness.js';
 import { renderHuman, type Method, type RunReport } from '../proof-core/report.js';
+import { DEFAULT_RUN_RETENTION_DAYS, resolveRetentionDays, RetentionConfigError } from '../proof-core/retention.js';
 import {
   appendBenchHistory,
   detectBenchRegressions,
@@ -95,6 +96,7 @@ Usage:
 Options:
   --json                 print the JSON report instead of the summary
   --out <dir>            run folder (default .miqyas/runs/<id>)
+  --retention-days <d>   prune expired .miqyas/runs older than <d> days (default ${DEFAULT_RUN_RETENTION_DAYS}; 0 = prune all prior runs)
   --dry-run              resolve plans, open pages and probe mutations; no model call
   --no-model             run code-judged checks without calling a model ($0, works in CI)
   --provider <name>      anthropic (default) | openai (OpenAI-compatible vLLM / Ollama)
@@ -133,6 +135,7 @@ const OPTIONS = {
   url: { type: 'string' },
   json: { type: 'boolean', default: false },
   out: { type: 'string' },
+  'retention-days': { type: 'string' },
   'dry-run': { type: 'boolean', default: false },
   'no-model': { type: 'boolean', default: false },
   provider: { type: 'string' },
@@ -200,6 +203,7 @@ export interface Injected {
   isTTY?: boolean;
   promptCap?: (quote: RunQuote) => Promise<string>;
   spendDir?: string;
+  runsDir?: string;
   now?: () => Date;
   clock?: () => number;
   spendGuard?: SpendGuard;
@@ -344,7 +348,7 @@ async function confirmLiveSpend(opts: {
 }
 
 function dryRunStatus(error?: string, verdict?: string): string {
-  return error?.startsWith('dry run') ? 'resolved' : `not reached: ${error ?? verdict}`;
+  return isDryRunStatus(error) ? 'resolved' : `not reached: ${error ?? verdict}`;
 }
 
 function concurrency(o: Opts): number {
@@ -370,6 +374,7 @@ function positiveIntOption(raw: string | undefined, fallback: number, flag: stri
 
 function nonNegativeIntOption(raw: string | undefined, fallback: number, flag: string): number {
   if (raw === undefined) return fallback;
+  if (!raw.trim()) throw new UsageError(`${flag} must be a non-negative integer`);
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 0) throw new UsageError(`${flag} must be a non-negative integer`);
   return n;
@@ -384,6 +389,7 @@ function positiveNumberOption(raw: string | undefined, fallback: number, flag: s
 
 function nonNegativeNumberOption(raw: string | undefined, flag: string): number | undefined {
   if (raw === undefined) return undefined;
+  if (!raw.trim()) throw new UsageError(`${flag} must be a non-negative number`);
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) throw new UsageError(`${flag} must be a non-negative number`);
   return n;
@@ -414,7 +420,7 @@ function repoSetting(o: Opts): string | undefined {
   return resolved;
 }
 
-async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number> {
+async function cmdRun(args: string[], o: Opts, inject: Injected, quiet = false): Promise<number> {
   if (!o.url) throw new UsageError('run needs --url');
   try {
     new URL(o.url);
@@ -435,6 +441,7 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
   const maxRps = positiveNumberOption(o['max-rps'], DEFAULT_CRAWL_RPS, '--max-rps');
   const maxTimeSec = nonNegativeNumberOption(o['max-time'], '--max-time');
   const maxTimeMs = maxTimeSec !== undefined ? Math.round(maxTimeSec * 1000) : undefined;
+  const retentionDays = resolveRetentionDays(nonNegativeNumberOption(o['retention-days'], '--retention-days'));
   if (o.active) {
     await verifyHostOwnership({
       url: o.url,
@@ -477,8 +484,9 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
         ? ` (replay ${path.basename(o.replay)})`
         : ` with ${exec.agent?.info?.model}${exec.agent?.info?.endpointHost && exec.agent.info.provider !== 'anthropic' ? ` (${exec.agent.info.provider} @ ${exec.agent.info.endpointHost})` : ''}`;
   const scopeLabel = profile ? ` + profile ${profile}` : crawlEnabled ? ' + crawl' : '';
-  if (exec.noModel && exec.quote && !o.json) process.stderr.write(formatQuote(exec.quote) + '\n');
-  if (!o.json) process.stderr.write(`miqyas: ${plans.length} plan(s)${scopeLabel} against ${o.url}${modeLabel}; run folder ${runDir}\n`);
+  const silent = Boolean(o.json || quiet);
+  if (exec.noModel && exec.quote && !silent) process.stderr.write(formatQuote(exec.quote) + '\n');
+  if (!silent) process.stderr.write(`miqyas: ${plans.length} plan(s)${scopeLabel} against ${o.url}${modeLabel}; run folder ${runDir}\n`);
 
   const driver = await openWebSurfaceDriver({ headed: settings.headed, allowOtherOrigins: settings.allowOtherOrigins });
   try {
@@ -487,6 +495,8 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
       url: o.url,
       plans,
       runDir,
+      ...(inject.runsDir !== undefined ? { runsDir: inject.runsDir } : {}),
+      ...(retentionDays !== undefined ? { retentionDays } : {}),
       driver,
       agent: exec.agent,
       noModel: exec.noModel,
@@ -498,9 +508,11 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
       ...(repoPath ? { repoPath } : {}),
       ...(inject.clock ? { clock: inject.clock } : {}),
       ...(inject.hostPolicyDeps ? { hostPolicyDeps: inject.hostPolicyDeps } : {}),
-      onPlan: (r) => !o.json && process.stderr.write(`  ${r.planId}: ${o['dry-run'] ? dryRunStatus(r.error, r.verdict) : r.verdict} (${(r.durationMs / 1000).toFixed(1)} s)\n`),
+      onPlan: (r) => !silent && process.stderr.write(`  ${r.planId}: ${o['dry-run'] ? dryRunStatus(r.error, r.verdict) : r.verdict} (${(r.durationMs / 1000).toFixed(1)} s)\n`),
     });
-    process.stdout.write(o.json ? JSON.stringify(result.report, null, 2) + '\n' : renderHuman(result.report) + `\nReport: ${path.join(runDir, 'report.md')}\n`);
+    if (!quiet) {
+      process.stdout.write(o.json ? JSON.stringify(result.report, null, 2) + '\n' : renderHuman(result.report) + `\nReport: ${path.join(runDir, 'report.md')}\n`);
+    }
     return result.exitCode;
   } finally {
     await driver.close();
@@ -601,8 +613,9 @@ async function cmdScrub(args: string[], o: Opts): Promise<number> {
   return r.remaining.length ? 1 : 0;
 }
 
-async function cmdMutate(args: string[], o: Opts, inject: Injected): Promise<number> {
+async function cmdMutate(args: string[], o: Opts, inject: Injected, quiet = false): Promise<number> {
   if (!o.build || !o.preset) throw new UsageError('usage: miqyas mutate <plans...> --build <dir> --preset <name|file>');
+  const retentionDays = resolveRetentionDays(nonNegativeNumberOption(o['retention-days'], '--retention-days'));
   const preset = parsePreset(JSON.parse(await readFile(presetPath(o.preset), 'utf8')), o.preset);
   const all = await loadPlans(args);
   checkLint(all);
@@ -619,7 +632,7 @@ async function cmdMutate(args: string[], o: Opts, inject: Injected): Promise<num
   const runDir = path.resolve(o.out ?? path.join('.miqyas', 'runs', `${id}-mutate`));
   const exec = await prepareExecution({ o, plans, runId: id, runDir, inject, preset });
   const { rules: scrub, method: scrubMethod } = await scrubRules(o, 'scrub');
-  const say = (s: string) => !o.json && process.stderr.write(s + '\n');
+  const say = (s: string) => !(o.json || quiet) && process.stderr.write(s + '\n');
   say(`miqyas mutate: preset ${preset.name}, ${preset.mutations.length} mutation(s), ${plans.length} plan(s); run folder ${runDir}`);
 
   const driver = await openWebSurfaceDriver();
@@ -630,6 +643,8 @@ async function cmdMutate(args: string[], o: Opts, inject: Injected): Promise<num
       preset,
       plans,
       runDir,
+      ...(inject.runsDir !== undefined ? { runsDir: inject.runsDir } : {}),
+      ...(retentionDays !== undefined ? { retentionDays } : {}),
       driver,
       serve: serveDir,
       agent: exec.agent,
@@ -642,7 +657,9 @@ async function cmdMutate(args: string[], o: Opts, inject: Injected): Promise<num
       ...(o.strict ? { strict: true } : {}),
       onLog: say,
     });
-    process.stdout.write(o.json ? JSON.stringify(res.report, null, 2) + '\n' : res.markdown + `\nReport: ${path.join(runDir, 'mutation-report.md')}\n`);
+    if (!quiet) {
+      process.stdout.write(o.json ? JSON.stringify(res.report, null, 2) + '\n' : res.markdown + `\nReport: ${path.join(runDir, 'mutation-report.md')}\n`);
+    }
     return res.exitCode;
   } finally {
     await driver.close();
@@ -766,6 +783,7 @@ async function runCorpusBench(args: string[], o: Opts, inject: Injected): Promis
     if (o[k]) throw new UsageError(`bench --corpus does not support --${k}`);
   }
   validateCassetteFlags(o);
+  const retentionDays = resolveRetentionDays(nonNegativeNumberOption(o['retention-days'], '--retention-days'));
   const loaded = await loadCorpusFromPath(o.corpus, process.cwd());
   if (!existsSync(loaded.cleanBuildDir)) throw new EnvError(`clean twin buildDir not found: ${loaded.cleanBuildDir}`);
   const planArgs = await resolveCorpusPlansArg(loaded.baseDir, args);
@@ -780,7 +798,7 @@ async function runCorpusBench(args: string[], o: Opts, inject: Injected): Promis
   const outDir = path.resolve(o.out ?? path.join('bench', id));
   const historyPath = path.resolve(o.history ?? path.join('bench', 'history.jsonl'));
   const allowedRoots = [process.cwd(), loaded.baseDir];
-  const say = (s: string) => process.stderr.write(s + '\n');
+  const say = (s: string) => !o.json && process.stderr.write(s + '\n');
   const exec = await prepareExecution({ o, plans, runId: id, runDir: path.join(work, 'run'), inject, preset });
   const { rules: scrub, method: scrubMethod } = await scrubRules(o, 'scrub');
 
@@ -810,6 +828,8 @@ async function runCorpusBench(args: string[], o: Opts, inject: Injected): Promis
         url: cleanSrv.url,
         plans,
         runDir: path.join(work, 'clean'),
+        ...(inject.runsDir !== undefined ? { runsDir: inject.runsDir } : {}),
+        retentionDays,
         driver,
         agent: exec.agent,
         noModel: exec.noModel,
@@ -838,6 +858,8 @@ async function runCorpusBench(args: string[], o: Opts, inject: Injected): Promis
         preset,
         plans,
         runDir: path.join(work, 'mutate'),
+        ...(inject.runsDir !== undefined ? { runsDir: inject.runsDir } : {}),
+        retentionDays,
         driver,
         serve: serveDir,
         agent: exec.agent,
@@ -951,33 +973,40 @@ async function cmdBench(args: string[], o: Opts, inject: Injected): Promise<numb
     if (o[k]) throw new UsageError(k === 'record' || k === 'replay' ? `bench does not support --${k}` : `bench sets --${k} itself`);
   }
   validateCassetteFlags(o);
-  const needsModel = !o['dry-run'] && !o['no-model'] && !inject.agent;
-  // Stop before a long build when a live run can't start anyway.
-  const route = resolveCliRoute(o, needsModel);
+  resolveRetentionDays(nonNegativeNumberOption(o['retention-days'], '--retention-days'));
+  // Evaluate prerequisites (clone, working dir isolation, commit, plans, preset) before checking live API keys.
   const repo = path.resolve(o.repo ?? bench.repo);
   if (!existsSync(path.join(repo, '.git'))) throw new UsageError(`${repo} is not a git clone; pass --repo <clone>`);
-  const say = (s: string) => process.stderr.write(s + '\n');
-  const startedAt = new Date();
-  const plans = path.join(ROOT, bench.plans);
-  let benchInject = inject;
-  if (needsModel && !inject.spendGuard && route.billed) {
-    const benchPlans = await loadPlans([plans]);
-    const preset = parsePreset(JSON.parse(await readFile(presetPath(bench.preset), 'utf8')), bench.preset);
-    const carrier: Injected = { ...inject };
-    const spendGuard = await confirmLiveSpend({ o, plans: benchPlans, preset, runId: `bench-${bench.name}`, inject: carrier, chosenModel: route.model! });
-    benchInject = { ...carrier, spendGuard };
+  // Both work/output folders sit in the working directory, so it must lie outside the clone: real paths (symlinks resolved),
+  // and case folded on macOS, whose disks ignore case (path.relative already does on Windows).
+  const real = (p: string) => (process.platform === 'darwin' ? realpathSync.native(p).toLowerCase() : realpathSync.native(p));
+  const rel = path.relative(real(repo), real(process.cwd()));
+  if (!rel || !(rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel))) {
+    throw new UsageError(`run the bench from outside ${repo}: it writes ${path.resolve('.miqyas', 'bench')} and ${path.resolve('bench')}, and never writes inside the clone`);
   }
   const before = await cloneState(repo);
   const commit = await resolveCommit(repo, o.commit ?? bench.commit);
+  const startedAt = new Date();
   const p2 = (n: number) => String(n).padStart(2, '0');
   const id = `${startedAt.getFullYear()}-${p2(startedAt.getMonth() + 1)}-${p2(startedAt.getDate())}-${commit.slice(0, 7)}${o['dry-run'] ? '-dry-run' : ''}`;
   const work = path.resolve('.miqyas', 'bench', id);
   const outDir = path.resolve('bench', id);
-  // Both folders sit in the working directory, so it must lie outside the clone: real paths (symlinks resolved), and
-  // case folded on macOS, whose disks ignore case (path.relative already does on Windows).
-  const real = (p: string) => (process.platform === 'darwin' ? realpathSync.native(p).toLowerCase() : realpathSync.native(p));
-  const rel = path.relative(real(repo), real(process.cwd()));
-  if (!rel || !(rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel))) throw new UsageError(`run the bench from outside ${repo}: it writes ${work} and ${outDir}, and never writes inside the clone`);
+
+  const plans = path.join(ROOT, bench.plans);
+  const benchPlans = await loadPlans([plans]);
+  checkLint(benchPlans);
+  const preset = parsePreset(JSON.parse(await readFile(presetPath(bench.preset), 'utf8')), bench.preset);
+
+  const needsModel = !o['dry-run'] && !o['no-model'] && !inject.agent;
+  // Always validate route flags (--provider/--tier/--endpoint), but only require live credentials when calling a model.
+  const route = resolveCliRoute(o, needsModel);
+  const say = (s: string) => !o.json && process.stderr.write(s + '\n');
+  let benchInject = inject;
+  if (needsModel && !inject.spendGuard && route.billed) {
+    const carrier: Injected = { ...inject };
+    const spendGuard = await confirmLiveSpend({ o, plans: benchPlans, preset, runId: `bench-${bench.name}`, inject: carrier, chosenModel: route.model! });
+    benchInject = { ...carrier, spendGuard };
+  }
   await rm(work, { recursive: true, force: true });
   const phasesMs = { export: 0, build: 0, scrub: 0, run: 0, mutate: 0 };
   const timed = async <T>(phase: keyof typeof phasesMs, fn: () => Promise<T>): Promise<T> => {
@@ -1021,12 +1050,12 @@ async function cmdBench(args: string[], o: Opts, inject: Injected): Promise<numb
   const runCode = await timed('run', async () => {
     const served = await serveDir(dist);
     try {
-      return await cmdRun([plans], { ...shared, url: served.url, out: runDir }, benchInject);
+      return await cmdRun([plans], { ...shared, url: served.url, out: runDir }, benchInject, o.json);
     } finally {
       await served.close();
     }
   });
-  const mutateCode = await timed('mutate', () => cmdMutate([plans], { ...shared, build: dist, preset: bench.preset, out: mutateDir }, benchInject));
+  const mutateCode = await timed('mutate', () => cmdMutate([plans], { ...shared, build: dist, preset: bench.preset, out: mutateDir }, benchInject, o.json));
   const run = JSON.parse(await readFile(path.join(runDir, 'report.json'), 'utf8')) as RunReport;
   const mutation = JSON.parse(await readFile(path.join(mutateDir, 'mutation-report.json'), 'utf8'));
   const unchanged = (await cloneState(repo)) === before;
@@ -1048,7 +1077,7 @@ async function cmdBench(args: string[], o: Opts, inject: Injected): Promise<numb
   await writeFile(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 2) + '\n', 'utf8');
   const md = renderBenchMarkdown(summary);
   await writeFile(path.join(outDir, 'summary.md'), md, 'utf8');
-  process.stdout.write(`\n${md}\nSummary: ${path.join(outDir, 'summary.md')}\n`);
+  process.stdout.write(o.json ? JSON.stringify(summary, null, 2) + '\n' : `\n${md}\nSummary: ${path.join(outDir, 'summary.md')}\n`);
   if (!unchanged) {
     process.stderr.write(`miqyas: the clone at ${repo} changed during the run (HEAD or git status); check it\n`);
     return 3;
@@ -1229,7 +1258,8 @@ export function errorExit(e: unknown): number {
     e instanceof AgentError ||
     e instanceof BudgetError ||
     e instanceof BuildChangedError ||
-    e instanceof SourceError
+    e instanceof SourceError ||
+    e instanceof RetentionConfigError
   ) {
     process.stderr.write(`miqyas: ${e.message}\n`);
     return 3;
