@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Unit tests for Findings pipeline (--fail-on threshold, surface finding ingestion, ledger independence, and scrubbing).
 
 import { mkdtemp, rm } from 'node:fs/promises';

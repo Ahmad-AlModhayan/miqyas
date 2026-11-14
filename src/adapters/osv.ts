@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // OSV vulnerability & malicious-package adapter (ADR 0005, FR-Q4, FR-Q6, Check 13):
 // - `updateOsvDatabase`: explicit opt-in download (`miqyas update-db`) printing & logging contacted endpoints.
 // - `runOsvScannerOffline`: strictly offline `--offline --format=json` execution with zero network calls during runs.

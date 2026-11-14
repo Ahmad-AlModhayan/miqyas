@@ -1,11 +1,11 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { main } from '../../src/cli.js';
+import { main } from '../../src/entry/cli.js';
 import type { BenchSummary } from '../../src/proof-core/bench.js';
 import type { RunReport } from '../../src/proof-core/report.js';
 import { serveDir } from '../../src/surfaces/web/server.js';

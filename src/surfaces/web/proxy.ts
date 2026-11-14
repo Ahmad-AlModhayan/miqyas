@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: Apache-2.0
 // The origin block's floor: an in-process HTTP proxy that a browser context sends every request through. ctx.route
 // and ctx.routeWebSocket work inside the page, so a dedicated or shared worker's WebSocket never meets them. The
 // proxy sits in the network stack, below every page, frame and worker, and nothing in the page can route around it.

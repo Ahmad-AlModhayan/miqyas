@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Gitleaks adapter (ADR 0005, FR-Q4): shells out to user-installed `gitleaks --redact` for served artifacts (Check 5)
 // and repository + git history (Check 6), classifying known key formats (fail) vs generic hits (findings only).
 

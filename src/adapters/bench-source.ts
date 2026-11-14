@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Getting a bench's app: a read-only export from the user's clone and a build that runs the same on macOS, Linux and
 // Windows. Nothing here writes inside the clone: `git archive` and `rev-parse` only read, and `status` runs without
 // optional locks so it doesn't refresh the index.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: Apache-2.0
 // Unified web target policy (Layer 1: surfaces): same-origin isolation rules across pages/frames/workers/probes,
 // Test-host vs verified Owned-host gating for active checks and writes, and non-negotiable never-do guards.
 

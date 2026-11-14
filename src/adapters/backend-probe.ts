@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Active read-only backend & authorization probe adapter (Layer 2: adapters).
 // Implements Grade 1 Checks 8 (public-key BaaS table read probe), 9 (two-account IDOR replay),
 // and 10 (sessionless protected-route replay). Strictly gated behind `--active` + host ownership

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Offline OpenAI-compatible router & agent tests against a local 127.0.0.1 HTTP mock server (issue #10).
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';

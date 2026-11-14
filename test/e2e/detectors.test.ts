@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Deterministic offline Chromium fixture tests for all 7 always-on screen detectors and --fail-on CLI gating (#13).
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { main } from '../../src/cli.js';
+import { main } from '../../src/entry/cli.js';
 import type { RunReport } from '../../src/proof-core/report.js';
 import { openWebSurfaceDriver } from '../../src/surfaces/web/driver.js';
 import { NO_SCRUB } from '../../src/scrub/scrub.js';

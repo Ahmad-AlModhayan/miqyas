@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Hardened verdict & candidate narrowing unit tests: protocol narrowing, prompt-injection detection,
 // cite/quoted-text enforcement, strict mode, findings pipeline, and report schema conformance.
 

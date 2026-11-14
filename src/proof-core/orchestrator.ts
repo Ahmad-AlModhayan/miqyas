@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Proof Core orchestrator: the single seam coordinating normalized plans, SurfaceSession boundaries, Adapters,
 // and Agents into unified ledger verdicts, evidence artifacts, and RunResult / MutationRunResult outputs.
 

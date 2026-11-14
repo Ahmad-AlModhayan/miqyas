@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: Apache-2.0
 // Bounded code-driven same-origin crawler (FR-B8 / #14):
 // Follows reachable same-origin links, tabs, menus, and safe non-form controls up to 50 screens / depth 3 / 2 req/s.
 // Never submits forms, skips English & Arabic destructive controls, enforces same-origin isolation, and halts on 429/503.

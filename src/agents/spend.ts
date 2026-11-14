@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Spend guard: offline quotes, strict typed hard caps, persistent $20/day ledger in ~/.miqyas/,
 // 25% findings share cutoff, and pessimistic pre-call budget gating.
 

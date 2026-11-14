@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Run reports: JSON (the ledger, machine-readable) and Markdown (for people). Same data, two renderings.
 
 import { readFileSync } from 'node:fs';

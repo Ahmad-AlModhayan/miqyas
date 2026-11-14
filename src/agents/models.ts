@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Maintained model tier table, first-party USD pricing, staleness checks, and Anthropic endpoint resolution.
 // Layer 2 (`agents`): single source of truth used by agents, proof-core reports/benchmarks, and CLI.
 

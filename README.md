@@ -70,23 +70,19 @@ network).
 
 ## Licence
 
-Miqyas is **open code**: the source is public under the [PolyForm Shield License 1.0.0](LICENSE). It is
-source-available, not open source by the OSI definition. You may read, run, change and share it, and send pull
-requests. You may not use it to provide a product that competes with Miqyas or with a Kahf product built on it, free
-or paid. Notices: [NOTICE](NOTICE.md); the reasoning: [open model](docs/OPEN_MODEL.md).
+Miqyas is open source under a **decoupled open-core** model (see [`docs/OPEN_MODEL.md`](docs/OPEN_MODEL.md)):
 
 | Path | Licence |
 |---|---|
-| everything in this repository | PolyForm Shield 1.0.0 (`LICENSE`) |
+| `src/proof-core/`, `src/adapters/`, `src/agents/`, `src/entry/`, `test/` | `AGPL-3.0-only` ([`LICENSE`](LICENSE)) — commercial dual-licences available from Kahf Labs |
+| `src/protocol/`, `src/scrub/`, `src/surfaces/`, `src/cli.ts`, `scripts/`, `presets/`, `schema/` | `Apache-2.0` ([`LICENSE-APACHE`](LICENSE-APACHE)) |
 
-A planned Apache-2.0 package, `miqyas-drivers` (worker protocol, surface drivers, RTL checks, scrubbers, fault
-presets), will live in its own folder with its own `LICENSE`; this table gains a row when it lands.
+No `Apache-2.0` module may import any `AGPL-3.0-only` module (`npm run lint` enforces both layer boundaries and per-file SPDX headers in CI).
 
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md). Every pull request needs the
-[contributor agreement](CLA.md); you keep your copyright. The names and logos Kahf, Wasl, Qasd and Miqyas are not
-licensed for forks ([TRADEMARKS.md](TRADEMARKS.md)).
+[contributor agreement](CLA.md); you keep your copyright. The names Kahf, Wasl, Qasd and Miqyas are not licensed for forks ([TRADEMARKS.md](TRADEMARKS.md)).
 
 ## Security
 
