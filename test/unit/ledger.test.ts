@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Shield-1.0.0
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
-import { exitCodeFor, PlanLedger, reportPath, runVerdict, settleJudgement, type EvidenceNode, type PlanResult } from '../../src/proof-core/ledger.js';
+import { describe, expect, it } from 'vitest';
+import { exitCodeFor, isDryRunStatus, PlanLedger, reportPath, resolveReportBases, runVerdict, settleJudgement, type EvidenceNode, type PlanResult } from '../../src/proof-core/ledger.js';
 import { parsePlan } from '../../src/proof-core/plan.js';
 
 const plan = parsePlan(
@@ -258,5 +260,28 @@ describe('reportPath', () => {
   it('keeps only the file name for a plan outside it, so no absolute path reaches a report', () => {
     expect(reportPath(path.resolve('/home/someone/private/plan.json'), cwd)).toBe('plan.json');
     expect(reportPath('../other/plan.json', cwd)).toBe('plan.json');
+  });
+  it('supports multiple reportBases, resolves symlinked directories, and strips Windows drive/UNC prefixes', async () => {
+    const tmpRoot = await mkdtemp(path.join(os.tmpdir(), 'miqyas-path-'));
+    try {
+      const realRepo = path.join(tmpRoot, 'real-repo');
+      const linkRepo = path.join(tmpRoot, 'link-repo');
+      await mkdir(path.join(realRepo, 'plans'), { recursive: true });
+      await symlink(realRepo, linkRepo);
+
+      const bases = resolveReportBases(linkRepo, path.join(tmpRoot, 'work'));
+      expect(reportPath(path.join(realRepo, 'plans', 'a.json'), bases)).toBe('plans/a.json');
+      expect(reportPath(path.join(realRepo, 'plans', 'nested-missing', 'b.json'), bases)).toBe('plans/nested-missing/b.json');
+      expect(reportPath('C:\\work\\private\\plan.json', cwd)).toBe('plan.json');
+      expect(reportPath('\\\\server\\share\\folder\\plan.json', cwd)).toBe('plan.json');
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+  it('identifies both dry run messages consistently with isDryRunStatus', () => {
+    expect(isDryRunStatus('dry run: plan resolved, nothing judged')).toBe(true);
+    expect(isDryRunStatus('dry_run')).toBe(true);
+    expect(isDryRunStatus('page.goto: net::ERR_CONNECTION_REFUSED')).toBe(false);
+    expect(isDryRunStatus(undefined)).toBe(false);
   });
 });

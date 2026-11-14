@@ -35,7 +35,17 @@ import {
   type FailOnThreshold,
   type Finding,
 } from './findings.js';
-import { exitCodeFor, PlanLedger, settleJudgement, type ActionLog, type Evidence, type PlanResult } from './ledger.js';
+import {
+  exitCodeFor,
+  isDryRunStatus,
+  PlanLedger,
+  resolveReportBases,
+  settleJudgement,
+  type ActionLog,
+  type Evidence,
+  type PlanResult,
+} from './ledger.js';
+import { cleanupRunsRetention } from './retention.js';
 import {
   applyMutation,
   classify,
@@ -118,6 +128,8 @@ export interface ExecutePlansOptions extends RunSettings {
   agent?: Agent | null;
   noModel?: boolean;
   runDir: string;
+  repoPath?: string;
+  reportBases?: readonly string[];
   scrub: ScrubRules;
   env?: NodeJS.ProcessEnv;
   proposeState?: ProposeState;
@@ -130,6 +142,8 @@ export interface VerificationRunOptions {
   url: string;
   plans: Plan[];
   runDir: string;
+  runsDir?: string;
+  retentionDays?: number;
   driver: SurfaceDriver;
   agent: Agent | null;
   noModel?: boolean;
@@ -183,6 +197,9 @@ export interface MutationRunOptions {
   preset: MutationPreset;
   plans: Plan[];
   runDir: string;
+  runsDir?: string;
+  retentionDays?: number;
+  repoPath?: string;
   driver: SurfaceDriver;
   serve: (dir: string) => Promise<MutationServer>;
   agent: Agent | null;
@@ -373,7 +390,7 @@ async function proposeForScreen(opts: {
 
 async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePlansOptions): Promise<PlanResult> {
   const started = Date.now();
-  const ledger = new PlanLedger(plan);
+  const ledger = new PlanLedger(plan, opts.reportBases ?? resolveReportBases(opts.repoPath));
   const env = opts.env ?? process.env;
   const proposeState = opts.proposeState ?? { seenScreens: new Set<string>(), exhausted: false };
   // Secret values are scrubbed back to their placeholders before any text reaches the model.
@@ -583,7 +600,8 @@ async function runSinglePlan(driver: SurfaceDriver, plan: Plan, opts: ExecutePla
 export async function executePlans(plans: Plan[], opts: ExecutePlansOptions): Promise<PlanResult[]> {
   await mkdir(opts.runDir, { recursive: true });
   const proposeState = opts.proposeState ?? { seenScreens: new Set<string>(), exhausted: false };
-  const sharedOpts: ExecutePlansOptions = { ...opts, proposeState };
+  const reportBases = opts.reportBases ?? resolveReportBases(opts.repoPath);
+  const sharedOpts: ExecutePlansOptions = { ...opts, proposeState, reportBases };
   const results: PlanResult[] = new Array(plans.length);
   let next = 0;
   const worker = async () => {
@@ -674,6 +692,15 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
 
   const startedAt = opts.startedAt ?? new Date();
   const dryRun = opts.agent === null && !opts.noModel;
+  const runEnv = opts.env ?? process.env;
+  const reportBases = resolveReportBases(opts.repoPath);
+  await cleanupRunsRetention({
+    activeRunDir: opts.runDir,
+    ...(opts.runsDir !== undefined ? { runsDir: opts.runsDir } : {}),
+    ...(opts.retentionDays !== undefined ? { retentionDays: opts.retentionDays } : {}),
+    env: runEnv,
+    now: startedAt,
+  });
   await mkdir(opts.runDir, { recursive: true });
 
   const proposeState: ProposeState = { seenScreens: new Set<string>(), exhausted: false };
@@ -683,7 +710,6 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     opts.onFinding?.(f);
   };
 
-  const runEnv = opts.env ?? process.env;
   const resolvedAccounts = opts.testAccounts ?? resolveTestAccountsFromEnv(runEnv);
   const credSecrets = collectCredentialSecrets(runEnv, resolvedAccounts);
   const sharedCrawlRules = withSecrets(opts.scrub, credSecrets.names, credSecrets.env);
@@ -735,6 +761,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     agent: opts.agent,
     ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
     runDir: opts.runDir,
+    reportBases,
     scrub: opts.scrub,
     proposeState,
     ...pickRunSettings(opts.settings),
@@ -791,6 +818,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
             agent: opts.agent,
             ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
             runDir: opts.runDir,
+            reportBases,
             scrub: sharedCrawlRules,
             proposeState,
             ...picked,
@@ -889,6 +917,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     ...(spend ? { spend } : {}),
     method,
     plans: allPlans,
+    reportBases,
     ...(crawlSummary ? { crawl: crawlSummary } : {}),
     ...(readinessReport ? { readiness: readinessReport } : {}),
     ...(findings.length ? { findings } : {}),
@@ -902,7 +931,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
 
   let exitCode: number;
   if (report.verdict === 'dry_run') {
-    const broken = allPlans.filter((r) => !r.error?.startsWith('dry run'));
+    const broken = allPlans.filter((r) => !isDryRunStatus(r.error));
     exitCode = broken.length ? 3 : 0;
   } else {
     exitCode = exitCodeFor(report.verdict);
@@ -963,6 +992,13 @@ export async function runPlans(plans: Plan[], opts: RunOptions): Promise<PlanRes
 
 /** Proof Core mutation preset coordinator: proves mutation effectiveness before verifying detection through Proof Core. */
 export async function runMutations(opts: MutationRunOptions): Promise<MutationRunResult> {
+  const reportBases = resolveReportBases(opts.repoPath);
+  await cleanupRunsRetention({
+    activeRunDir: opts.runDir,
+    ...(opts.runsDir !== undefined ? { runsDir: opts.runsDir } : {}),
+    ...(opts.retentionDays !== undefined ? { retentionDays: opts.retentionDays } : {}),
+    ...(opts.env ? { env: opts.env } : {}),
+  });
   await mkdir(opts.runDir, { recursive: true });
   const dryRun = opts.agent === null && !opts.noModel;
   const concurrency = opts.concurrency ?? 3;
@@ -985,6 +1021,7 @@ export async function runMutations(opts: MutationRunOptions): Promise<MutationRu
           agent: opts.agent,
           ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
           runDir: path.join(opts.runDir, 'baseline'),
+          reportBases,
           scrub: opts.scrub,
           concurrency,
           ...(opts.strict ? { strict: true } : {}),
@@ -1043,6 +1080,7 @@ export async function runMutations(opts: MutationRunOptions): Promise<MutationRu
                 agent: opts.agent,
                 ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
                 runDir: path.join(opts.runDir, m.id),
+                reportBases,
                 scrub: opts.scrub,
                 ...(opts.strict ? { strict: true } : {}),
                 ...(opts.env !== undefined ? { env: opts.env } : {}),

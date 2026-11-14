@@ -9,7 +9,7 @@ import type { RunQuote, SpendGuard } from '../agents/spend.js';
 import { PLAYWRIGHT_VERSION } from '../surfaces/web/driver.js';
 import type { FailOnThreshold, Finding } from './findings.js';
 import { findingsExceedThreshold } from './findings.js';
-import { countEntries, runVerdict, type PlanCounts, type PlanResult, type RunVerdict } from './ledger.js';
+import { countEntries, reportPath, runVerdict, type PlanCounts, type PlanResult, type RunVerdict } from './ledger.js';
 import type { ReadinessProfile, ReadinessReport } from './readiness.js';
 
 export type { ModelInfo, Usage } from '../agents/agent.js';
@@ -167,9 +167,11 @@ export function buildReport(input: {
   readiness?: ReadinessReport;
   findings?: Finding[];
   failOn?: FailOnThreshold;
+  reportBases?: readonly string[];
 }): RunReport {
-  const totals = { plans: input.plans.length, plansPassed: 0, ...countEntries([]) };
-  for (const p of input.plans) {
+  const plans = input.plans.map((p) => (p.file ? { ...p, file: reportPath(p.file, input.reportBases) } : p));
+  const totals = { plans: plans.length, plansPassed: 0, ...countEntries([]) };
+  for (const p of plans) {
     if (p.verdict === 'pass') totals.plansPassed++;
     totals.assertions += p.counts.assertions;
     totals.passed += p.counts.passed;
@@ -182,9 +184,9 @@ export function buildReport(input: {
   const failOn = input.failOn ?? input.method.settings.failOn;
   const crawlHaltedEarly = Boolean(input.crawl?.haltedReason && input.crawl.haltedReason !== 'max-screens');
   const ledgerVerdict =
-    input.plans.length === 0 && input.method.settings.crawl
+    plans.length === 0 && input.method.settings.crawl
       ? (crawlHaltedEarly ? 'fail' : 'pass')
-      : runVerdict(input.plans);
+      : runVerdict(plans);
   const failedByFindings =
     !input.dryRun &&
     ledgerVerdict === 'pass' &&
@@ -206,7 +208,7 @@ export function buildReport(input: {
     screenshots: SCREENSHOTS,
     ...(input.crawl ? { crawl: input.crawl } : {}),
     ...(input.readiness ? { readiness: input.readiness } : {}),
-    plans: input.plans,
+    plans,
     ...(input.findings?.length ? { findings: input.findings } : {}),
   };
 }
@@ -307,7 +309,8 @@ export function renderMarkdown(r: RunReport): string {
 
   for (const p of r.plans) {
     lines.push(`## ${cell(p.planId)}: ${cell(p.name)}`, '');
-    lines.push(`**${MARK[r.dryRun ? r.verdict : p.verdict]}**${p.file ? ` · ${code(p.file)}` : ''}`, '');
+    const fileLabel = p.file ? reportPath(p.file) : '';
+    lines.push(`**${MARK[r.dryRun ? r.verdict : p.verdict]}**${fileLabel ? ` · ${code(fileLabel)}` : ''}`, '');
     if (p.error) lines.push(`Run error: ${cell(p.error)}`, '');
     lines.push('| Step | Type | Result | Method | What was seen | Evidence |', '|---|---|---|---|---|---|');
     for (const e of p.entries) {

@@ -4,6 +4,7 @@
 // Stryker's, and every number here is a product KPI (our own plans and mutants), not a recognised benchmark suite.
 
 import { PRICES, PRICE_NOTE, costEstimate, usageByModel } from '../agents/models.js';
+import { isDryRunStatus } from './ledger.js';
 import { excludedText, validity, type MutationSummary, type Outcome } from './mutate.js';
 import { answeredBy, cell, code, renderMethod, TOOL_VERSION, type Method, type RunReport, type Usage } from './report.js';
 import type { BenchRegression, CorpusScoreReport } from './scoring.js';
@@ -132,7 +133,7 @@ export function buildBenchSummary(i: BenchInput): BenchSummary {
   const usage = addUsage(model, i.run.usage, mu);
   const b = i.bench;
   const pinned = i.commit === b.commit;
-  const unresolved = i.dryRun ? i.run.plans.filter((p) => p.error && !p.error.startsWith('dry run')).length : 0;
+  const unresolved = i.dryRun ? i.run.plans.filter((p) => p.error && !isDryRunStatus(p.error)).length : 0;
   return {
     tool: 'miqyas',
     kind: 'bench',
@@ -154,7 +155,7 @@ export function buildBenchSummary(i: BenchInput): BenchSummary {
       unchanged: i.unchanged,
     },
     scrub: i.scrub,
-    verdict: i.run.verdict,
+    verdict: i.dryRun ? 'dry_run' : i.run.verdict,
     plans: { total: t.plans, passed: t.plansPassed, unresolved },
     assertions: { written: t.assertions, withVerdict: t.passed + t.failed, passed: t.passed, failed: t.failed, blocked: t.blocked, unverified: t.unverified, notChecked: t.notChecked },
     mutations: {

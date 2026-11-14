@@ -2,6 +2,7 @@
 // The assertion ledger: one verdict with evidence per written assertion. A plan passes only when every assertion
 // has a recorded pass; the verdict is computed from the entries, never taken from a model's overall impression.
 
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { extractQuotedTexts, matchesCiteLocator } from '../agents/protocol.js';
 import type { Box, EvidenceNode, Locator } from '../surfaces/session.js';
@@ -170,7 +171,10 @@ export class PlanLedger {
   private error: string | undefined;
   private blocked = false;
 
-  constructor(readonly plan: Plan) {}
+  constructor(
+    readonly plan: Plan,
+    private readonly reportBases?: string | readonly string[],
+  ) {}
 
   private step(stepId: string, kind: Step['type']): Step {
     const step = this.plan.steps.find((s) => s.id === stepId);
@@ -228,7 +232,7 @@ export class PlanLedger {
       entries,
       durationMs,
     };
-    if (this.plan.source.file) result.file = reportPath(this.plan.source.file);
+    if (this.plan.source.file) result.file = reportPath(this.plan.source.file, this.reportBases);
     if (this.error) result.error = this.error;
     return result;
   }
@@ -276,9 +280,59 @@ export function exitCodeFor(v: RunVerdict): 0 | 1 | 3 {
   return v === 'pass' ? 0 : v === 'fail' ? 1 : 3;
 }
 
-/** A plan file as reports record it: relative to the working directory with / separators, or the bare file name when
+const WIN_ABS_RE = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+
+/** Resolve `target` through native symlinks, walking up to the deepest existing ancestor if the leaf does not exist yet. */
+export function safeRealpath(target: string): string {
+  let cur = path.resolve(target);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync.native(cur);
+      return tail.length ? path.join(real, ...tail) : real;
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return path.resolve(target);
+      tail.unshift(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+/** Build ordered base directories (`[cwd, repoPath]`) used to relativize `plans[].file` in reports. */
+export function resolveReportBases(repoPath?: string, cwd = process.cwd()): string[] {
+  return repoPath ? [cwd, repoPath] : [cwd];
+}
+
+/** Return true when a plan error string represents a dry-run placeholder (`dry run ...` or `dry_run`). */
+export function isDryRunStatus(error?: string): boolean {
+  return Boolean(error && /^dry[_ ]run(?=$|[:\s(])/i.test(error.trim()));
+}
+
+/** A plan file as reports record it: relative to the working directory or repo with / separators, or the bare file name when
  * it lies outside, so a report never carries a local absolute path. */
-export function reportPath(file: string, cwd = process.cwd()): string {
-  const rel = path.relative(cwd, path.resolve(cwd, file));
-  return !rel || rel.startsWith('..') || path.isAbsolute(rel) ? path.basename(file) : rel.split(path.sep).join('/');
+export function reportPath(file: string, baseDirs: string | readonly string[] = process.cwd()): string {
+  const trimmed = file.trim();
+  if (!trimmed) return '';
+  if (WIN_ABS_RE.test(trimmed)) {
+    const bases = Array.isArray(baseDirs) ? baseDirs : [baseDirs];
+    for (const base of bases) {
+      if (!base || !WIN_ABS_RE.test(base)) continue;
+      const rel = path.win32.relative(base, trimmed);
+      if (rel && !rel.startsWith('..') && !WIN_ABS_RE.test(rel)) return rel.split('\\').join('/');
+    }
+    return path.win32.basename(trimmed);
+  }
+
+  const bases = Array.isArray(baseDirs) ? baseDirs : [baseDirs];
+  for (const base of bases) {
+    if (!base) continue;
+    const resolvedBase = safeRealpath(path.resolve(base));
+    const resolvedFile = safeRealpath(path.isAbsolute(trimmed) ? trimmed : path.resolve(base, trimmed));
+    const rel = path.relative(resolvedBase, resolvedFile);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+      return rel.split(path.sep).join('/');
+    }
+  }
+  return path.basename(trimmed.replace(/\\/g, '/'));
 }
