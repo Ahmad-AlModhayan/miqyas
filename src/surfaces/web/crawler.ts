@@ -340,7 +340,24 @@ const COLLECT_SCREEN_ARTIFACTS_FN = `() => {
   const inputs = document.querySelectorAll('input, textarea');
   for (let i = 0; i < inputs.length; i++) {
     const v = inputs[i].value;
+    if (inputs[i].tagName === 'INPUT' && String(inputs[i].type || '').toLowerCase() === 'password') continue;
     if (v) domParts.push(String(v).slice(0, 8192));
+  }
+  const forms = document.querySelectorAll('form');
+  for (let i = 0; i < forms.length && i < 20; i++) {
+    const form = forms[i];
+    const action = form.getAttribute('action') || '';
+    const method = form.getAttribute('method') || 'GET';
+    const fields = [];
+    const controls = form.querySelectorAll('input[name], select[name], textarea[name]');
+    for (let j = 0; j < controls.length && j < 30; j++) {
+      const c = controls[j];
+      const tag = c.tagName.toLowerCase();
+      const name = (c.getAttribute('name') || '').replace(/"/g, '&quot;');
+      const type = (c.getAttribute('type') || '').replace(/"/g, '&quot;');
+      fields.push('<' + tag + (type ? ' type="' + type + '"' : '') + ' name="' + name + '">');
+    }
+    domParts.push('<form action="' + action.replace(/"/g, '&quot;') + '" method="' + method.replace(/"/g, '&quot;') + '">' + fields.join('') + '</form>');
   }
   const storageLines = [];
   try {

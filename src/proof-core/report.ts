@@ -55,6 +55,7 @@ export interface Method {
     maxScreens?: number;
     maxDepth?: number;
     maxRps?: number;
+    maxTimeMs?: number;
     active?: boolean;
     allowWrites?: boolean;
     allowHost?: string;
@@ -382,7 +383,7 @@ export function renderMethod(m: Method): string[] {
     `| Versions | Miqyas ${v.miqyas}, Node ${v.node}, Playwright ${v.playwright}, Chromium ${v.browser ?? 'not launched'} |`,
     `| OS | ${m.os.platform} ${m.os.release} (${m.os.arch}) |`,
     `| Model | ${m.model ? formatMethodModel(m.model) : s.noModel ? 'none (--no-model)' : 'none (dry run)'} |`,
-    `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'}${s.strict ? ', strict' : ''}${s.failOn && s.failOn !== 'none' ? `, fail-on ${s.failOn}` : ''}${s.profile ? `, profile ${s.profile}` : ''}${s.repoProvided ? ', repo' : ''}${s.crawl ? `, crawl (screens ${s.maxScreens ?? 50}, depth ${s.maxDepth ?? 3}, ${s.maxRps ?? 2} req/s)` : ''}${s.active ? `, active${s.allowWrites ? ' + writes' : ''}${s.allowHost ? ` (allow-host ${cell(s.allowHost)})` : ''}` : ''} |`,
+    `| Settings | concurrency ${s.concurrency}, viewport ${s.viewport.width}x${s.viewport.height}, ${s.headed ? 'headed' : 'headless'}, other origins ${s.allowOtherOrigins ? 'allowed' : 'blocked'}${s.strict ? ', strict' : ''}${s.failOn && s.failOn !== 'none' ? `, fail-on ${s.failOn}` : ''}${s.profile ? `, profile ${s.profile}` : ''}${s.repoProvided ? ', repo' : ''}${s.crawl ? `, crawl (screens ${s.maxScreens ?? 50}, depth ${s.maxDepth ?? 3}, ${s.maxRps ?? 2} req/s)` : ''}${s.maxTimeMs !== undefined ? `, max time ${(s.maxTimeMs / 1000).toFixed(1)} s` : ''}${s.active ? `, active${s.allowWrites ? ' + writes' : ''}${s.allowHost ? ` (allow-host ${cell(s.allowHost)})` : ''}` : ''} |`,
     `| Timeouts | plan ${t.planMs / 1000} s, navigation ${t.navigationMs / 1000} s, action ${t.actionMs / 1000} s |`,
     `| Preset | ${m.preset ? cell(m.preset) : 'none'} |`,
     `| Scrub rules | ${m.scrub.file ? `${cell(m.scrub.file)}, SHA-256 \`${m.scrub.sha256}\`, ${m.scrub.terms} term(s)` : 'none'} |`,

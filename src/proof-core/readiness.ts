@@ -13,6 +13,11 @@ import {
   type TestAccountSpec,
 } from '../adapters/backend-probe.js';
 import {
+  probeParamSecurity,
+  probeSpendingRoutes,
+  type ProbeHaltReason,
+} from '../adapters/param-spend-probe.js';
+import {
   detectKnownSecretFormats,
   isGitRepo,
   probeGitleaksVersion,
@@ -110,6 +115,8 @@ export interface ReadinessReport {
 }
 
 export const SECURITY_NOTICE = 'not a penetration test';
+export const READINESS_DROP_ORDER = [12, 11, 3] as const;
+export const TIME_LIMIT_DROP_REASON = 'dropped due to run time budget (drop order 12 -> 11 -> 3)';
 
 /** The eight canonical readiness pillars in CHARTER.md order. */
 export const READINESS_PILLARS: readonly ReadinessPillarSpec[] = [
@@ -1449,10 +1456,16 @@ export async function evaluateCheck13Dependencies(opts: {
 
 export interface ActiveProbeCheckOptions {
   active?: boolean;
+  allowWrites?: boolean;
   url?: string;
   allowHost?: string;
   hostToken?: string;
   maxRps?: number;
+  runId?: string;
+  deadlineMs?: number;
+  now?: () => number;
+  probeUrls?: readonly string[];
+  spendingRoutes?: readonly string[];
   crawl?: CrawlResult;
   accounts?: readonly TestAccountSpec[];
   protectedRoutes?: readonly string[];
@@ -1464,7 +1477,7 @@ export interface ActiveProbeCheckOptions {
 function finalizeActiveSecurityCheck(opts: {
   spec: ReadinessCheckSpec;
   executed: boolean;
-  haltedReason?: 'rate-limit' | 'max-probes';
+  haltedReason?: ProbeHaltReason;
   reason?: string;
   whatToAdd: string;
   coverage: string;
@@ -1477,12 +1490,17 @@ function finalizeActiveSecurityCheck(opts: {
   adapterInfo?: AdapterMethodInfo;
 } {
   const { spec, findings } = opts;
-  // FR-Q2: if a check was aborted early by 429/503 rate-limiting with zero findings, it cannot claim pass.
-  if (!opts.executed || (opts.haltedReason === 'rate-limit' && findings.length === 0)) {
+  // FR-Q2 / FR-Q4: if halted early on rate-limit, time-limit, or write-policy with zero findings, record not_checked (never pass).
+  const abortedWithNoFindings =
+    (opts.haltedReason === 'rate-limit' || opts.haltedReason === 'time-limit' || opts.haltedReason === 'write-policy') &&
+    findings.length === 0;
+  if (!opts.executed || abortedWithNoFindings) {
     const reason =
       opts.haltedReason === 'rate-limit'
         ? 'rate-limit encountered (429/503) before verification completed'
-        : opts.reason ?? 'active probe did not reach minimum coverage';
+        : opts.haltedReason === 'time-limit'
+          ? TIME_LIMIT_DROP_REASON
+          : opts.reason ?? 'active probe did not reach minimum coverage';
     return secretCheckNotChecked(spec, {
       adapter: PROBE_ADAPTER_ID,
       adapterVersion: PROBE_ADAPTER_VERSION,
@@ -1514,7 +1532,7 @@ function finalizeActiveSecurityCheck(opts: {
       adapterVersion: PROBE_ADAPTER_VERSION,
       coverage: opts.coverage,
       observation: verdict === 'fail' ? opts.failObservation : opts.passObservation,
-      securityNotice: SECURITY_NOTICE,
+      ...(spec.securityCheck ? { securityNotice: SECURITY_NOTICE } : {}),
       ...(findings.length > 0 ? { evidenceIds: findings.map((f) => f.id) } : {}),
     },
     findings,
@@ -1529,6 +1547,9 @@ function buildProbeArgs(opts: ActiveProbeCheckOptions) {
     ...(opts.allowHost ? { allowHost: opts.allowHost } : {}),
     ...(opts.hostToken ? { hostToken: opts.hostToken } : {}),
     ...(opts.maxRps !== undefined ? { maxRps: opts.maxRps } : {}),
+    ...(opts.runId ? { runId: opts.runId } : {}),
+    ...(opts.deadlineMs !== undefined ? { deadlineMs: opts.deadlineMs } : {}),
+    ...(opts.now ? { now: opts.now } : {}),
     ...(opts.crawl ? { crawl: opts.crawl } : {}),
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     ...(opts.hostPolicyDeps ? { hostPolicyDeps: opts.hostPolicyDeps } : {}),
@@ -1691,6 +1712,389 @@ export async function evaluateCheck10SessionAuth(opts: ActiveProbeCheckOptions):
   });
 }
 
+function specForCheck(number: number): ReadinessCheckSpec {
+  const spec = GRADE_1_CHECKS.find((c) => c.number === number);
+  if (!spec) throw new Error(`Unknown Grade 1 check number: ${number}`);
+  return spec;
+}
+
+function buildTimeLimitDropCheck(spec: ReadinessCheckSpec, coverage = '0 probes run (dropped: time-limit)'): ReadinessCheckResult {
+  return {
+    number: spec.number,
+    id: spec.id,
+    stepId: spec.stepId,
+    pillar: spec.pillar,
+    title: spec.title,
+    mode: spec.mode,
+    verdict: 'not_checked',
+    method: 'none',
+    adapter: spec.runner,
+    coverage,
+    observation: '',
+    reason: TIME_LIMIT_DROP_REASON,
+    whatToAdd: 'Increase --max-time or reduce crawled screens/checks',
+    ...(spec.securityCheck ? { securityNotice: SECURITY_NOTICE } : {}),
+  };
+}
+
+/** Drop up to `dropCount` checks as `not_checked` strictly in order 12 -> 11 -> 3 (never `pass`). */
+export function applyTimeLimitDropOrder(
+  checks: readonly ReadinessCheckResult[],
+  dropCount: number,
+): ReadinessCheckResult[] {
+  const count = Math.max(0, Math.min(READINESS_DROP_ORDER.length, Math.floor(dropCount)));
+  if (count === 0) return [...checks];
+  const dropSet = new Set<number>(READINESS_DROP_ORDER.slice(0, count));
+  return checks.map((c) => {
+    if (!dropSet.has(c.number)) return c;
+    const spec = specForCheck(c.number);
+    return buildTimeLimitDropCheck(spec, c.coverage);
+  });
+}
+
+/** Check 11: Inert reflected XSS and open-redirect parameter probes (miqyas-probe-<runId>) under --active. */
+export async function evaluateCheck11ParamProbes(opts: ActiveProbeCheckOptions): Promise<{
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  adapterInfo?: AdapterMethodInfo;
+}> {
+  const spec = specForCheck(11);
+  const precheck = missingUrlOrInactive(spec, opts, '0 parameters probed');
+  if (precheck) return precheck;
+
+  const now = opts.now ?? (() => Date.now());
+  if (opts.deadlineMs !== undefined && now() >= opts.deadlineMs) {
+    return {
+      check: buildTimeLimitDropCheck(spec, '0 parameters probed (dropped: time-limit)'),
+      findings: [],
+      adapterInfo: {
+        id: PROBE_ADAPTER_ID,
+        version: PROBE_ADAPTER_VERSION,
+        coverage: '0 parameters probed (dropped: time-limit)',
+        status: 'skipped',
+        detail: TIME_LIMIT_DROP_REASON,
+      },
+    };
+  }
+
+  const hide = opts.hide ?? ((t: string) => t);
+  const probe = await probeParamSecurity({
+    ...buildProbeArgs(opts),
+    ...(opts.probeUrls ? { probeUrls: opts.probeUrls } : {}),
+  });
+
+  const findings: Finding[] = probe.issues.map((issue, i) => ({
+    id: `miqyas-probe-check11:${i + 1}`,
+    category: issue.kind === 'reflected-xss' ? 'reflected-xss' : 'open-redirect',
+    title: `[${SECURITY_NOTICE}] ${issue.kind === 'reflected-xss' ? 'Reflected XSS' : 'Open redirect'} in param "${hide(issue.param)}"`,
+    severity: 'high',
+    source: 'code',
+    confirmed: true,
+    url: hide(issue.endpoint),
+    planId: 'readiness',
+    stepId: spec.stepId,
+    evidence: hide(`[${SECURITY_NOTICE}] ${issue.detail}`),
+  }));
+
+  return finalizeActiveSecurityCheck({
+    spec,
+    executed: probe.executed,
+    ...(probe.haltedReason ? { haltedReason: probe.haltedReason } : {}),
+    ...(probe.reason ? { reason: probe.reason } : {}),
+    whatToAdd: 'HTML-escape reflected parameters and allowlist redirect targets; crawl pages with query/form parameters under --active',
+    coverage: probe.coverage,
+    findings,
+    failObservation: `${probe.issues.length} reflected XSS / open-redirect issue(s) across ${probe.probedCount} parameter probe(s) (${SECURITY_NOTICE})`,
+    passObservation: `0 reflected XSS or open-redirect issues across ${probe.probedCount} parameter probe(s) (${SECURITY_NOTICE})`,
+  });
+}
+
+/** Check 12: Spending routes (LLM/SMS/email) reject unauthenticated callers; requires --allow-writes off test hosts. */
+export async function evaluateCheck12SpendingRoutes(opts: ActiveProbeCheckOptions): Promise<{
+  check: ReadinessCheckResult;
+  findings: Finding[];
+  adapterInfo?: AdapterMethodInfo;
+}> {
+  const spec = specForCheck(12);
+  const precheck = missingUrlOrInactive(spec, opts, '0 spending routes probed');
+  if (precheck) return precheck;
+
+  const now = opts.now ?? (() => Date.now());
+  if (opts.deadlineMs !== undefined && now() >= opts.deadlineMs) {
+    return {
+      check: buildTimeLimitDropCheck(spec, '0 spending routes probed (dropped: time-limit)'),
+      findings: [],
+      adapterInfo: {
+        id: PROBE_ADAPTER_ID,
+        version: PROBE_ADAPTER_VERSION,
+        coverage: '0 spending routes probed (dropped: time-limit)',
+        status: 'skipped',
+        detail: TIME_LIMIT_DROP_REASON,
+      },
+    };
+  }
+
+  const hide = opts.hide ?? ((t: string) => t);
+  const probe = await probeSpendingRoutes({
+    ...buildProbeArgs(opts),
+    ...(opts.allowWrites !== undefined ? { allowWrites: opts.allowWrites } : {}),
+    ...(opts.spendingRoutes ? { spendingRoutes: opts.spendingRoutes } : {}),
+  });
+
+  const findings: Finding[] = probe.unprotectedRoutes.map((row, i) => ({
+    id: `miqyas-probe-check12:${i + 1}`,
+    category: 'unauthenticated-spending-route',
+    title: `Check 12: Spending route ${hide(row.endpoint)} accepted unauthenticated ${row.method}`,
+    severity: 'critical',
+    source: 'code',
+    confirmed: true,
+    url: hide(row.endpoint),
+    planId: 'readiness',
+    stepId: spec.stepId,
+    evidence: hide(`${row.method} ${row.endpoint} without session returned HTTP ${row.statusNoSession} (${row.detail})`),
+  }));
+
+  return finalizeActiveSecurityCheck({
+    spec,
+    executed: probe.executed,
+    ...(probe.haltedReason ? { haltedReason: probe.haltedReason } : {}),
+    ...(probe.reason ? { reason: probe.reason } : {}),
+    whatToAdd: 'Require session authentication (401/403) on spending routes; pass --allow-writes with --allow-host off test hosts',
+    coverage: probe.coverage,
+    findings,
+    failObservation: `${probe.unprotectedRoutes.length} spending route(s) accepted unauthenticated requests out of ${probe.probedCount} probed`,
+    passObservation: `All ${probe.probedCount} spending route(s) rejected unauthenticated requests`,
+  });
+}
+
+/** Check 3: Built-in sign-up and log-in templates when a model + two credentialed accounts are active. */
+export async function evaluateCheck3AuthTemplates(opts: {
+  url?: string;
+  crawl?: CrawlResult;
+  noModel?: boolean;
+  modelActive?: boolean;
+  accounts?: readonly TestAccountSpec[];
+  deadlineMs?: number;
+  now?: () => number;
+  hide?: (t: string) => string;
+  runCheck3Templates?: (input: {
+    targetUrl: string;
+    crawl?: CrawlResult;
+    accounts: readonly TestAccountSpec[];
+    deadlineMs?: number;
+  }) => Promise<PlanResult[] | null>;
+}): Promise<{
+  check: ReadinessCheckResult;
+  findings: Finding[];
+}> {
+  const spec = specForCheck(3);
+  const now = opts.now ?? (() => Date.now());
+  if (opts.deadlineMs !== undefined && now() >= opts.deadlineMs) {
+    return {
+      check: buildTimeLimitDropCheck(spec, '0 auth templates executed (dropped: time-limit)'),
+      findings: [],
+    };
+  }
+  if (opts.noModel) {
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'not_checked',
+        method: 'none',
+        adapter: spec.runner,
+        coverage: '0 auth templates run (--no-model)',
+        observation: '',
+        reason: '--no-model skips Check 3 (sign-up and log-in need a model and two test accounts)',
+        whatToAdd: 'Run without --no-model with a model and two credentialed test accounts',
+      },
+      findings: [],
+    };
+  }
+  if (!opts.modelActive) {
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'not_checked',
+        method: 'none',
+        adapter: spec.runner,
+        coverage: '0 auth templates run (no active model)',
+        observation: '',
+        reason: 'no active model configured for Check 3',
+        whatToAdd: 'Configure a model and two credentialed test accounts',
+      },
+      findings: [],
+    };
+  }
+  const accounts = opts.accounts ?? [];
+  const credentialed = accounts.filter(
+    (a) => Boolean((a.credentials?.email?.trim() || a.credentials?.username?.trim()) && a.credentials?.password),
+  );
+  if (credentialed.length < 2 || !opts.url || !opts.runCheck3Templates) {
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'not_checked',
+        method: 'none',
+        adapter: spec.runner,
+        coverage: '0 auth templates run (missing two credentialed test accounts)',
+        observation: '',
+        reason: 'Check 3 requires two test accounts with email/username and password credentials',
+        whatToAdd: 'Set MIQYAS_SECRET_ACCOUNT_A_EMAIL/_PASSWORD and ACCOUNT_B_EMAIL/_PASSWORD',
+      },
+      findings: [],
+    };
+  }
+
+  const results = await opts.runCheck3Templates({
+    targetUrl: opts.url,
+    ...(opts.crawl ? { crawl: opts.crawl } : {}),
+    accounts: credentialed,
+    ...(opts.deadlineMs !== undefined ? { deadlineMs: opts.deadlineMs } : {}),
+  });
+  if (!results || results.length === 0) {
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'not_checked',
+        method: 'none',
+        adapter: spec.runner,
+        coverage: '0 auth templates executed',
+        observation: '',
+        reason: 'Check 3 built-in templates could not be executed',
+        whatToAdd: 'Provide two credentialed test accounts and an active model',
+      },
+      findings: [],
+    };
+  }
+
+  const hide = opts.hide ?? ((t: string) => t);
+  const genuineFailures = results.filter(
+    (p) =>
+      p.counts.failed > 0 ||
+      (p.verdict === 'fail' && p.counts.notChecked === 0 && p.counts.blocked === 0 && p.counts.unverified === 0),
+  );
+  if (
+    opts.deadlineMs !== undefined &&
+    now() >= opts.deadlineMs &&
+    !results.every((p) => p.verdict === 'pass') &&
+    genuineFailures.length === 0
+  ) {
+    return {
+      check: buildTimeLimitDropCheck(spec, `${results.length} auth template(s) partial (dropped: time-limit)`),
+      findings: [],
+    };
+  }
+  const failedPlans = results.filter(
+    (p) =>
+      p.verdict === 'error' ||
+      p.counts.failed > 0 ||
+      p.entries.some((e) => e.kind === 'action' && e.status === 'failed') ||
+      (p.verdict === 'fail' && p.counts.notChecked === 0 && p.counts.blocked === 0 && p.counts.unverified === 0),
+  );
+  const notCheckedPlans = results.filter((p) => p.verdict !== 'pass' && !failedPlans.includes(p));
+  const coverage = `${results.length} auth template(s) executed (${results.map((r) => r.planId).join(', ')})`;
+
+  if (failedPlans.length > 0) {
+    const findings: Finding[] = failedPlans.map((p, i) => {
+      const firstFail = p.entries.find((e) => e.kind === 'assertion' && e.verdict !== 'pass');
+      const failedAction = p.entries.find((e) => e.kind === 'action' && e.status === 'failed');
+      const detail =
+        p.error ??
+        (failedAction && failedAction.kind === 'action'
+          ? failedAction.summary
+          : firstFail && firstFail.kind === 'assertion'
+            ? `${firstFail.observation || firstFail.reason || firstFail.text}`
+            : `${p.planId} ended with verdict ${p.verdict}`);
+      return {
+        id: `check3-auth:${i + 1}`,
+        category: 'auth-flow',
+        title: `Check 3: ${hide(p.name)} failed`,
+        severity: 'high',
+        source: 'code',
+        confirmed: true,
+        planId: 'readiness',
+        stepId: spec.stepId,
+        evidence: hide(`${p.planId}: ${detail}`),
+      };
+    });
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'fail',
+        method: 'code',
+        adapter: spec.runner,
+        coverage,
+        observation: `${failedPlans.length} of ${results.length} auth flow template(s) failed`,
+        evidenceIds: findings.map((f) => f.id),
+      },
+      findings,
+    };
+  }
+
+  if (notCheckedPlans.length > 0) {
+    return {
+      check: {
+        number: spec.number,
+        id: spec.id,
+        stepId: spec.stepId,
+        pillar: spec.pillar,
+        title: spec.title,
+        mode: spec.mode,
+        verdict: 'not_checked',
+        method: 'none',
+        adapter: spec.runner,
+        coverage,
+        observation: '',
+        reason: `${notCheckedPlans.length} of ${results.length} auth flow template(s) ended not_checked`,
+        whatToAdd: 'Ensure sign-up and log-in flows settle and return a deterministic verdict',
+      },
+      findings: [],
+    };
+  }
+
+  return {
+    check: {
+      number: spec.number,
+      id: spec.id,
+      stepId: spec.stepId,
+      pillar: spec.pillar,
+      title: spec.title,
+      mode: spec.mode,
+      verdict: 'pass',
+      method: 'code',
+      adapter: spec.runner,
+      coverage,
+      observation: `Sign-up and log-in templates passed (${results.length} plans)`,
+    },
+    findings: [],
+  };
+}
+
 function defaultNotChecked(
   spec: ReadinessCheckSpec,
   opts: { dryRun: boolean; repoPath?: string; noModel?: boolean; active?: boolean },
@@ -1759,9 +2163,23 @@ export async function evaluateGrade1Profile(opts: {
   fallbackUrl?: string;
   repoPath?: string;
   active?: boolean;
+  allowWrites?: boolean;
   allowHost?: string;
   hostToken?: string;
   maxRps?: number;
+  maxTimeMs?: number;
+  deadlineMs?: number;
+  now?: () => number;
+  runId?: string;
+  probeUrls?: readonly string[];
+  spendingRoutes?: readonly string[];
+  modelActive?: boolean;
+  runCheck3Templates?: (input: {
+    targetUrl: string;
+    crawl?: CrawlResult;
+    accounts: readonly TestAccountSpec[];
+    deadlineMs?: number;
+  }) => Promise<PlanResult[] | null>;
   accounts?: readonly TestAccountSpec[];
   protectedRoutes?: readonly string[];
   fetchImpl?: typeof fetch;
@@ -1862,12 +2280,22 @@ export async function evaluateGrade1Profile(opts: {
     checkFindingKeys.set(13, new Set(c13.findings.map((f) => findingDedupeKey(f))));
   }
 
+  const nowFn = opts.now ?? (() => Date.now());
+  const effectiveDeadlineMs =
+    opts.deadlineMs ?? (opts.maxTimeMs !== undefined ? nowFn() + opts.maxTimeMs : undefined);
+
   const probeOpts: ActiveProbeCheckOptions = {
     ...(opts.active ? { active: true } : {}),
+    ...(opts.allowWrites !== undefined ? { allowWrites: opts.allowWrites } : {}),
     ...(opts.fallbackUrl ? { url: opts.fallbackUrl } : {}),
     ...(opts.allowHost ? { allowHost: opts.allowHost } : {}),
     ...(opts.hostToken ? { hostToken: opts.hostToken } : {}),
     ...(opts.maxRps !== undefined ? { maxRps: opts.maxRps } : {}),
+    ...(opts.runId ? { runId: opts.runId } : {}),
+    ...(effectiveDeadlineMs !== undefined ? { deadlineMs: effectiveDeadlineMs } : {}),
+    now: nowFn,
+    ...(opts.probeUrls ? { probeUrls: opts.probeUrls } : {}),
+    ...(opts.spendingRoutes ? { spendingRoutes: opts.spendingRoutes } : {}),
     ...(opts.crawl ? { crawl: opts.crawl } : {}),
     ...(opts.accounts ? { accounts: opts.accounts } : {}),
     ...(opts.protectedRoutes ? { protectedRoutes: opts.protectedRoutes } : {}),
@@ -1891,6 +2319,35 @@ export async function evaluateGrade1Profile(opts: {
   findings.push(...c10.findings);
   if (c10.findings.length > 0) {
     checkFindingKeys.set(10, new Set(c10.findings.map((f) => findingDedupeKey(f))));
+  }
+
+  // Evaluate droppable checks in reverse drop order (3 -> 11 -> 12) so tight budgets drop 12 -> 11 -> 3.
+  const c3 = await evaluateCheck3AuthTemplates({
+    ...(opts.fallbackUrl ? { url: opts.fallbackUrl } : {}),
+    ...(opts.crawl ? { crawl: opts.crawl } : {}),
+    ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
+    ...(opts.modelActive !== undefined ? { modelActive: opts.modelActive } : {}),
+    ...(opts.accounts ? { accounts: opts.accounts } : {}),
+    ...(effectiveDeadlineMs !== undefined ? { deadlineMs: effectiveDeadlineMs } : {}),
+    now: nowFn,
+    hide,
+    ...(opts.runCheck3Templates ? { runCheck3Templates: opts.runCheck3Templates } : {}),
+  });
+  findings.push(...c3.findings);
+  if (c3.findings.length > 0) {
+    checkFindingKeys.set(3, new Set(c3.findings.map((f) => findingDedupeKey(f))));
+  }
+
+  const c11 = await evaluateCheck11ParamProbes(probeOpts);
+  findings.push(...c11.findings);
+  if (c11.findings.length > 0) {
+    checkFindingKeys.set(11, new Set(c11.findings.map((f) => findingDedupeKey(f))));
+  }
+
+  const c12 = await evaluateCheck12SpendingRoutes(probeOpts);
+  findings.push(...c12.findings);
+  if (c12.findings.length > 0) {
+    checkFindingKeys.set(12, new Set(c12.findings.map((f) => findingDedupeKey(f))));
   }
 
   // Merge gitleaks adapter reporting cleanly into method.adapters (preserving index 0 for backward compatibility).
@@ -1921,7 +2378,9 @@ export async function evaluateGrade1Profile(opts: {
     });
   }
   if (c4.adapterInfo) adapters.push(c4.adapterInfo);
-  const probeInfos = [c8.adapterInfo, c9.adapterInfo, c10.adapterInfo].filter((x): x is AdapterMethodInfo => Boolean(x));
+  const probeInfos = [c8.adapterInfo, c9.adapterInfo, c10.adapterInfo, c11.adapterInfo, c12.adapterInfo].filter(
+    (x): x is AdapterMethodInfo => Boolean(x),
+  );
   if (probeInfos.length > 0) {
     const okInfo = probeInfos.find((x) => x.status === 'ok');
     const version = probeInfos.find((x) => x.version !== null)?.version ?? PROBE_ADAPTER_VERSION;
@@ -1936,6 +2395,7 @@ export async function evaluateGrade1Profile(opts: {
   const checks: ReadinessCheckResult[] = GRADE_1_CHECKS.map((spec) => {
     if (spec.number === 1) return c1.check;
     if (spec.number === 2) return c2.check;
+    if (spec.number === 3) return c3.check;
     if (spec.number === 4) return c4.check;
     if (spec.number === 5) return c5.check;
     if (spec.number === 6) return c6.check;
@@ -1943,6 +2403,8 @@ export async function evaluateGrade1Profile(opts: {
     if (spec.number === 8) return c8.check;
     if (spec.number === 9) return c9.check;
     if (spec.number === 10) return c10.check;
+    if (spec.number === 11) return c11.check;
+    if (spec.number === 12) return c12.check;
     if (spec.number === 13) return c13.check;
     return defaultNotChecked(spec, opts);
   });

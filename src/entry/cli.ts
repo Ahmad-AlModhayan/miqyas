@@ -112,6 +112,7 @@ Options:
   --max-screens <n>      maximum crawled screens (default ${DEFAULT_CRAWL_MAX_SCREENS})
   --max-depth <n>        maximum crawl link depth (default ${DEFAULT_CRAWL_DEPTH})
   --max-rps <n>          maximum crawl request rate (default ${DEFAULT_CRAWL_RPS} req/s)
+  --max-time <seconds>   maximum run time budget in seconds (readiness drops checks in order 12 -> 11 -> 3)
   --active               enable active probes (test hosts only, unless --allow-host + verified token)
   --allow-host <host>    explicitly targeted non-test host requiring ownership token verification
   --allow-writes         allow write/mutation active probes (requires --active and host authorization)
@@ -151,6 +152,7 @@ const OPTIONS = {
   'max-screens': { type: 'string' },
   'max-depth': { type: 'string' },
   'max-rps': { type: 'string' },
+  'max-time': { type: 'string' },
   active: { type: 'boolean', default: false },
   'allow-writes': { type: 'boolean', default: false },
   'allow-host': { type: 'string' },
@@ -199,6 +201,7 @@ export interface Injected {
   promptCap?: (quote: RunQuote) => Promise<string>;
   spendDir?: string;
   now?: () => Date;
+  clock?: () => number;
   spendGuard?: SpendGuard;
   quote?: RunQuote;
   hostPolicyDeps?: Pick<HostOwnershipOptions, 'spendDir' | 'fetchImpl' | 'resolveTxtImpl'>;
@@ -379,6 +382,13 @@ function positiveNumberOption(raw: string | undefined, fallback: number, flag: s
   return n;
 }
 
+function nonNegativeNumberOption(raw: string | undefined, flag: string): number | undefined {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) throw new UsageError(`${flag} must be a non-negative number`);
+  return n;
+}
+
 function checkLint(plans: Plan[]): void {
   const errors = plans.flatMap((p) => lintPlan(p).filter((i) => i.level === 'error').map((i) => `${p.source.file ?? p.id}: ${i.message}`));
   if (errors.length) throw new PlanError(errors.join('\n'));
@@ -423,6 +433,8 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
   const maxScreens = positiveIntOption(o['max-screens'], DEFAULT_CRAWL_MAX_SCREENS, '--max-screens');
   const maxDepth = nonNegativeIntOption(o['max-depth'], DEFAULT_CRAWL_DEPTH, '--max-depth');
   const maxRps = positiveNumberOption(o['max-rps'], DEFAULT_CRAWL_RPS, '--max-rps');
+  const maxTimeSec = nonNegativeNumberOption(o['max-time'], '--max-time');
+  const maxTimeMs = maxTimeSec !== undefined ? Math.round(maxTimeSec * 1000) : undefined;
   if (o.active) {
     await verifyHostOwnership({
       url: o.url,
@@ -448,6 +460,7 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
     ...(profile ? { profile } : {}),
     ...(repoPath ? { repoProvided: true } : {}),
     ...(crawlEnabled ? { crawl: true, maxScreens, maxDepth, maxRps } : {}),
+    ...(maxTimeMs !== undefined ? { maxTimeMs } : {}),
     ...(o.active ? { active: true } : {}),
     ...(o['allow-writes'] ? { allowWrites: true } : {}),
     ...(o['allow-host'] ? { allowHost: o['allow-host'] } : {}),
@@ -483,6 +496,7 @@ async function cmdRun(args: string[], o: Opts, inject: Injected): Promise<number
       scrubMethod,
       settings,
       ...(repoPath ? { repoPath } : {}),
+      ...(inject.clock ? { clock: inject.clock } : {}),
       ...(inject.hostPolicyDeps ? { hostPolicyDeps: inject.hostPolicyDeps } : {}),
       onPlan: (r) => !o.json && process.stderr.write(`  ${r.planId}: ${o['dry-run'] ? dryRunStatus(r.error, r.verdict) : r.verdict} (${(r.durationMs / 1000).toFixed(1)} s)\n`),
     });

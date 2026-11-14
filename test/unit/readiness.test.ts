@@ -5,10 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { dedupeFindings } from '../../src/proof-core/findings.js';
+import { buildCheck3AuthTemplates } from '../../src/proof-core/auth-templates.js';
+import type { PlanResult } from '../../src/proof-core/ledger.js';
 import {
+  applyTimeLimitDropOrder,
   buildReadinessReport,
   evaluateCheck1LoadErrors,
   evaluateCheck2Controls,
+  evaluateCheck3AuthTemplates,
   evaluateCheck4Accessibility,
   evaluateCheck5ServedSecrets,
   evaluateCheck6RepoSecrets,
@@ -16,14 +20,18 @@ import {
   evaluateCheck8BackendAccess,
   evaluateCheck9TwoAccountIdor,
   evaluateCheck10SessionAuth,
+  evaluateCheck11ParamProbes,
+  evaluateCheck12SpendingRoutes,
   evaluateCheck13Dependencies,
   evaluateGrade1Profile,
   GRADE_1_CHECKS,
   linkReadinessEvidenceIds,
   parseReadinessProfile,
+  READINESS_DROP_ORDER,
   READINESS_PILLARS,
   recordReadinessInLedger,
   SECURITY_NOTICE,
+  TIME_LIMIT_DROP_REASON,
   type ReadinessCheckResult,
 } from '../../src/proof-core/readiness.js';
 import { buildReport, renderHuman, renderMarkdown } from '../../src/proof-core/report.js';
@@ -623,7 +631,283 @@ process.exit(${exitCode});
       fetchImpl: async () => new Response('rate limit', { status: 429 }),
     });
     expect(c8RateLimited.check.verdict).toBe('not_checked');
+    expect(c8RateLimited.check.verdict).toBe('not_checked');
     expect(c8RateLimited.check.reason).toContain('rate-limit');
+  });
+
+  it('evaluates Check 11, Check 12 (with --allow-writes off test host), and Check 3 auth templates', async () => {
+    const crawl = makeFakeCrawl();
+    crawl.screens[0]!.url = 'http://127.0.0.1:4173/?q=home';
+    crawl.servedArtifacts = [
+      {
+        name: 'index.html',
+        kind: 'response',
+        url: 'http://127.0.0.1:4173/',
+        text: '<form action="/signup"></form><a href="/login">Login</a><a href="/search?term=hi">Search</a><script>fetch("/api/chat")</script>',
+      },
+    ];
+
+    const c11Fail = await evaluateCheck11ParamProbes({
+      active: true,
+      url: 'http://127.0.0.1:4173/',
+      runId: 'u11',
+      maxRps: 100,
+      crawl,
+      probeUrls: ['http://127.0.0.1:4173/redir?next=/home'],
+      fetchImpl: async (input) => {
+        const u = new URL(String(input));
+        const q = u.searchParams.get('q');
+        if (q?.includes('miqyas-probe-u11')) {
+          return new Response(`<div>${q}</div>`, { status: 200, headers: { 'content-type': 'text/html' } });
+        }
+        const nextParam = u.searchParams.get('next');
+        if (nextParam?.includes('canary.miqyas-probe.invalid')) {
+          return new Response('', { status: 302, headers: { location: nextParam } });
+        }
+        return new Response('<p>ok</p>', { status: 200, headers: { 'content-type': 'text/html' } });
+      },
+    });
+    expect(c11Fail.check.verdict).toBe('fail');
+    expect(c11Fail.check.securityNotice).toBe(SECURITY_NOTICE);
+    expect(c11Fail.findings.map((f) => f.category).sort()).toEqual(['open-redirect', 'reflected-xss']);
+
+    const c12OffHostBlocked = await evaluateCheck12SpendingRoutes({
+      active: true,
+      allowWrites: false,
+      url: 'https://staging.example.com/',
+      allowHost: 'staging.example.com',
+      crawl,
+      spendingRoutes: ['/api/chat'],
+    });
+    expect(c12OffHostBlocked.check.verdict).toBe('not_checked');
+    expect(c12OffHostBlocked.check.reason).toContain('--allow-writes');
+
+    const c12Fail = await evaluateCheck12SpendingRoutes({
+      active: true,
+      url: 'http://127.0.0.1:4173/',
+      maxRps: 100,
+      spendingRoutes: ['/api/chat', '/api/send-sms'],
+      fetchImpl: async (input) => {
+        const u = new URL(String(input));
+        if (u.pathname === '/api/chat') {
+          return new Response(JSON.stringify({ reply: 'unauthed-llm' }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response('unauthorized', { status: 401 });
+      },
+    });
+    expect(c12Fail.check.verdict).toBe('fail');
+    expect(c12Fail.findings).toHaveLength(1);
+    expect(c12Fail.findings[0]?.category).toBe('unauthenticated-spending-route');
+
+    const twoAccounts = [
+      { name: 'A' as const, credentials: { email: 'alice@example.com', password: 'secret-a' } },
+      { name: 'B' as const, credentials: { email: 'bob@example.com', password: 'secret-b' } },
+    ];
+    const bundle = buildCheck3AuthTemplates({ targetUrl: 'http://127.0.0.1:4173/', crawl, accounts: twoAccounts });
+    expect(bundle).not.toBeNull();
+    expect(bundle?.plans.map((p) => p.id)).toEqual(['grade-1/check-3-signup', 'grade-1/check-3-login']);
+    expect(bundle?.env.MIQYAS_SECRET_ACCOUNT_A_PASSWORD).toBe('secret-a');
+    expect(bundle?.env.MIQYAS_SECRET_ACCOUNT_A_EMAIL).toBeUndefined();
+
+    expect((await evaluateCheck3AuthTemplates({ url: 'http://127.0.0.1:4173/', noModel: true, modelActive: true, accounts: twoAccounts })).check.verdict).toBe('not_checked');
+
+    const fakePlan = (planId: string, verdict: 'pass' | 'fail'): PlanResult => ({
+      planId,
+      name: planId,
+      verdict,
+      counts: { assertions: 1, passed: verdict === 'pass' ? 1 : 0, failed: verdict === 'fail' ? 1 : 0, notChecked: 0, blocked: 0, unverified: 0 },
+      entries: [
+        {
+          kind: 'assertion',
+          stepId: 'a1',
+          text: 'auth succeeded',
+          verdict,
+          method: 'ai',
+          observation: verdict === 'pass' ? 'signed in' : 'login form rejected credentials',
+        },
+      ],
+      durationMs: 10,
+    });
+    const c3Fail = await evaluateCheck3AuthTemplates({
+      url: 'http://127.0.0.1:4173/',
+      crawl,
+      modelActive: true,
+      accounts: twoAccounts,
+      runCheck3Templates: async () => [fakePlan('grade-1/check-3-signup', 'pass'), fakePlan('grade-1/check-3-login', 'fail')],
+    });
+    expect(c3Fail.check.verdict).toBe('fail');
+    expect(c3Fail.findings[0]?.category).toBe('auth-flow');
+
+    const c3Pass = await evaluateCheck3AuthTemplates({
+      url: 'http://127.0.0.1:4173/',
+      crawl,
+      modelActive: true,
+      accounts: twoAccounts,
+      runCheck3Templates: async () => [fakePlan('grade-1/check-3-signup', 'pass'), fakePlan('grade-1/check-3-login', 'pass')],
+    });
+    expect(c3Pass.check.verdict).toBe('pass');
+  });
+
+  it('drops constrained runs strictly in order 12 -> 11 -> 3 as not_checked (never pass)', async () => {
+    expect(READINESS_DROP_ORDER).toEqual([12, 11, 3]);
+    const allPassing: ReadinessCheckResult[] = GRADE_1_CHECKS.map((spec) => ({
+      number: spec.number,
+      id: spec.id,
+      stepId: spec.stepId,
+      pillar: spec.pillar,
+      title: spec.title,
+      mode: spec.mode,
+      verdict: 'pass',
+      method: 'code',
+      coverage: 'full',
+      observation: 'ok',
+    }));
+    const dropped1 = applyTimeLimitDropOrder(allPassing, 1);
+    expect(dropped1.filter((c) => c.verdict === 'not_checked').map((c) => c.number)).toEqual([12]);
+    const dropped2 = applyTimeLimitDropOrder(allPassing, 2);
+    expect(dropped2.filter((c) => c.verdict === 'not_checked').map((c) => c.number)).toEqual([11, 12]);
+    const dropped3 = applyTimeLimitDropOrder(allPassing, 3);
+    expect(dropped3.filter((c) => c.verdict === 'not_checked').map((c) => c.number)).toEqual([3, 11, 12]);
+    expect(dropped3.find((c) => c.number === 12)?.reason).toBe(TIME_LIMIT_DROP_REASON);
+
+    // Runtime evaluateGrade1Profile drops in order 12 -> 11 -> 3 as fake clock reaches deadlineMs
+    const crawl = makeFakeCrawl();
+    crawl.screens[0]!.url = 'http://127.0.0.1:4173/search?q=x';
+    crawl.servedArtifacts = [];
+    const accounts = [
+      { name: 'A' as const, credentials: { email: 'a@example.com', password: 'pa' } },
+      { name: 'B' as const, credentials: { email: 'b@example.com', password: 'pb' } },
+    ];
+    const passPlan = (planId: string): PlanResult => ({
+      planId,
+      name: planId,
+      verdict: 'pass',
+      counts: { assertions: 1, passed: 1, failed: 0, notChecked: 0, blocked: 0, unverified: 0 },
+      entries: [{ kind: 'assertion', stepId: 'a1', text: 'ok', verdict: 'pass', method: 'ai', observation: 'ok' }],
+      durationMs: 5,
+    });
+    const fetchSafe: typeof fetch = async () => new Response('unauthorized', { status: 401 });
+
+    // Budget expires right after Check 3 + Check 11 -> drops ONLY Check 12
+    let t = 0;
+    const drop12Only = await evaluateGrade1Profile({
+      dryRun: false,
+      active: true,
+      fallbackUrl: 'http://127.0.0.1:4173/',
+      crawl,
+      maxRps: 100,
+      modelActive: true,
+      accounts,
+      spendingRoutes: ['/api/chat'],
+      fetchImpl: fetchSafe,
+      deadlineMs: 50,
+      now: () => t,
+      runCheck3Templates: async () => {
+        t = 20;
+        return [passPlan('grade-1/check-3-signup'), passPlan('grade-1/check-3-login')];
+      },
+      // Advance clock right before Check 12 by wrapping fetchImpl for Check 11 response
+    });
+    expect(drop12Only.readiness.checks.find((c) => c.number === 3)?.verdict).toBe('pass');
+    expect(drop12Only.readiness.checks.find((c) => c.number === 11)?.verdict).toBe('pass');
+
+    let t2 = 0;
+    const drop12Clock = await evaluateGrade1Profile({
+      dryRun: false,
+      active: true,
+      fallbackUrl: 'http://127.0.0.1:4173/',
+      crawl,
+      maxRps: 100,
+      modelActive: true,
+      accounts,
+      probeUrls: ['http://127.0.0.1:4173/search?q=1'],
+      spendingRoutes: ['/api/chat'],
+      deadlineMs: 50,
+      now: () => t2,
+      fetchImpl: async (input) => {
+        if (String(input).includes('canary.miqyas-probe.invalid')) {
+          t2 = 60;
+        }
+        return new Response('<p>safe</p>', { status: 200, headers: { 'content-type': 'text/html' } });
+      },
+      runCheck3Templates: async () => {
+        t2 = 20;
+        return [passPlan('grade-1/check-3-signup'), passPlan('grade-1/check-3-login')];
+      },
+    });
+    expect(drop12Clock.readiness.checks.find((c) => c.number === 3)?.verdict).toBe('pass');
+    expect(drop12Clock.readiness.checks.find((c) => c.number === 11)?.verdict).toBe('pass');
+    expect(drop12Clock.readiness.checks.find((c) => c.number === 12)?.verdict).toBe('not_checked');
+    expect(drop12Clock.readiness.checks.find((c) => c.number === 12)?.reason).toBe(TIME_LIMIT_DROP_REASON);
+
+    // Budget expires right after Check 3 -> drops Checks 11 AND 12
+    let t3 = 0;
+    const drop11And12 = await evaluateGrade1Profile({
+      dryRun: false,
+      active: true,
+      fallbackUrl: 'http://127.0.0.1:4173/',
+      crawl,
+      maxRps: 100,
+      modelActive: true,
+      accounts,
+      spendingRoutes: ['/api/chat'],
+      deadlineMs: 50,
+      now: () => t3,
+      fetchImpl: fetchSafe,
+      runCheck3Templates: async () => {
+        t3 = 60;
+        return [passPlan('grade-1/check-3-signup'), passPlan('grade-1/check-3-login')];
+      },
+    });
+    expect(drop11And12.readiness.checks.find((c) => c.number === 3)?.verdict).toBe('pass');
+    expect(drop11And12.readiness.checks.find((c) => c.number === 11)?.verdict).toBe('not_checked');
+    expect(drop11And12.readiness.checks.find((c) => c.number === 12)?.verdict).toBe('not_checked');
+
+    // Zero budget -> drops 12, 11, AND 3
+    const dropAllThree = await evaluateGrade1Profile({
+      dryRun: false,
+      active: true,
+      fallbackUrl: 'http://127.0.0.1:4173/',
+      crawl,
+      maxRps: 100,
+      modelActive: true,
+      accounts,
+      spendingRoutes: ['/api/chat'],
+      fetchImpl: fetchSafe,
+      maxTimeMs: 0,
+      runCheck3Templates: async () => [passPlan('grade-1/check-3-signup'), passPlan('grade-1/check-3-login')],
+    });
+    for (const num of [3, 11, 12]) {
+      const c = dropAllThree.readiness.checks.find((x) => x.number === num);
+      expect(c?.verdict).toBe('not_checked');
+      expect(c?.reason).toBe(TIME_LIMIT_DROP_REASON);
+    }
+
+    // Overrun mid-Check-3 (partial/error after deadline) also cleanly reports Check 3 as dropped (not_checked)
+    let t4 = 0;
+    const dropMid3 = await evaluateGrade1Profile({
+      dryRun: false,
+      active: true,
+      fallbackUrl: 'http://127.0.0.1:4173/',
+      crawl,
+      maxRps: 100,
+      modelActive: true,
+      accounts,
+      spendingRoutes: ['/api/chat'],
+      fetchImpl: fetchSafe,
+      deadlineMs: 50,
+      now: () => t4,
+      runCheck3Templates: async () => {
+        t4 = 60;
+        const partial = passPlan('grade-1/check-3-signup');
+        return [partial, { ...passPlan('grade-1/check-3-login'), verdict: 'error', counts: { ...partial.counts, passed: 0, notChecked: 1 }, error: 'plan timed out' }];
+      },
+    });
+    for (const num of [3, 11, 12]) {
+      const c = dropMid3.readiness.checks.find((x) => x.number === num);
+      expect(c?.verdict).toBe('not_checked');
+      expect(c?.reason).toBe(TIME_LIMIT_DROP_REASON);
+    }
   });
 });
 
