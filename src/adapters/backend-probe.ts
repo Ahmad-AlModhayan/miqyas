@@ -111,16 +111,16 @@ export interface ActiveProbeBaseOptions {
 }
 
 const KNOWN_BAAS_SUFFIXES = ['.supabase.co', '.supabase.in', '.firebaseio.com', '.firebasedatabase.app'];
-const AUTH_PATH_RE = /(?:login|signin|sign-in|sign_in|auth|sso|oauth)/i;
+export const AUTH_PATH_RE = /(?:login|signin|sign-in|sign_in|auth|sso|oauth)/i;
 const PROTECTED_PATH_RE = /\/(?:api|rest\/v\d+|account|dashboard|profile|settings|orders|notes|billing|admin|me)\b/i;
-const DESTRUCTIVE_PATH_RE = /(?:logout|log-out|signout|sign-out|delete|destroy|remove|cancel|checkout|pay)\b/i;
+export const DESTRUCTIVE_PATH_RE = /(?:logout|log-out|signout|sign-out|delete|destroy|remove|cancel|checkout|pay)\b/i;
 
-function cleanEndpointUrl(rawUrl: string): string {
+export function cleanEndpointUrl(rawUrl: string): string {
   const u = tryParseUrl(rawUrl);
   return u ? `${u.origin}${u.pathname}` : rawUrl.split(/[?#]/)[0] ?? rawUrl;
 }
 
-function safeSameOriginUrl(rawPathOrUrl: string, targetOrigin: string): URL | null {
+export function safeSameOriginUrl(rawPathOrUrl: string, targetOrigin: string): URL | null {
   try {
     const u = new URL(rawPathOrUrl, targetOrigin);
     if ((u.protocol === 'http:' || u.protocol === 'https:') && u.origin === targetOrigin) return u;
@@ -172,7 +172,7 @@ function isPublicClientKey(token: string): boolean {
   return role === 'anon' || role === null;
 }
 
-async function preflightActiveProbe(opts: ActiveProbeBaseOptions): Promise<URL | null> {
+export async function preflightActiveProbe(opts: ActiveProbeBaseOptions): Promise<URL | null> {
   if (!opts.active) return null;
   const targetUrl = tryParseUrl(opts.url);
   if (!targetUrl || (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:')) {
@@ -437,16 +437,19 @@ function parseOpenApiTables(rawText: string): string[] {
   }
 }
 
-async function safeGetText(
+export async function safeRequestText(
   fetchFn: typeof fetch,
+  method: 'GET' | 'POST',
   url: string,
   headers: Record<string, string>,
+  body?: string,
   redirect: 'manual' | 'follow' = 'manual',
 ): Promise<{ status: number; location: string; contentType: string; text: string } | null> {
   try {
     const res = await fetchFn(url, {
-      method: 'GET',
+      method,
       headers,
+      ...(body !== undefined ? { body } : {}),
       redirect,
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
@@ -461,6 +464,15 @@ async function safeGetText(
   } catch {
     return null;
   }
+}
+
+export async function safeGetText(
+  fetchFn: typeof fetch,
+  url: string,
+  headers: Record<string, string>,
+  redirect: 'manual' | 'follow' = 'manual',
+): Promise<{ status: number; location: string; contentType: string; text: string } | null> {
+  return safeRequestText(fetchFn, 'GET', url, headers, undefined, redirect);
 }
 
 /** Check 8 implementation: gated active GET-only probe against detected Supabase/Firebase endpoints. */
@@ -692,7 +704,7 @@ function parseAccountFromEnv(env: Record<string, string | undefined>, slot: 'A' 
     const routes = routesRaw ? routesRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
     const resources = resourcesRaw ? resourcesRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
 
-    if (token || cookie || headers || (loginUrl && Object.keys(credentials).length > 0) || routes?.length || resources?.length) {
+    if (token || cookie || headers || Object.keys(credentials).length > 0 || routes?.length || resources?.length) {
       return {
         name: slot,
         ...(token ? { bearerToken: token } : {}),
@@ -756,7 +768,7 @@ async function resolveAccountHeaders(
   return out;
 }
 
-function responseHasMeaningfulPayload(text: string): boolean {
+export function responseHasMeaningfulPayload(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {

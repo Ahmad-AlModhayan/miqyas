@@ -25,6 +25,7 @@ import {
   verifyHostOwnership,
   type HostOwnershipOptions,
 } from '../surfaces/web/policy.js';
+import { buildCheck3AuthTemplates } from './auth-templates.js';
 import {
   dedupeFindings,
   detectPromptInjection,
@@ -81,6 +82,7 @@ export interface RunSettings {
   maxScreens?: number;
   maxDepth?: number;
   maxRps?: number;
+  maxTimeMs?: number;
   active?: boolean;
   allowWrites?: boolean;
   allowHost?: string;
@@ -141,6 +143,9 @@ export interface VerificationRunOptions {
   gitleaksOpts?: GitleaksExecOptions;
   osvOpts?: OsvExecOptions;
   probeFetch?: typeof fetch;
+  probeUrls?: readonly string[];
+  spendingRoutes?: readonly string[];
+  clock?: () => number;
   testAccounts?: readonly TestAccountSpec[];
   protectedRoutes?: readonly string[];
   env?: NodeJS.ProcessEnv;
@@ -283,6 +288,7 @@ export function buildMethodMetadata(
       ...(settings.crawl && settings.maxScreens !== undefined ? { maxScreens: settings.maxScreens } : {}),
       ...(settings.crawl && settings.maxDepth !== undefined ? { maxDepth: settings.maxDepth } : {}),
       ...(settings.crawl && settings.maxRps !== undefined ? { maxRps: settings.maxRps } : {}),
+      ...(settings.maxTimeMs !== undefined ? { maxTimeMs: settings.maxTimeMs } : {}),
       ...(settings.active ? { active: true } : {}),
       ...(settings.allowWrites ? { allowWrites: true } : {}),
       ...(settings.allowHost ? { allowHost: settings.allowHost } : {}),
@@ -608,7 +614,7 @@ function collectCredentialSecrets(
   for (const [k, v] of Object.entries(runEnv)) {
     if (!k.startsWith('MIQYAS_SECRET_') || !v?.trim()) continue;
     const short = k.slice('MIQYAS_SECRET_'.length);
-    if (/(?:_ROUTES|_RESOURCES|_LOGIN_URL)$/i.test(short)) continue;
+    if (/(?:_ROUTES|_RESOURCES|_LOGIN_URL)$/i.test(short) || /^(?:ACCOUNT|TEST)_[AB]_(?:EMAIL|USERNAME)$/i.test(short)) continue;
     const raw = v.trim();
     if (short.endsWith('_HEADER')) {
       const idx = raw.indexOf(':');
@@ -752,6 +758,54 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
   let allPlans = planResults;
   let readinessCheckFindingKeys: Map<number, Set<string>> | undefined;
   if (opts.settings?.profile === 'grade-1') {
+    const nowFn = opts.clock ?? (() => Date.now());
+    const baselineMs = opts.clock ? nowFn() : startedAt.getTime();
+    const deadlineMs =
+      opts.settings.maxTimeMs !== undefined ? baselineMs + opts.settings.maxTimeMs : undefined;
+    const check3TemplateResults: PlanResult[] = [];
+    const modelActive = Boolean(opts.agent && !opts.noModel);
+    const runCheck3Templates = modelActive
+      ? async ({
+          targetUrl,
+          crawl,
+          accounts,
+          deadlineMs: tmDeadline,
+        }: {
+          targetUrl: string;
+          crawl?: CrawlResult;
+          accounts: readonly TestAccountSpec[];
+          deadlineMs?: number;
+        }) => {
+          const bundle = buildCheck3AuthTemplates({
+            targetUrl,
+            ...(crawl ? { crawl } : {}),
+            accounts,
+            env: runEnv,
+          });
+          if (!bundle) return null;
+          const picked = pickRunSettings(opts.settings);
+          const remainingMs = tmDeadline !== undefined ? Math.max(1, tmDeadline - nowFn()) : undefined;
+          const results = await executePlans(bundle.plans, {
+            url: opts.url,
+            driver: opts.driver,
+            agent: opts.agent,
+            ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
+            runDir: opts.runDir,
+            scrub: sharedCrawlRules,
+            proposeState,
+            ...picked,
+            ...(remainingMs !== undefined
+              ? { planTimeoutMs: Math.min(picked.planTimeoutMs ?? PLAN_TIMEOUT_MS, remainingMs) }
+              : {}),
+            env: bundle.env,
+            ...(opts.onPlan !== undefined ? { onPlan: opts.onPlan } : {}),
+            onFinding: pushFinding,
+          });
+          check3TemplateResults.push(...results);
+          return results;
+        }
+      : undefined;
+
     const readinessRes = await evaluateGrade1Profile({
       dryRun,
       ...(opts.noModel !== undefined ? { noModel: opts.noModel } : {}),
@@ -759,9 +813,18 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
       fallbackUrl: opts.url,
       ...(opts.repoPath ? { repoPath: opts.repoPath } : {}),
       ...(opts.settings.active ? { active: true } : {}),
+      ...(opts.settings.allowWrites ? { allowWrites: true } : {}),
       ...(opts.settings.allowHost ? { allowHost: opts.settings.allowHost } : {}),
       ...(opts.settings.hostToken ? { hostToken: opts.settings.hostToken } : {}),
       ...(opts.settings.maxRps !== undefined ? { maxRps: opts.settings.maxRps } : {}),
+      ...(opts.settings.maxTimeMs !== undefined ? { maxTimeMs: opts.settings.maxTimeMs } : {}),
+      ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+      now: nowFn,
+      runId: opts.runId,
+      ...(opts.probeUrls ? { probeUrls: opts.probeUrls } : {}),
+      ...(opts.spendingRoutes ? { spendingRoutes: opts.spendingRoutes } : {}),
+      modelActive,
+      ...(runCheck3Templates ? { runCheck3Templates } : {}),
       accounts: resolvedAccounts,
       ...(opts.protectedRoutes ? { protectedRoutes: opts.protectedRoutes } : {}),
       ...(opts.probeFetch ? { fetchImpl: opts.probeFetch } : {}),
@@ -774,7 +837,7 @@ export async function runVerification(opts: VerificationRunOptions): Promise<Run
     });
     readinessReport = readinessRes.readiness;
     readinessCheckFindingKeys = readinessRes.checkFindingKeys;
-    allPlans = [...planResults, readinessRes.ledgerPlan];
+    allPlans = [...planResults, ...check3TemplateResults, readinessRes.ledgerPlan];
     opts.onPlan?.(readinessRes.ledgerPlan);
     for (const rf of readinessRes.findings) pushFinding(rf);
     for (const ra of readinessRes.adapters) {

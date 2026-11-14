@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Seed: Check 11 Form Input Reflected XSS</title>
+  </head>
+  <body>
+    <main>
+      <h1>Filter Form</h1>
+      <form method="GET" action="/filter">
+        <label for="filter-term">Filter</label>
+        <input id="filter-term" name="tag" type="text" />
+        <button type="submit">Apply</button>
+      </form>
+    </main>
+  </body>
+</html>

@@ -253,6 +253,7 @@ const DOM_SECRET_AND_URLS_FN = String.raw`() => {
   const inputs = document.querySelectorAll('input, textarea');
   for (let i = 0; i < inputs.length; i++) {
     const el = inputs[i];
+    if (el.tagName === 'INPUT' && String(el.type || '').toLowerCase() === 'password') continue;
     if (el.value) push('form field value', String(el.value));
   }
   try {

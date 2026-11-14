@@ -152,4 +152,16 @@ describe('report method and schema', () => {
     expect(md).toContain('quote likely');
     expect(md).toContain('actual $0.03');
   });
+
+  it('validates method.settings.maxTimeMs against schema/report.schema.json', () => {
+    const withBudget = buildReport({
+      ...base,
+      method: {
+        ...method,
+        settings: { ...method.settings, maxTimeMs: 45000 },
+      },
+      plans: [result('pass')],
+    });
+    expect(schemaErrors('report', withBudget)).toEqual([]);
+  });
 });

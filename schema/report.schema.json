@@ -183,6 +183,7 @@
             "maxScreens": { "type": "integer", "minimum": 1 },
             "maxDepth": { "type": "integer", "minimum": 0 },
             "maxRps": { "type": "number", "exclusiveMinimum": 0 },
+            "maxTimeMs": { "type": "integer", "minimum": 0 },
             "active": { "type": "boolean" },
             "allowWrites": { "type": "boolean" },
             "allowHost": { "type": "string" },

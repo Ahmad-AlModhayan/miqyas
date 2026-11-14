@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Miqyas Fixture — Clean App</title>
+  </head>
+  <body>
+    <main>
+      <h1>Clean Auth &amp; Payments Fixture</h1>
+      <nav aria-label="Main navigation">
+        <a href="/search?q=welcome">Search</a>
+        <a href="/redir?next=%2Fdashboard">Redirect Helper</a>
+        <a href="/signup">Sign Up</a>
+        <a href="/login">Log In</a>
+        <a href="/dashboard">Dashboard</a>
+      </nav>
+      <p>Configured routes: /api/chat, /api/send-sms, /api/send-email.</p>
+    </main>
+    <script>
+      window.__APP_ROUTES__ = {
+        chat: '/api/chat',
+        sms: '/api/send-sms',
+        email: '/api/send-email',
+      };
+    </script>
+  </body>
+</html>
