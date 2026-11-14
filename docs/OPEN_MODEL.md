@@ -1,6 +1,6 @@
 # How Miqyas is licensed and offered
 
-Miqyas uses a **decoupled open-core** model that separates the verifiable core engine (`AGPL-3.0-only`) from its open integration surfaces and protocols (`Apache-2.0`) and from separate commercial hosted/UI offerings (outside this repository).
+Miqyas uses a **decoupled open-core** model that separates the verifiable core engine (`AGPL-3.0-only`) from its open integration surfaces and protocols (`Apache-2.0`) and keeps separate commercial hosted/UI offerings and the marketing website outside this public repository.
 
 ## Code licences in this repository
 
@@ -9,6 +9,7 @@ Miqyas uses a **decoupled open-core** model that separates the verifiable core e
 | Core verification engine (`miqyas-core`) | `src/proof-core/`, `src/adapters/`, `src/agents/`, `src/entry/`, `test/` | GNU Affero General Public License v3.0 ([`AGPL-3.0-only`](../LICENSE)) | Strong copyleft keeps the audit trail, assertion ledger, readiness checks, and mutation self-check auditable while preventing competitors from wrapping `miqyas-core` into a closed SaaS without contributing changes back under AGPL-3.0-only §13 or obtaining a commercial licence. |
 | Worker protocol, scrubber, surface drivers, thin CLI, presets, schemas | `src/protocol/`, `src/scrub/`, `src/surfaces/`, `src/cli.ts`, `scripts/`, `presets/`, `schema/` | Apache License 2.0 ([`LICENSE-APACHE`](../LICENSE-APACHE)) | Permissive licence allows teams, CI runners, and custom surface workers (`miqyas-worker/1`) to implement drivers, embed plan schemas, redact secrets, and invoke the CLI without AGPL obligations. |
 | Hosted runner & proprietary UI clients (separate commercial products) | Outside this repository | Proprietary (commercial terms from Kahf Labs) | Managed execution convenience, dashboards, and visual workflows monetize hosted infrastructure and UX without gating local CLI/CI transparency. |
+| Marketing website (`miqyas.kahflabs.com`) | Outside this repository | Private (Kahf Labs) | Product pages, legal pages, and branding assets live privately outside this public repository. |
 
 ## Strict architecture & SPDX boundaries
 

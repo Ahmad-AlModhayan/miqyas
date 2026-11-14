@@ -261,7 +261,7 @@ Anthropic Messages API; OpenAI-compatible chat with images; Playwright, Webdrive
 
 ## 7. Architecture and stack
 
-TypeScript on Node 20+ for the core, CLI, MCP server (MCP TypeScript SDK), plan schema (JSON Schema), ledger and reports; Vitest for offline tests; a SQLite index over run folders. Workers: Playwright and Midscene.js, WebdriverIO with its Tauri and Appium services, a pseudo-terminal runner. Phase 2: Rust engine worker (tokio, serde) with a fake Drive as a local HTTP server. Later: Python judge on `kahf-agent-harness` (PydanticAI). Layout: `src/{proof-core,adapters,agents,entry}` (`AGPL-3.0-only`), `src/{protocol,scrub,surfaces}`, `src/cli.ts`, `presets/`, `schema/` (`Apache-2.0`), `site/` (miqyas.kahflabs.com, `@kahf/design`). Public repository `miqyas` (decoupled open-core: `AGPL-3.0-only` + `Apache-2.0`).
+TypeScript on Node 20+ for the core, CLI, MCP server (MCP TypeScript SDK), plan schema (JSON Schema), ledger and reports; Vitest for offline tests; a SQLite index over run folders. Workers: Playwright and Midscene.js, WebdriverIO with its Tauri and Appium services, a pseudo-terminal runner. Phase 2: Rust engine worker (tokio, serde) with a fake Drive as a local HTTP server. Later: Python judge on `kahf-agent-harness` (PydanticAI). Layout: `src/{proof-core,adapters,agents,entry}` (`AGPL-3.0-only`), `src/{protocol,scrub,surfaces}`, `src/cli.ts`, `presets/`, `schema/` (`Apache-2.0`). Public repository `miqyas` (decoupled open-core: `AGPL-3.0-only` + `Apache-2.0`; marketing site at `miqyas.kahflabs.com` lives outside the public repository).
 
 ## 8. Verification
 
