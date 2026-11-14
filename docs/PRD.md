@@ -7,7 +7,7 @@
 | Status | Building. Milestone 1 (hardening, then the live Wasl run) is under way; Grade 1 public early access follows. |
 | Version | 0.4 (2026-11-13) |
 | Changes | 0.4: define the verification-platform vision (proof core, agent team, adapters; five surfaces; CLI, CI gate, MCP and self-hosted entry points) above Phase 1 web Grade 1 readiness. 0.3: the readiness hub. Grade 1 readiness for indie and vibe-coded launches comes first, on the web. The incumbent is Lovable's built-in Security checks. Miqyas orchestrates existing runners instead of rebuilding them (ADR 0005). The hardening decisions of map ticket 26 are folded in. 0.2: Miqyas becomes Kahf's testing platform, built on an evaluation of TestSprite on 2026-10-28. |
-| License | Open code: PolyForm Shield 1.0.0 (`LICENSE`, `NOTICE.md`). Source-available, not open source by the OSI definition. |
+| License | Decoupled open-core: core verification engine under GNU AGPL v3.0 (`AGPL-3.0-only`, [`LICENSE`](../LICENSE)) with mandatory CLA; worker protocol, scrubber, surface drivers, thin CLI launcher, presets, and schemas under `Apache-2.0` ([`LICENSE-APACHE`](../LICENSE-APACHE)). |
 | Related | SRS `docs/SRS.md`, charter `docs/CHARTER.md`, threat model `docs/threat-model.md`, ADRs `docs/adr/`, glossary `CONTEXT.md`.  |
 
 ## Vision
@@ -99,7 +99,7 @@ $0.02, and a 50-case plan took 23 s. It fell short where a tester must be strict
   and checks that show their coverage, published with the method and versions.
 - **Build or reuse**: builds on Playwright, axe-core, gitleaks and osv-scanner behind adapters (ADR 0005); Miqyas's own
   code is the proof layer plus the few checks no licensed tool does within ADR 0002.
-- **Money and code**: Free during early access, paid later; open code under PolyForm Shield 1.0.0 (`NOTICE.md`).
+- **Money and code**: Decoupled open-core — `miqyas-core` (`src/proof-core/`, `src/adapters/`, `src/agents/`, `src/entry/`) is open source under `AGPL-3.0-only` with a CLA and commercial dual-licensing; the worker protocol, scrubber, surface drivers, thin CLI, presets, and schemas are `Apache-2.0` ([`docs/OPEN_MODEL.md`](OPEN_MODEL.md)). Proprietary UI and hosted runner convenience are offered separately by Kahf Labs.
 
 **(a) Why a better model or a vendor update does not replace it**
 - The gap is accounting, not intelligence. The ledger, coverage, the corpus score and the mutation self-check are
@@ -153,7 +153,7 @@ web, mobile and desktop.
 **Non-goals**
 - Not a penetration test, a security audit or a certification. Every security check says so.
 - No load, spike or stress testing. Small fixed probes stay within the limits of ADR 0002.
-- No cloud where customers' apps run.
+- Hosted cloud execution is out of scope for the open-source CLI in Phase 1 (optional managed hosted runners and proprietary UI clients live outside this public repository).
 - Never uses or reads real users' accounts. On a live host, only test accounts the person makes.
 - No rebuilding of runners, drivers or scanners (ADR 0005).
 - iOS later (P2). Replacing usability tests with people.
@@ -279,9 +279,10 @@ These are targets, not results.
 
 ## 10. Business model
 
-- Early access is free. Miqyas is paid later, for developers.
-- Distribution: a bundled npm tarball on the GitHub Releases of this repository, installed with `npm i -g <url>`.
-- No telemetry. Feedback comes by email reply and a form on the site.
+- **Open-core & self-hostable CLI/engine**: Free and open source under `AGPL-3.0-only` (core engine) and `Apache-2.0` (protocol, drivers, CLI, presets, schemas) — see [`docs/OPEN_MODEL.md`](OPEN_MODEL.md).
+- **Commercial streams**: Optional Kahf-hosted managed runner & proprietary UI convenience, plus B2B commercial dual-licensing for teams embedding `miqyas-core` in proprietary products without `AGPL-3.0-only` copyleft obligations.
+- Distribution: npm package / GitHub Releases tarball and source repository.
+- No telemetry in the CLI or local engine. Feedback comes by email reply, GitHub issues, and a form on the site.
 - No training on customer data.
 
 ## 11. Risks

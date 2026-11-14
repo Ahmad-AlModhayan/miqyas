@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // End to end without a model: Playwright Chromium against a local fixture app, with a scripted agent. Needs the
 // Chromium that `npx playwright install chromium` provides; no network.
 
@@ -24,7 +24,7 @@ import { AnthropicAgent } from '../../src/agents/anthropic.js';
 import { inFlight, launch, measureProbe, observeSettled, openWebSurfaceDriver } from '../../src/surfaces/web/driver.js';
 import { cropPng, observe, snapshotText, type Observation } from '../../src/surfaces/web/observe.js';
 import { serveDir, type StaticServer } from '../../src/surfaces/web/server.js';
-import { main } from '../../src/cli.js';
+import { main } from '../../src/entry/cli.js';
 import type { ActContext, ActOutcome } from '../../src/agents/agent.js';
 import { ScriptedAgent } from './scripted-agent.js';
 import { schemaErrors, testMethod } from '../report-helpers.js';

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Verification corpus contracts & validation (FR-B11, #15):
 // 10 defect categories + readiness + clean twin baselines (known-findings.json),
 // mandatory code effectiveness probes per seed, strict blindness lint, and safe path containment.

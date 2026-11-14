@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Route, endpoint, credential, and local/private host resolution tests (issue #10).
 
 import { describe, expect, it } from 'vitest';

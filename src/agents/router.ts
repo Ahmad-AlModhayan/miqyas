@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Unified model router configuration & credential resolution behind the Agent seam (Layer 2: agents).
 
 import type { Agent, PayloadEntry } from './agent.js';

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Offline E2E readiness suite for Grade 1 Checks 11, 12, 3 and time-limit drop order (#20):
 // active inert parameter probes, spending-route auth checks (--allow-writes off test hosts),
 // built-in sign-up/log-in templates (--no-model graceful skip), and 12 -> 11 -> 3 drop order.

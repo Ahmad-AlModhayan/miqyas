@@ -1,10 +1,10 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { main } from '../../src/cli.js';
+import { main } from '../../src/entry/cli.js';
 import type { BenchSummary } from '../../src/proof-core/bench.js';
 import { CORPUS_CATEGORIES, lintCorpus, loadCorpusFromPath, verifyCorpusProbes } from '../../src/proof-core/corpus.js';
 import { loadPlans } from '../../src/proof-core/plan.js';

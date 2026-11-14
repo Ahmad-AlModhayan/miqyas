@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Built-in Check 3 authentication plans (sign-up and log-in templates) and secret environment resolution.
 
 import type { TestAccountSpec } from '../adapters/backend-probe.js';

@@ -26,8 +26,7 @@ Miqyas is a verification platform built around a proof core, an agent team, and 
   and the Python judge on `kahf-agent-harness` (P2); broader server and industrial/factory surface workers and full
   autonomous agent-team workflows (understanding software, drafting plans, exploring, running active checks and fault
   injection across surfaces).
-- **Out of scope:** load testing, full penetration testing, and Kahf-hosted runs where customers' software runs on
-  Kahf's cloud. The security checks once planned for P1 (FR-S1–S4) come earlier, in §3.11 and §3.12.
+- **Out of scope for the open-source CLI:** load testing, full penetration testing, and hosted cloud runs (optional proprietary Kahf-hosted runners and UI clients live outside the open-source CLI repository). The security checks once planned for P1 (FR-S1–S4) come earlier, in §3.11 and §3.12.
 
 ### 1.3 Definitions
 | Term | Meaning |
@@ -228,7 +227,7 @@ FR-S1–S4 below are superseded by FR-B9 and FR-K1–K13, which bring them into 
 | NFR-6 | Footprint | One shared browser install; retention enforced at the start of each run |
 | NFR-7 | Language | Reports and viewer in Arabic (RTL) and English; Thmanyah for Arabic, IBM Plex Sans and Mono |
 | NFR-8 | Maintainability | TypeScript strict; offline unit tests for plan parsing, ledger rules, reports, mutation application |
-| NFR-9 | Licensing | Licence notice in the repository (`LICENSE`, `NOTICE.md`); dependency licences checked (Playwright Apache-2.0, Midscene.js MIT, axe-core MPL-2.0 unmodified) |
+| NFR-9 | Licensing | Decoupled open-core notices in [`LICENSE`](../LICENSE) (`AGPL-3.0-only`), [`LICENSE-APACHE`](../LICENSE-APACHE) (`Apache-2.0`), and [`NOTICE.md`](../NOTICE.md); import and SPDX boundaries checked on CI; dependency licences checked (Playwright Apache-2.0, Midscene.js MIT, axe-core MPL-2.0 unmodified) |
 
 ## 5. External interfaces
 
@@ -262,7 +261,7 @@ Anthropic Messages API; OpenAI-compatible chat with images; Playwright, Webdrive
 
 ## 7. Architecture and stack
 
-TypeScript on Node 20+ for the core, CLI, MCP server (MCP TypeScript SDK), plan schema (JSON Schema), ledger and reports; Vitest for offline tests; a SQLite index over run folders. Workers: Playwright and Midscene.js, WebdriverIO with its Tauri and Appium services, a pseudo-terminal runner. Phase 2: Rust engine worker (tokio, serde) with a fake Drive as a local HTTP server. Later: Python judge on `kahf-agent-harness` (PydanticAI). Layout: `packages/{core,cli,mcp}`, `workers/{web,tauri,android,cli,engine}`, `judge/`, `presets/wasl`, `site/` (miqyas.kahflabs.com, `@kahf/design`). Public repository `miqyas` (PolyForm Shield).
+TypeScript on Node 20+ for the core, CLI, MCP server (MCP TypeScript SDK), plan schema (JSON Schema), ledger and reports; Vitest for offline tests; a SQLite index over run folders. Workers: Playwright and Midscene.js, WebdriverIO with its Tauri and Appium services, a pseudo-terminal runner. Phase 2: Rust engine worker (tokio, serde) with a fake Drive as a local HTTP server. Later: Python judge on `kahf-agent-harness` (PydanticAI). Layout: `src/{proof-core,adapters,agents,entry}` (`AGPL-3.0-only`), `src/{protocol,scrub,surfaces}`, `src/cli.ts`, `presets/`, `schema/` (`Apache-2.0`), `site/` (miqyas.kahflabs.com, `@kahf/design`). Public repository `miqyas` (decoupled open-core: `AGPL-3.0-only` + `Apache-2.0`).
 
 ## 8. Verification
 

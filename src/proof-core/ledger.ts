@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // The assertion ledger: one verdict with evidence per written assertion. A plan passes only when every assertion
 // has a recorded pass; the verdict is computed from the entries, never taken from a model's overall impression.
 

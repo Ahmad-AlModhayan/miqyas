@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // The payload path of the Anthropic agent, offline: a stubbed client, fake observations, no browser, no network.
 import type Anthropic from '@anthropic-ai/sdk';
 import { appendFileSync } from 'node:fs';

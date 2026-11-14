@@ -1,10 +1,10 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { main } from '../../src/cli.js';
+import { main } from '../../src/entry/cli.js';
 import { launch, measureProbe, openWebSurfaceDriver } from '../../src/surfaces/web/driver.js';
 import { schemaErrors } from '../report-helpers.js';
 

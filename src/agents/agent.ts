@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // The agent interface: a provider carries out action steps (act) and judges assertions (judge). Providers are
 // pluggable; Anthropic is the default. The runner owns the browser; agents only see observations and call tools.
 

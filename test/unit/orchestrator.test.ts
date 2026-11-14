@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Proof Core orchestrator seam tests (no Chromium, no CLI, no Anthropic API).
 
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';

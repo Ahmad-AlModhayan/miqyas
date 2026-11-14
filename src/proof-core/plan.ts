@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Plan format miqyas-plan/1: a superset of TestSprite's action/assertion steps, every step with a stable id.
 
 import { readFile, readdir, stat } from 'node:fs/promises';

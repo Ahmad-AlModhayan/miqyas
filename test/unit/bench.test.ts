@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import { BENCHES, buildBenchSummary, costEstimate, renderBenchMarkdown, type BenchInput } from '../../src/proof-core/bench.js';
 import type { PlanResult } from '../../src/proof-core/ledger.js';

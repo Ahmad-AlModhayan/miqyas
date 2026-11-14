@@ -1,7 +1,6 @@
 # Notice
 
-Miqyas (مقياس) is open code, licensed under the [PolyForm Shield License 1.0.0](LICENSE). It is source-available, not
-open source by the OSI definition.
+Miqyas (مقياس) uses a decoupled open-core licensing split: the core verification engine (`src/proof-core/`, `src/adapters/`, `src/agents/`, `src/entry/`) is licensed under GNU AGPL v3.0 (`AGPL-3.0-only`, [`LICENSE`](LICENSE)); the worker protocol, scrubber, surface drivers, thin CLI launcher, presets, and schemas (`src/protocol/`, `src/scrub/`, `src/surfaces/`, `src/cli.ts`, `presets/`, `schema/`) are licensed under Apache-2.0 ([`LICENSE-APACHE`](LICENSE-APACHE)). Commercial dual-licences are available from Kahf Labs.
 
 Required Notice: Copyright Ahmad AlModhayan, trading as Kahf Labs (https://kahflabs.com)
 

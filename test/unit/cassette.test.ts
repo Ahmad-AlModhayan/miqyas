@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Deterministic cassette record/replay, ephemeral normalization, image fingerprinting, and miss tests (issue #11).
 
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';

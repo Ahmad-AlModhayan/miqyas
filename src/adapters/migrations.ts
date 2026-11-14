@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // SQL migration RLS analyzer (ADR 0005, FR-Q4, Check 7): parses repository SQL migrations via libpg-query (MIT)
 // and verifies that every remaining permanent table in the `public` schema has Row Level Security enabled.
 

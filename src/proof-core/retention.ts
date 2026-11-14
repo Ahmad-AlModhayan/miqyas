@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Artifact retention enforcement for `.miqyas/runs` (Layer 3: proof-core).
 
 import { readdir, rm, stat } from 'node:fs/promises';

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Adapter seam (ADR 0005): external runners, scanners, and analyzers plug into Proof Core behind this contract.
 
 export interface AdapterFinding {

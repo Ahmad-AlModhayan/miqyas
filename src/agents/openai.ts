@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // OpenAI-compatible chat-with-images provider (Ollama, vLLM, OpenAI-compatible endpoints) behind the Agent seam.
 // Re-scans scrubbed payloads, checks spend, and logs to payloads.jsonl via gateCall BEFORE any HTTP request leaves.
 

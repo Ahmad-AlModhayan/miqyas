@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Offline E2E readiness suite for Grade 1 Checks 8, 9, and 10 (#19):
 // backend public-key probes, two-account read-only IDOR, and unauthenticated route replay.
 

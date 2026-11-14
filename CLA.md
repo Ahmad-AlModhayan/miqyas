@@ -2,9 +2,7 @@
 
 Version 1.0. Between you ("Contributor") and **Ahmad AlModhayan, trading as Kahf Labs** ("Kahf Labs", "we").
 
-Miqyas is source-available under the [PolyForm Shield License 1.0.0](LICENSE). That licence has no clause for
-contributions and does not let anyone sublicense, so without this agreement a pull request would arrive under
-Shield's terms and Kahf Labs could not ship it in the paid Miqyas or later change the licence. This agreement fixes that.
+Miqyas uses a decoupled open-core model: `miqyas-core` is licensed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), and the worker protocol, scrubber, surface drivers, thin CLI, presets, and schemas are licensed under [Apache License 2.0](LICENSE-APACHE) (`Apache-2.0`). Without this agreement, incoming contributions would arrive strictly under AGPL-3.0-only or Apache-2.0 terms without granting Kahf Labs the right to commercially dual-license `miqyas-core` or ship contributions inside hosted/proprietary offerings alongside the open-source codebase. This agreement fixes that.
 **You keep your copyright.** You are not selling or giving us your work; you are licensing it to us.
 
 By opening a pull request, or by signing when CLA Assistant asks, you agree to the following for every

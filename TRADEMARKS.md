@@ -1,6 +1,6 @@
 # Trademark policy
 
-The source of Miqyas is under the [PolyForm Shield License 1.0.0](LICENSE). That licence covers code. It gives no
+The source of Miqyas is licensed under [AGPL-3.0-only](LICENSE) (core engine) and [Apache-2.0](LICENSE-APACHE) (protocol, surface drivers, CLI, presets, schemas). Those licences cover code. They give no
 rights to our names or logos, and this policy says what you may do with them.
 
 **Our marks:** Kahf, Kahf Labs, Wasl, Qasd, Miqyas (مقياس), and their logos. These are used by Ahmad AlModhayan,
@@ -21,8 +21,7 @@ trading as Kahf Labs. We have not registered them yet, and we still rely on them
   update channel, and say it is not the official Miqyas.
 - Use the official update channel, release signing keys, or the `miqyas.kahflabs.com` and `kahflabs.com` domains.
 
-The PolyForm Shield licence also bars using the code to provide a product that competes with Miqyas or with another
-Kahf Labs product built on it. This policy is separate from that: a use the licence allows still needs its own name.
+Any use allowed by GNU AGPL v3.0 or Apache-2.0 — including self-hosted forks or commercial redistributions compliant with those licences — still needs its own name and may not present itself as official Kahf Labs / Miqyas branding.
 
 Questions or requests for permission: hello@kahflabs.com. To report a copy that uses our name, write to the same
 address with a link.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Anthropic provider. The key comes from the environment (ANTHROPIC_API_KEY or an `ant auth login` profile, as the
 // SDK resolves it); it is never read, printed or stored by Miqyas. Every text sent is scrubbed first; every call
 // passes gateCall (re-scan, then one payload log entry) just before it is sent.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Security & quality findings collected outside the assertion ledger (Layer 3: proof-core).
 // Includes always-on prompt-injection detection on rendered page content (#12) and shared Finding model for detectors (#13).
 

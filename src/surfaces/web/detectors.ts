@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: Apache-2.0
 // Always-on deterministic web surface detectors (FR-B7 / #13):
 // runtime errors, same-origin HTTP 4xx/5xx & failed requests, served/DOM secret patterns,
 // text/element clipping, axe-core accessibility violations (MPL-2.0 unmodified),

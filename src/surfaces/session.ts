@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: Apache-2.0
 // Surface contracts: the one-way boundary between Proof Core / Agents and any surface driver (web, desktop, CLI, API).
 
 /** Element geometry in CSS pixels, rounded at capture time. */

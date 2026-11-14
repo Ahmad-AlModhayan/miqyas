@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+// SPDX-License-Identifier: Apache-2.0
 // Static one-way layer boundary checker for Miqyas source modules.
 
 import { readdir, readFile } from 'node:fs/promises';
@@ -7,13 +7,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ALLOWED_LAYERS = {
-  scrub: new Set(['scrub']),
-  surfaces: new Set(['scrub', 'surfaces']),
-  adapters: new Set(['scrub', 'surfaces', 'adapters']),
-  agents: new Set(['scrub', 'surfaces', 'agents']),
-  'proof-core': new Set(['scrub', 'surfaces', 'adapters', 'agents', 'proof-core']),
-  entry: new Set(['scrub', 'surfaces', 'adapters', 'agents', 'proof-core', 'entry']),
-  cli: new Set(['entry']),
+  protocol: new Set(['protocol']),
+  scrub: new Set(['protocol', 'scrub']),
+  surfaces: new Set(['protocol', 'scrub', 'surfaces']),
+  adapters: new Set(['protocol', 'scrub', 'surfaces', 'adapters']),
+  agents: new Set(['protocol', 'scrub', 'surfaces', 'agents']),
+  'proof-core': new Set(['protocol', 'scrub', 'surfaces', 'adapters', 'agents', 'proof-core']),
+  entry: new Set(['protocol', 'scrub', 'surfaces', 'adapters', 'agents', 'proof-core', 'entry']),
+  cli: new Set(['protocol', 'cli']),
 };
 
 const VENDOR_LAYER_ONLY = {
