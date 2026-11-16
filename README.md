@@ -63,6 +63,8 @@ network).
 
 - [Product requirements (PRD)](docs/PRD.md) and [software requirements (SRS)](docs/SRS.md)
 - [Charter](docs/CHARTER.md): goal, readiness grades and profiles, the seven principles, plan format, roadmap
+- [Foundation](docs/FOUNDATION.md): the design being built next: facts and collectors, one judge, the proof bundle,
+  the gate, surfaces, bound plans. Not yet what the code does.
 - [Threat model](docs/threat-model.md): what Miqyas defends, what it may do to a target, what it never does
 - [Decisions (ADRs)](docs/adr/) and the [glossary](CONTEXT.md)
 - Numbers like "ticket 28" in the docs refer to Kahf's internal tracker.

@@ -244,6 +244,9 @@ FR-S1–S4 below are superseded by FR-B9 and FR-K1–K13, which bring them into 
 Without `check`, the model judges the assertion and the verdict says so.
 
 ### 5.2 Worker protocol `miqyas-worker/1`
+Superseded by `miqyas-worker/2` in the [foundation](FOUNDATION.md) §7 (ADR 0010); nothing was built on version 1. The
+data model of §6 and the architecture of §7 below are likewise replaced by the foundation.
+
 JSON lines over stdio. Core to worker: `hello`, `open {target}`, `act {step_id, text, locator?, input?}`, `observe`, `check {assertion_id, check?}`, `close`. Worker to core: `ready {surface, capabilities}`, `observation {screenshot, tree}`, `verdict {assertion_id, verdict, evidence}`, `error {code, message}`. Binaries are files in the run folder; messages carry paths.
 
 ### 5.3 CLI
