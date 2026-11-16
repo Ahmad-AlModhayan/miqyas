@@ -94,3 +94,29 @@ is untrusted), ticket 29 (spend), ticket 57 (what leaves the machine), ticket 58
   model-proposed findings stay `unconfirmed` until a code check or a second look backs them.
 - Miqyas is not a penetration test, a security audit or a certification. Every security check says so.
 - A readiness check covers only what its coverage line says it reached.
+
+## Changes with the foundation
+
+The [foundation](FOUNDATION.md) keeps this model and builds its defences into one gate (ADR 0008). It will be folded
+into the sections above when the foundation is what the code does. Until then, these are the differences.
+
+- **The never-do list** stays here. Each line becomes a deny rule with an id and a test. Two lines are reworded and one
+  is added:
+  - "leave the origin" becomes "leave the set of origins the run is about": the target's origin and the backends its
+    own pages call.
+  - "run an active check on a host that isn't a test host or an owned host named with `--allow-host`" becomes "probe,
+    write to or disrupt an origin that isn't a sandbox, a test host, an owned host or the backend of one".
+  - New: "write to or disrupt a live physical process".
+- **A named test host needs the token for more than a probe.** A host that is a test host only by a label in a public
+  name gets inert probes with `--active` as before. Writing to it or disrupting it also needs the ownership token.
+- **The crawl is read-only at the wire.** A request the page tries to send during the crawl that would change state is
+  refused before it leaves. The refusal of controls with destructive names stays in front of it.
+- **The stop on the first 429 or 503** now ends everything code chose to send to that origin, not only the crawl.
+- **The verdict (A1).** No model judges at run time, so the page has no judge to address (ADR 0009). A binding counts
+  only when code has tied it to the assertion's words and seen it fail. The guards on a model-judged pass (a cited node
+  that code matches, and injection-shaped text making the pass `unverified`) stay for the assertions a person marks for
+  a model. `--strict` goes away because it is the default. Page text still reaches a model only as fenced data.
+- **Running the target's own code** (its tests, its command-line program) is a new effect, `execute`, and is confined
+  to a container with no network and a read-only copy of the repository unless the person allows otherwise (A5).
+- **What a proof bundle can't show** is added to the limits stated in every report: that a collector recorded the
+  target faithfully, and, unsigned, who made the bundle.

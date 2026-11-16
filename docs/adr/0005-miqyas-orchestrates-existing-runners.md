@@ -20,3 +20,6 @@ no tool with a fitting licence does the job within the limits of ADR 0002, and t
 - Tests put recorded-output shims on the tool path, so the CLI seam stays the one place behaviour is tested.
 - Licences are checked per tool before it's added (see `CONTRIBUTING.md`). The ticket that adds a
   bundled tool also adds it to a third-party section in `NOTICE.md`.
+
+Later decisions: ADR 0006 makes a missing tool `blocked`. ADR 0012 adds shared readers for common formats and takes
+coverage from what Miqyas handed a tool, not from what the tool reports.
