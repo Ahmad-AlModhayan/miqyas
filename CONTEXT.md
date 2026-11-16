@@ -101,6 +101,51 @@ coverage rule shows the set really is empty.
 **Fold**: the one function that turns a set of verdicts into a result: any fail gives fail, otherwise anything not
 known gives not known, otherwise pass.
 
+## Laws and experiments
+
+**Law**: a relation that must hold between two runs of a target, or between two things the target states about
+itself. A universal law is wrong to break whatever anyone intended, and ships with Miqyas; a local law is one a person
+adopted for one project. _Avoid_: convention, pattern, heuristic, invariant (what a scenario checks).
+
+**Experiment engine**: the part of Miqyas that runs experiments over a target's operations and reports which laws
+were broken. The run engine is a different thing: it carries out one run.
+
+**Operation**: one thing a target lets someone do: a route with a method, a control with its action.
+
+**Experiment**: two runs from the same capsule that differ in exactly one thing, with checks in the same experiment
+that the instrument worked. Its outcome is broken, held, or can't tell. _Avoid_: probe (a request), test.
+
+**Axis**: the one thing in which the two runs of an experiment differ: who asks, through which door, how often, in
+what order, under what failure, and the rest of the list in the engine's design.
+
+**Reference run**: the run of an experiment that shows normal behaviour, against which the other is compared.
+_Avoid_: control (a clean twin's word), baseline (the last build's behaviour).
+
+**Matrix**: operations against axes. Each cell says whether the law held, was broken, wasn't tested or can't be told,
+and the share of cells tested is the engine's coverage.
+
+**Capsule**: a capture of what a sandboxed target holds, which can be restored or forked.
+_Avoid_: snapshot (a `ui.snapshot` fact), checkpoint (of the ledger), backup.
+
+**Recipe**: the description of one kind of stack: how to start it, which stores of state it keeps, and what a
+capture does with each.
+
+**Footprint**: what one action changed in a target's state: rows, requests, what the page shows, as far as the recipe
+could see. _Avoid_: effect (what Miqyas does to a target), side effect.
+
+**Entity**: one thing a target is made of: a route, a screen, a control, a field, a role, a table, a function.
+
+**Property**: one observation about an entity: yes, no, or not known, with how it is known. It is protective (lacking
+it is the risk), hazardous (having it is the risk) or descriptive. Not known is never read as no.
+
+**Extractor**: a derivation that reads one kind of property from facts.
+
+**Book**: the file in a project that keeps its accepted exceptions with their reasons, the last build's behaviour, and
+the local laws a person adopted.
+
+**Adversary**: the part of Miqyas that plants seeds in the public corpus to measure the experiment engine. It uses no
+customer's code.
+
 ## Exploration, checks, and faults
 
 **Finding**: a problem Miqyas found that no claim asked about. It has a source, a severity and evidence. A finding is
@@ -109,7 +154,7 @@ defect, alert.
 
 **Source** (of a finding): where a finding came from: a derivation, an adapter, or the agent team.
 
-**Unconfirmed**: a finding an agent proposed that no derivation or second look has backed yet.
+**Unconfirmed**: a finding that no experiment, derivation or second look has backed yet.
 _Avoid_: suspected, possible.
 
 **Crawl**: Miqyas visiting screens or states of the target on its own, beyond the steps a plan names.
@@ -205,4 +250,5 @@ the defect), unasserted (no plan names it) and readiness (a readiness check must
 **Clean twin**: the same target with no seed, on which every check must stay quiet. _Avoid_: baseline, control.
 
 **Sensitivity**: evidence that a pass could have failed: the claim was re-judged on a broken copy of what it read, or
-of the target, and failed. It is not a measure of how many real defects Miqyas finds. _Avoid_: recall, strength.
+of the target, and failed. It is not a measure of how many real defects Miqyas finds, nor the share of seeds
+the engine shows. _Avoid_: recall, strength.

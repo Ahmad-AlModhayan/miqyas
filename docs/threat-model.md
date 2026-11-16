@@ -120,3 +120,11 @@ into the sections above when the foundation is what the code does. Until then, t
   to a container with no network and a read-only copy of the repository unless the person allows otherwise (A5).
 - **What a proof bundle can't show** is added to the limits stated in every report: that a collector recorded the
   target faithfully, and, unsigned, who made the bundle.
+- **Capsules hold sandbox data only.** The experiment engine captures and restores the state of a target it started
+  itself (ADR 0017). A capsule is never made from a production database, lives in a store beside the run, and is
+  deleted when the run ends unless the person keeps it. Row values a probe reaches on a live host are still never
+  written to disk.
+- **A footprint never lowers a class.** What an action was seen to change in a sandbox may raise the class the gate
+  gives that request elsewhere. "No change seen" is never evidence that a request only reads.
+- **Two files are written in a project, each only by a command a person runs:** a plan's bindings (ADR 0009) and the
+  project's book of exceptions and adopted laws. A run still writes nothing in the repository it reads.

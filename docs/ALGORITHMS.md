@@ -11,12 +11,17 @@ rests on published work it names it; the checked statements and their limits are
 | [B. The gate](#b-the-gate) | classing a request and an origin, deciding, rate and stop |
 | [C. The target model](#c-the-target-model) | states, routes, refinement, the difference between two releases |
 | [D. Search](#d-search) | how counterexamples are looked for in each space, and when to stop |
-| [E. The engine](#e-the-engine) | the six stages of a run |
+| [E. The run engine](#e-the-run-engine) | the six stages of a run |
 | [F. Oracles](#f-oracles) | what decides something is wrong when nobody wrote an assertion |
 | [G. Assurance](#g-assurance) | coverage, confidence, sensitivity, the record per claim |
 | [H. Diagnosis](#h-diagnosis) | the smallest failing case, the culprit change, the suspect code, flakiness |
 | [I. Economy](#i-economy) | caching, re-running only what a change calls for, ordering |
 | [K. The record](#k-the-record) | the tree over the ledger and its proofs |
+| [L. Experiments](#l-experiments) | two runs from one state that differ in one thing; the laws for each axis; the matrix |
+| [M. Capsules and state](#m-capsules-and-state) | restorable state, checking it is the same, what an action changed, reaching states |
+| [N. Where to look first, and measuring](#n-where-to-look-first-and-how-the-engine-is-measured) | the order of testing, peers as a map, how the engine is scored |
+
+Parts L to N specify the [experiment engine](ENGINE.md).
 
 Notation. A verdict is one of three values: **T** (pass), **F** (fail), **U** (not known; one of `not_checked`,
 `blocked`, `unverified`, with a reason). Evaluating an expression on an item gives true, false or **error**. `V` is a
@@ -462,7 +467,7 @@ sharing a budget, not for its bound.
 
 ---
 
-## E. The engine
+## E. The run engine
 
 ```
 run(request):
@@ -777,3 +782,269 @@ published head without the rest of the bundle.
 
 Three lines: an origin naming the run, the number of lines, the root in base64; then signature lines, when there are
 any. It is rewritten at intervals and after the seal.
+
+---
+
+## L. Experiments
+
+Parts L to N specify the [experiment engine](ENGINE.md). Every law below is a `pair` claim (A2) over recorded runs.
+
+### L1. An experiment
+
+```
+experiment(capsule S, axis, operation):
+  calibrate:  run the reference request twice from S; fields that differ between the two are volatile (L2)
+  reference:  fork S; run the operation as its owner, undisturbed; record
+  test:       fork S; run it again, changed along the axis only; record
+  controls:   the reference run returned the data and left its expected footprint
+              the test identity is live: a request it is allowed to make succeeds in the same fork
+  repeat:     a result of "held" needs two test runs that agree
+  outcome:
+    broken       the law's relation fails on content, and both controls passed
+    held         the relation holds in two agreeing runs, and both controls passed
+    can't tell   a control failed, the fidelity check (M2) failed, the gate refused, or the runs disagree
+```
+
+An outcome is recorded beside whatever else is known about the operation and never replaces it.
+
+### L2. Comparing by content
+
+```
+volatile(operation)  = the fields that differed between two identical runs from the same capsule
+tokens(response)     = the keyed digests of every distinctive leaf value in the response, volatile fields left out
+                       distinctive: text of 8 characters or more, a number of 6 digits or more, an id
+digest(value)        = HMAC-SHA-256(key of this run, normalise(value))
+```
+
+The key is made per run and thrown away at its end. Two digests can be compared for equality, within a run and when
+re-judging its bundle, and nothing can be recovered from them. Status codes are recorded and never decide a law.
+
+### L3. `who`
+
+```
+read:
+  own     = tokens(reference run)                      what the owner receives
+  other   = tokens(test run)                           what the lesser identity receives for the same request
+  offered = tokens the lesser identity received anywhere through its own interface in this run
+  leak    = (own ∩ other) − offered
+  broken  when leak is not empty
+  held    when leak is empty, and the lesser identity's interface was explored to its coverage rule
+  can't tell otherwise
+
+write:
+  touched = the rows the owner's reference run changed
+  broken  when the test run, sent as the lesser identity, changed any row in touched
+  doesn't apply when the lesser identity's own interface offers that action on that object
+```
+
+Data that is meant to be shared is in `offered`, because the lesser identity's own pages show it. A response of 200
+with an empty list leaks nothing and holds. The identities tried are every pair the run was given accounts for, and
+nobody.
+
+### L4. `door`
+
+```
+for each constraint c the interface or the schema declares on a field of the operation
+    (required, a length, a pattern, a range, a type, a fixed set of options):
+  v = a value that breaks c, from the table of D4
+  send the operation directly with v
+  broken when the stored value equals v            the forbidden value went in unchanged
+  held   when nothing was stored, or what was stored satisfies c
+
+for each field g that the object carries and the interface never sends in this operation:
+  send the operation directly with g set to a different value
+  broken when the stored g changed
+```
+
+### L5. `again`
+
+```
+safe (GET, HEAD, OPTIONS):      broken when footprint(request) is not empty, tables declared as logs left out
+repeatable (PUT, DELETE, or a request carrying the same idempotency key):
+                                broken when state(after twice) differs from state(after once)
+```
+
+`state` is the digest of M3. What is safe and what is repeatable is what the protocol defines.
+
+### L6. `together`
+
+```
+s_ab = state after a, then b          s_ba = state after b, then a
+for try i in 1..N:  s_i = state after a and b released at the same moment by the proxy
+broken        when some s_i is neither s_ab nor s_ba
+held in N     otherwise
+
+tried on pairs of writes whose footprints (M4) touch the same table
+```
+
+Holding in `N` tries is not holding. If a collision shows in a share `p` of tries, `N` clean tries miss it with
+probability `(1 − p)^N`; to be 95% sure of seeing one that shows in a tenth of tries takes 29. The report gives `N`.
+
+### L7. `failure`
+
+```
+points = each statement and outgoing call seen in the undisturbed run, in order
+for each point i and each mode (fail, time out):
+  run with that one fault
+  broken when footprint_i is neither empty nor the whole undisturbed footprint       a partial change
+  broken when footprint_i is empty and the response reports success                  a swallowed error
+```
+
+### L8. The other axes
+
+```
+round trip     write v, read it back; broken when what is read differs from v after the declared normalisation;
+               v ranges over the boundary values the declaration allows (D4)
+after          end the session, delete the account or revoke the token; send the reference request with the old
+               credential; broken when own tokens (L3) come back
+view           for two views of one quantity in one state (a count and its rows, a total and its lines):
+               broken when they differ
+build          the same experiment on the previous build and this one; broken when an operation the change
+               did not touch behaves differently
+presentation   the relations of F1
+```
+
+### L9. The matrix
+
+```
+cell(operation, axis) = doesn't apply | not tested | held | held in N | broken | can't tell (why)
+coverage(axis)        = cells tested / cells that apply
+```
+
+Which cells apply is decided by rule (a `door` cell needs a declared constraint; a `together` cell needs two writes
+with overlapping footprints), and the rule is recorded. A report prints the matrix, and coverage per axis, and never
+one number for the whole.
+
+---
+
+## M. Capsules and state
+
+### M1. A capsule and its recipe
+
+```
+capture(sandbox) -> id        restore(sandbox, id)        fork(id) -> sandbox
+
+recipe(stack) = how to start it; each store of state it has (database, sessions, cache, queue, files, clock);
+                for each store: captured | reset | shared | outside
+```
+
+A capsule records which recipe made it and what that recipe captured. Forks run side by side only when no store is
+`shared`. A store marked `outside` makes the cells that depend on it "can't tell".
+
+### M2. The fidelity check
+
+```
+fidelity(sandbox):
+  record a sequence of reads R as each identity
+  c = capture(sandbox); restore(sandbox, c); replay R
+  same = every response has the tokens (L2) it had before
+```
+
+Run once per capsule recipe per run, before any experiment. If it fails, every experiment on that recipe is "can't
+tell", and the report names the reads whose answers moved.
+
+### M3. The digest of a state
+
+```
+state(sandbox) = SHA-256 over, for each table in name order:
+                   its rows in order of their natural key,
+                   each row as its columns in name order, rendered in one fixed way,
+                   leaving out generated columns and volatile columns (L2)
+```
+
+A natural key is a unique key that doesn't depend on the order of insertion; where a table has none, its rows are
+compared as a multiset. Two paths that reach the same logical state have the same digest even though the ids and
+times they generated differ.
+
+### M4. A footprint
+
+```
+footprint(action, S) = rows added, changed and removed between state(S) and state(S after action),
+                       by table and column, matched by natural key, generated and volatile columns left out;
+                       plus the requests the action sent, and what the page shows
+```
+
+A footprint covers the stores its recipe captures and says which those are. It may raise the class the gate gives a
+request (B1) and never lower it.
+
+### M5. Reaching states
+
+```
+makes(o)    = the kinds of id that appear new in o's responses or footprint
+needs(o)    = the kinds of id that o's request carries
+order       = any order of operations in which each need is made before it is used
+
+archive     = { (state of the page (C1), state of the data (M3)): capsule }
+goal        = each account owns at least one of each kind of thing, checked by footprints
+```
+
+The engine walks toward the goal from the archive, forking from the nearest state that already satisfies part of it.
+An agent may propose the steps for a path code can't work out; the footprint decides whether it worked.
+
+### M6. Where two runs part ways
+
+```
+firstDivergence(a, b):
+  put the two runs' events in order, volatile fields left out
+  return the first position at which they differ, with the events on each side
+```
+
+Reported with every broken law, as the place to start reading.
+
+---
+
+## N. Where to look first, and how the engine is measured
+
+### N1. The order of testing
+
+```
+1. operations a change touches, found from the files each was read from
+2. writes before reads; money, access and deletion first
+3. entities that lack a protection most of their peers have (N2)
+4. pairs of writes with overlapping footprints, for `together`
+5. cheapest first within each group
+```
+
+This order decides what is tested first and nothing else. It stays a fixed order until there is held-out data to fit
+weights on.
+
+### N2. Peers, as a map
+
+A property is marked by whoever writes its extractor as **protective** (lacking it is the risk), **hazardous**
+(having it is the risk) or **descriptive**. Only protective and hazardous properties are reported; descriptive ones
+only draw classes. A feature that is the property's own mechanism never draws a class.
+
+```
+n       = the number of entities in a class, counting near-copies and the output of one generator once
+k       = how many have the protection
+L(n, k) = the value such that P(compliance >= L | k of n) = 0.95, with a flat prior
+          with no exception:  L = 0.05^(1/(n + 1))        n = 8: 0.72     n = 15: 0.83     n = 28: 0.90
+a class is kept when most of it has the protection and n >= 8
+```
+
+Output, for each protective property: the entities that lack it, each either explained in the book or open; and, for
+each class where most lack it, "this class has no such protection", checked against the universal laws. `L` orders
+the list and is a rank, not a probability. A first trial of this method as a detector of defects found none in 70
+exceptions read by hand (ENGINE §12); it is kept as a map and as an order of testing.
+
+### N3. Measuring
+
+```
+real defects   for each published defect with a fixing commit: run the engine on the commit before;
+               shown | not shown | no experiment exists for it
+seeds          a seed counts only with a test, written by whoever planted it, that shows it without the engine
+held out       anything fitted is fitted on some applications and reported on others
+labelled       what the engine reports on an application judged clean is read by a person, under published rules
+```
+
+### N4. What is reported
+
+```
+per axis and per kind of defect:
+  shown    = defects shown / defects in the set, real and seeded given apart
+  right    = broken cells judged a real defect / broken cells
+  missing  = defects for which no experiment exists
+  cost     = runs per defect shown
+```
+
+Never blended (ADR 0015). `shown` on seeds says how well the engine finds what was planted, and is described as that.

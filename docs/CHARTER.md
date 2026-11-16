@@ -102,8 +102,8 @@ These were first called the "seven pillars"; they're renamed so that "pillar" ke
 ## Architecture
 
 This section describes the first version as built. The design that replaces it is on one page in the [map](MAP.md),
-specified in the [foundation](FOUNDATION.md) and the [algorithms](ALGORITHMS.md), with its reasons in ADRs 0006 to
-0015. Where this section disagrees with them, they win.
+specified in the [foundation](FOUNDATION.md), the [experiment engine](ENGINE.md) and the
+[algorithms](ALGORITHMS.md), with its reasons in ADRs 0006 to 0018. Where this section disagrees with them, they win.
 
 Phase 1 implements the proof core, the first surface worker (web), and the first adapters behind a clean boundary so
 additional surfaces, fault-injection workers, and coordinated agent-team roles plug into the same ledger:

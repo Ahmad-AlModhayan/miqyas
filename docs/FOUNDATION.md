@@ -5,10 +5,10 @@ run leaves, the one place every action passes, and the contracts for surfaces, p
 
 | | |
 |---|---|
-| Status | Proposed, 2026-11-16. Becomes the contract when ADRs 0006 to 0015 merge. |
-| Read with | [MAP.md](MAP.md): the whole system on one page and why it is built this way. [ALGORITHMS.md](ALGORITHMS.md): every function and formula named here, numbered. |
+| Status | Proposed, 2026-11-16. Becomes the contract when ADRs 0006 to 0018 merge. |
+| Read with | [MAP.md](MAP.md): the whole system on one page and why it is built this way. [ENGINE.md](ENGINE.md): the experiment engine, which finds what nobody asked to be checked. [ALGORITHMS.md](ALGORITHMS.md): every function and formula named here, numbered. |
 | Replaces | The Architecture section of the [charter](CHARTER.md), and §5.2 (worker protocol), §6 (data model) and §7 (architecture) of the [SRS](SRS.md). It changes three lines of the [threat model](threat-model.md), listed there. Where an older document disagrees with this page, this page wins. |
-| Reasons | [ADRs 0006 to 0015](adr/). This page says what and how; each ADR says why, once. |
+| Reasons | [ADRs 0006 to 0018](adr/). This page says what and how; each ADR says why, once. |
 | Words | [CONTEXT.md](../CONTEXT.md). |
 
 ## 1. Why a new foundation
@@ -123,6 +123,9 @@ it. Findings are recorded in the ledger and never carry a verdict.
 | `step.done` | plan runner | one action step: carried out, failed, or outcome unknown |
 | `sample` | any collector | one numeric measurement with its unit: a duration, a size, a yes or no |
 | `model.state`, `model.edge` | derivations | the target model: a state and a transition between two states (ALGORITHMS C) |
+| `entity`, `property` | extractors | one thing a target is made of, and one observation about it: yes, no or not known, with how it is known (ENGINE §8) |
+| `capsule`, `experiment` | the experiment engine | a capture of a sandbox and the recipe that made it; two runs from one capsule that differ along one axis, their checks and the outcome (ENGINE §3 to §6) |
+| `footprint` | the experiment engine | what one action changed, as far as the recipe could see: rows by table and column, requests sent, what the page shows |
 | `collection` | every collector, or the engine | see above |
 | `finding` | derivations, adapters, agents | see above |
 
@@ -462,7 +465,8 @@ with the run id and listed for clean-up.
   front of the wire rule as a second guard.
 - **What leaves the machine.** A model call passes the same gate: scrub, re-scan, a pessimistic cost estimate against
   the cap, then a `model.call` record. A network fetch is allowed only to a named command such as `update-db`. A tool
-  runs with fixed arguments on paths Miqyas chose. A run writes nothing outside its run folder.
+  runs with fixed arguments on paths Miqyas chose. A run writes nothing outside its run folder and, for a sandbox, the
+  capsule store beside it.
 - **Consent is a typed question only a person can answer** (§13).
 - **A worker in its own process** sends its traffic through a proxy the engine runs. One that can't be proxied gets
   nothing above observe.
@@ -670,7 +674,9 @@ the ledger can differ between two runs when collectors run in parallel; no verdi
 ## 11. Finding what is wrong, and saying how sure
 
 The foundation above makes a verdict trustworthy. What makes Miqyas find more, and say how much its silence means, is
-built on it and specified in [ALGORITHMS.md](ALGORITHMS.md):
+built on it. The centre of that is the **experiment engine**, specified in [ENGINE.md](ENGINE.md): it runs pairs of
+runs from the same restored state that differ in one thing, and reports where a law that holds whatever anyone
+intended is broken. Around it, specified in [ALGORITHMS.md](ALGORITHMS.md):
 
 - **The target model** (C): the states, transitions, routes and roles of a target, derived from facts and kept across
   runs. It steers exploration, shows what changed between two releases, and is the denominator for coverage.
@@ -697,6 +703,7 @@ Its answer is a `proposal` record, checked by code before anything comes of it, 
 | Prober | a hypothesis ("this route may leak that") | maps it onto a probe template code already has; in a sandbox, may be a request of its own |
 | Fault planner | a schedule of faults for a scenario | stores it as data and runs it from a seed, in a sandbox |
 | Triager | a draft finding or a cause to look at | records it as `unconfirmed`, labelled as a model's judgement |
+| Adversary | a seed to plant in an application of the public corpus, to measure the experiment engine | admits it only with a test, written apart from the engine, that shows it (ENGINE §11) |
 
 To the engine an agent is one more explorer: it is given budget when what it proposes adds coverage, by the same
 measure as every other explorer (ALGORITHMS D9). Agents don't talk to each other; they read the same facts.
@@ -723,6 +730,9 @@ src/surfaces/    web and api workers
 src/gate/        the gate: classes, wire rules, scopes, spend, consent
 src/engine/      resolve, match, budget, collect, replay; derivations and checkers
 src/model/       the target model and its diff
+src/experiment/  the experiment engine: the laws, the matrix, controls, footprints, the book
+src/capsule/     capture, restore and fork of a sandbox; one recipe per kind of stack
+src/measure/     real-defect sets, seeds, and the scores of the experiment engine
 src/explore/     the explorers and the budget allocator
 src/assure/      coverage measures, sensitivity, the assurance record
 src/diagnose/    minimising, bisecting, clustering, localising
