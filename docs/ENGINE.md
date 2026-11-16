@@ -51,7 +51,7 @@ to re-check.
 |---|---|---|---|
 | **who** | the same request as the account that owns the data, and as another account, a lower role, or nobody | the lesser identity receives nothing of the owner's that its own interface doesn't offer it, and changes nothing of the owner's | broken access control, leaks between tenants |
 | **door** | an action through the interface, and the same request sent straight to the server carrying what the interface forbids or never sends | the server enforces what the interface and the schema declare | validation that exists only in the client; fields a client must not set |
-| **again** | a request once, and twice | repeating a request that is declared safe or repeatable changes nothing more | unsafe reads, duplicated effects |
+| **again** | a request once, and twice | repeating a request that is declared safe or repeatable changes nothing more in what the application then shows | unsafe reads, duplicated effects |
 | **together** | one request then another; the other order; both at once | the result of both at once is the result of one of the two orders | races: spending twice, passing a limit, duplicate accounts |
 | **failure** | undisturbed, and with one fault at one point | all of the change or none of it, and an error reported | partial writes, swallowed errors |
 | **round trip** | a value written, and then read | what comes back is what went in | truncation, damaged text, silent conversion |
@@ -60,7 +60,7 @@ to re-check.
 | **presentation** | a page, and the same page in another direction, language, viewport or theme | the same content and controls, placed as the change implies | right-to-left, responsive and translation defects |
 | **build** | the previous build, and this one | nothing differs that the change didn't touch | regressions |
 
-Three things make these laws usable without knowing intent.
+Four things make these laws usable without knowing intent.
 
 - **The application's own interface is its statement of intent.** What an identity can reach through its own
   interface is what the application says that identity may do. The `who` law doesn't ask whether a record should be
@@ -72,6 +72,10 @@ Three things make these laws usable without knowing intent.
   redirect, or a page that says "please log in" with a 200, and can answer a stranger with a 200 and an empty list.
   A law is broken only when the content shows it: the lesser identity's response carries items whose keyed digests
   match the owner's; the stored row holds the value that was forbidden.
+- **State is judged as the application shows it.** The answer to a write doesn't say whether the write happened, so a
+  law about state is judged on what each identity can then read back through the application, with the footprint as
+  the supporting record. What a server keeps for itself (a log line, a revision, a counter) may differ between two
+  runs without any law being broken; the protocol says as much.
 
 Each law is a claim Miqyas ships: a `pair` claim over the two runs (FOUNDATION §4), with examples that must fail, like
 any other. The ones in a profile gate a release. A broken law that isn't in a profile is a finding with its two runs.
@@ -149,7 +153,9 @@ Recipes come in levels behind one interface (`capture`, `restore`, `fork`). The 
 browser's storage and what the recipe lists besides, on any machine with containers. Later levels capture a process
 tree, then a whole virtual machine, and need Linux. A target whose backend is a hosted service is run against that
 service's local stack, where one exists; where none does, only the cells the gate allows on a live host can be tested
-(§10).
+(§10). The two hosted backends small applications use most both publish a local stack with sign-in, storage and their
+access rules. An application that isn't pointed at its local stack would reach the hosted one, so a sandbox's only
+way out is the gate.
 
 **What an action did.** With the state before and after in hand, the difference is the action's **footprint**: rows
 added, changed and removed, by table and column, aligned by their natural keys and with generated values (ids, times)
@@ -245,18 +251,29 @@ Numbers are given per axis and per kind of defect, never blended (ADR 0015).
 
 This is a design, and this is the evidence for and against it as of the date above.
 
-**Published work.** Finding defects as inconsistency, with no specification, has found hundreds of real bugs in large
-systems code, at false-alarm rates from about a fifth to four fifths depending on how well the things compared were
-chosen; every success chose them by hand. For web applications the published evidence is thinner and covers one axis
-at a time: request replay as another identity, client-side limits the server doesn't enforce, races found from
-database traces. No published system or product was found that runs several axes from restored state with relations
-judged by content. That makes this the unproven part as well as the new one.
+**Published work.** Each axis has evidence of its own, from separate tools, one axis at a time.
+
+| Axis | What has been shown | Where the false alarms came from |
+|---|---|---|
+| who | A black-box tester that replays requests as another account, and reads the effect back from another page, found 89 vulnerabilities in 20 applications, 54 of them new. On changes to another user's data it raised no false alarm in 53 findings, where comparison by status and length managed 62% precision. An older study worked out what each role can reach and tried the rest by direct request, which is the "interface as intent" idea used here. | data meant to be public; pages with nothing sensitive; a fixed similarity threshold on pages that vary; an expired session |
+| together | Reading the database traces of 12 shop applications turned up 22 exploitable races in 11 of them (stock, vouchers, carts). A person had to name each invariant and trigger each race by hand, about two hours apiece. A newer technique releases requests within a millisecond of each other. | races that a lock or a re-check prevents; timing |
+| door | Limits a form enforces and the server doesn't were found in every one of six applications by one tool, and 47 across nine applications by its predecessor. | a refusal page that resembles success; limits the product doesn't really need |
+| failure | In large data stores, 92% of catastrophic failures came from mishandling errors the software itself had signalled, and simple tests of the error paths would have caught 58%. Nothing comparable was found for web applications. | faults at points that can't fail; effects that rightly stay, such as a sent email |
+| after | Rules of this kind on a stateful API tester (use after deletion; another user's namespace) found defects in production cloud services. | cached reads |
+| again, round trip, view | No measured study was found. | what a server keeps for itself; deliberate normalisation; caches |
+
+Three things follow. No published system or product was found that runs several axes together, from restored state,
+with relations judged by content; the whole is unproven as well as new. The best-measured work says the two things
+this design depends on: decide by content read back, never by the answer to the request, and reach the right state
+first. And every source that needed the state to be the same got it by controlling or replacing what lies outside
+the application, not by restoring it, which makes capsules the part of this design most likely to disappoint.
 
 **First trial: peers as a detector. Failed.** Rules of the form "entities of a class share a property" were inferred
 from two real codebases (a web API with 26 routes and 32 tables; a tool with 239 exported functions), and the 70
 highest-ranked and randomly sampled exceptions were read by hand. None was a defect. Most were deliberate, a few were
 misreadings, and the ranking did no better than chance. The method had no sense of direction, its score called weak
-majorities rules, and both codebases already enforced their conventions with tests. It did produce, unprompted, the
+majorities rules, and both codebases already enforced their conventions with tests. The published successes of this
+method are on very large codebases, with the things compared chosen by hand. It did produce, unprompted, the
 list of every route that answers without a session. §8 is what was kept of it.
 
 **Second trial: one forgotten protection, planted.** The method was given a direction (only "most have the
@@ -312,5 +329,7 @@ deliberate.
 - It doesn't know intent, and doesn't find what is wrong only by intent.
 - It doesn't prove a law holds. A cell that held was tested and wasn't broken, on the states reached.
 - It can't test what it can't reach or restore, and says which cells those are.
+- Comparing by content has false alarms of its own: data that is meant to be shared, and pages that vary by
+  themselves. The checks in §5 reduce them and don't remove them.
 - It needs a sandbox for most axes, and a recipe for the stack.
 - It hasn't been built. Nothing on this page is a measured property of a product.

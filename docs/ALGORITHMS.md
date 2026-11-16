@@ -832,11 +832,13 @@ read:
   can't tell otherwise
 
 write:
-  touched = the rows the owner's reference run changed
-  broken  when the test run, sent as the lesser identity, changed any row in touched
+  touched = the rows the owner's reference run changed, and what the owner then reads back
+  broken  when the test run, sent as the lesser identity, changed any row in touched,
+          or changed what the owner reads back
   doesn't apply when the lesser identity's own interface offers that action on that object
 ```
 
+The answer to a write doesn't show whether it took effect, so a write is always judged on what is read back.
 Data that is meant to be shared is in `offered`, because the lesser identity's own pages show it. A response of 200
 with an empty list leaks nothing and holds. The identities tried are every pair the run was given accounts for, and
 nobody.
@@ -859,12 +861,16 @@ for each field g that the object carries and the interface never sends in this o
 ### L5. `again`
 
 ```
-safe (GET, HEAD, OPTIONS):      broken when footprint(request) is not empty, tables declared as logs left out
+shown(S) = for each identity, the tokens (L2) of a fixed sequence of reads replayed on S
+
+safe (GET, HEAD, OPTIONS):      broken when shown(after the request) differs from shown(before)
 repeatable (PUT, DELETE, or a request carrying the same idempotency key):
-                                broken when state(after twice) differs from state(after once)
+                                broken when shown(after twice) differs from shown(after once)
 ```
 
-`state` is the digest of M3. What is safe and what is repeatable is what the protocol defines.
+What is safe and what is repeatable is what the protocol defines, and it defines them on the effect that was asked
+for: a server may log each request, keep a revision or count it. So the law is judged on what the application shows,
+and the footprint (M4) is recorded beside it without deciding.
 
 ### L6. `together`
 
@@ -875,6 +881,7 @@ broken        when some s_i is neither s_ab nor s_ba
 held in N     otherwise
 
 tried on pairs of writes whose footprints (M4) touch the same table
+states are compared over those tables, and over shown(S) of L5
 ```
 
 Holding in `N` tries is not holding. If a collision shows in a share `p` of tries, `N` clean tries miss it with
