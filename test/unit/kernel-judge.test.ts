@@ -67,6 +67,24 @@ describe("check 13's claim", () => {
     expect(verdict.read).toEqual([3, 5]);
   });
 
+  it("reads no fact of another subject: another subject's coverage can't make it pass, nor its advisories fail or count", async () => {
+    const loaded = await loadClaim(bytes(), sha256);
+    const of = (subject: string, f: Fact): Fact => ({ ...f, subject });
+
+    const coveredElsewhere = judgeSet(loaded, { subject: 'repository', facts: placed(of('other', reader(1)), of('other', osv(1))) });
+    expect(coveredElsewhere.verdict).toBe('not_checked');
+    expect(coveredElsewhere.reason).toBe('coverage not met');
+    expect(coveredElsewhere.read).toEqual([]);
+    expect(coveredElsewhere.coverage.saw).toEqual({ collections: {}, inputs: {} });
+
+    const failsElsewhere = placed(reader(1), of('other', advisory('GHSA-crit-0001', 'critical')), of('other', advisory('GHSA-med-0002', 'medium')), osv(1));
+    const verdict = judgeSet(loaded, { subject: 'repository', facts: failsElsewhere });
+    expect(verdict.verdict).toBe('pass');
+    expect(verdict.items).toEqual({ held: 0, failed: 0, outside: 0, uncertain: 0 });
+    expect(verdict.read).toEqual([3, 6]);
+    expect(verdict.view.subject).toBe('repository');
+  });
+
   it('does not pass when coverage is not met: no database, no lockfile, or fewer lockfiles scanned than found', async () => {
     const loaded = await loadClaim(bytes(), sha256);
     for (const facts of [
@@ -110,7 +128,7 @@ describe('the judge', () => {
   it('reads a rule that gives an error as uncertain, never as a pass', async () => {
     const loaded = await loadClaim(encode(scoreClaim([failingExample])), sha256);
     const facts = placed(fact('t.item', 'c@1', { score: 'high' }), fact('collection', 'c@1', { status: 'complete' }));
-    const verdict = judgeSet(loaded, { subject: 's', facts });
+    const verdict = judgeSet(loaded, { subject: 'repository', facts });
     expect(verdict.verdict).toBe('not_checked');
     expect(verdict.reason).toBe('uncertain items: an expression gave an error');
     expect(verdict.items).toEqual({ held: 0, failed: 0, outside: 0, uncertain: 1 });

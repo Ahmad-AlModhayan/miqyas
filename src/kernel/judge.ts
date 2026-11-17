@@ -95,8 +95,15 @@ const UNCERTAIN_UNUSABLE = 'uncertain items: a measurement could not be used';
 /** Judges a `set` claim over the facts in its view (docs/ALGORITHMS.md A1). */
 export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
   const { claim, compiled } = loaded;
+  // A view has one subject (docs/FOUNDATION.md §4, "Views"): a fact about another is not read, so re-judging the
+  // verdict's view reads exactly the facts this judging read.
   const inView = input.facts
-    .filter(({ fact }) => claim.view.kinds.includes(fact.kind) && (claim.view.by === undefined || claim.view.by.includes(fact.by)))
+    .filter(
+      ({ fact }) =>
+        fact.subject === input.subject &&
+        claim.view.kinds.includes(fact.kind) &&
+        (claim.view.by === undefined || claim.view.by.includes(fact.by)),
+    )
     .sort((a, b) => a.seq - b.seq);
 
   const held: number[] = [];
