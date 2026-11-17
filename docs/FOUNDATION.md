@@ -348,7 +348,7 @@ Each line is `{"seq": n, "t": type, "at": time, "body": {…}}`. The record type
 
 | Type | Body |
 |---|---|
-| `run.open` | format version; engine, collector, derivation and CEL library versions; the subjects with their digests; the inputs given; the grants; the class of each origin; the budgets; the quote and the cap |
+| `run.open` | format version; engine, collector, derivation and CEL library versions, and the versions of the other substrate that can change what is recorded (the browser, its driver, the SQL parser); the subjects with their digests; the inputs given; the grants; the class of each origin; the budgets; the quote and the cap |
 | `claim` | one claim file, verbatim, recorded once and referred to by the SHA-256 of its bytes |
 | `effect` | one decision of the gate: the request, who asked, the class the gate gave it, the rule, allowed or refused |
 | `fact` | one fact (§3) |
@@ -547,24 +547,29 @@ give a verdict the assurance `bounded` or `proved`.
 
 **What is Miqyas's own, and what is borrowed** (ADR 0019). Judging and finding by experiment are Miqyas's own code:
 the kernel, the gate, the run engine, the experiment engine, capsules, explorers, oracles and diagnosis, with the
-workers, proxies and probes that carry them out. What is borrowed is one of two things. **Substrate** carries out
-what Miqyas decided; it sits behind one interface, and its version is recorded in the bundle wherever it can change a
-verdict. An **outside tool** runs behind an adapter and adds facts.
+workers, proxies and probes that carry them out. What is borrowed is one of two things. **Substrate** carries out or
+reads what Miqyas decided; it is kept behind one interface, and its version is recorded in the bundle wherever it can
+change what is recorded or a verdict. A sandboxed stack's database is named by its recipe, as id@version, in the
+capsule's manifest (ALGORITHMS M1). An **outside tool** runs behind an adapter on what Miqyas handed it, and adds
+facts.
 
 | Borrowed | As | Why |
 |---|---|---|
 | Chromium, driven through Playwright | substrate | a web target runs in a real browser; a lint keeps the driver inside the surface code |
+| Node.js, the operating system and a container runtime | substrate | Miqyas and a sandboxed target run on them; a recipe starts containers (ENGINE §6) |
 | the database of a sandboxed target | substrate | a target keeps its state in a real database |
-| `libpg-query`, to read SQL | substrate | it is PostgreSQL's own parser, so SQL is read as the database reads it |
-| SHA-256 and HMAC-SHA-256, from the platform | substrate | published standards, which a second verifier already has |
+| `libpg-query`, to read SQL | substrate | it is built from PostgreSQL's own parser, so SQL is read as the database reads it |
+| SHA-256, and HMAC-SHA-256 for keyed digests, from the platform | substrate | published standards, which a second verifier already has |
 | a CEL library | substrate | the language is specified apart from any implementation (ADR 0011) |
-| axe-core | outside tool | a catalogue of accessibility rules (check 4) |
-| gitleaks | outside tool | a catalogue of key formats (checks 5 and 6) |
+| SARIF 2.1.0, JUnit XML, in-toto and DSSE, RFC 9162 | substrate (formats) | published formats; the readers and writers are Miqyas's own (ADRs 0007 and 0012) |
+| a PNG decoder, and a model provider's client library | substrate | one decodes an image and the other carries a request; code decides what is sent and what an answer means |
+| axe-core | outside tool | a catalogue of accessibility rules (check 4); bundled, and injected into the page by the web worker |
+| gitleaks | outside tool | a catalogue of key formats (checks 5 and 6); the web worker also carries a short list of patterns derived from it |
 | osv-scanner | outside tool | a catalogue of advisories (check 13) |
 | a project's own test runner, model checkers, provers | outside tools | their results are the project's or the tool's own, and say what kind of evidence they give (ADR 0015) |
 
 A language model is neither: it proposes, and code tests what it proposed (ADR 0009). Miqyas's own code takes the
-place of something borrowed only by a measurement named beforehand (ADR 0019).
+place of something borrowed only when a measurement named beforehand shows it does better (ADR 0019).
 
 ## 8. Plans and bindings
 

@@ -14,7 +14,7 @@ and need Linux.
 
 ## Considered options
 
-- Start from exact replay of the whole machine: rejected as the first step. It is the strongest substrate and the
+- Start from exact replay of the whole machine: rejected as the first step. It is the strongest base and the
   longest to build. The interface is designed so that it can be reached without changing what is built on it.
 - Trust a database copy to be "the same state": rejected. Sessions made at start-up, caches, queues, files, other
   services and time all sit outside it, and each makes a different kind of wrong answer: a restart that invalidates

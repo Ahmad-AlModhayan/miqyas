@@ -11,8 +11,8 @@ check one angle and leave teams without unified proof. Miqyas solves that in thr
 - **Proof core**: every check, from any source, ends in one recorded verdict with evidence and coverage.
 - **Agent team**: agents that understand the target software, author plans, crawl states, run active checks, and inject
   faults on any surface.
-- **Outside tools as adapters**: the world's runners and scanners plug in behind adapters and add facts. What finds
-  a defect by experiment and what judges is Miqyas's own (ADRs 0005 and 0019).
+- **Outside tools as adapters**: the world's runners and scanners plug in behind adapters and add facts. Judging is
+  Miqyas's own code, and so, by design, is finding a defect by experiment (ADRs 0005 and 0019).
 
 Teams reach it through four entry points: one CLI command for a solo developer, a CI gate that blocks release before
 `ready`, an MCP interface for coding agents after building, and self-hosted deployment so a company's or factory's
@@ -118,8 +118,9 @@ plans (miqyas-plan/1) + profiles (grade-1) ──> core (TypeScript, Node 20+)
                                       later workers over miqyas-worker/1: Tauri, Android, CLI, engine/server, industrial
 ```
 
-- **Adapters**: each existing tool runs behind an adapter that reports what it covered and its version; Miqyas writes
-  its own check only when no tool with a fitting licence fits ADR 0002, and says why (ADR 0005).
+- **Adapters**: each outside tool runs behind an adapter that records its version, what it was given and what it
+  found. It adds facts and gives no verdict; what judges, and by design what finds a defect by experiment, is
+  Miqyas's own (ADRs 0005 and 0019).
 - **Core**: TypeScript, strict, on Node 20+ so it can use Playwright, WebdriverIO and Midscene directly.
 - **Observation**: per step, a full-page screenshot plus a snapshot of rendered nodes only (computed style, non-zero
   box, not clipped), each with role, accessible name, state and box, and a ref the model cites.

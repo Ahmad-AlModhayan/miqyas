@@ -10,21 +10,27 @@ default is turned around, and sorted by the kind of work:
 - **Finding by experiment is Miqyas's own**: reaching a state, capturing and restoring it, choosing what to send,
   ordering and failing what is sent, comparing what came back, shrinking a failure. These are capsules, explorers,
   the experiment engine, the oracles and diagnosis, with the workers, proxies and probes that carry them out.
-- **Carrying out is borrowed, as substrate**: the browser and the library that drives it, the database a target
-  keeps its state in, the operating system, hash functions, a CEL library. A target runs on the real ones, and a
-  published standard is easier for anyone else to check than something of Miqyas's own.
+- **Carrying out and reading is borrowed, as substrate**: the browser and the library that drives it, the database a
+  target keeps its state in, the operating system and a container runtime, hash functions, a CEL library, and a
+  library that parses or writes a published format or protocol. A target runs on the real ones, and a published
+  standard is easier for anyone else to check than something of Miqyas's own.
 - **Looking up is borrowed, behind adapters**: whether a string is a known key format, a version is in an advisory
   or a node breaks an accessibility rule is a question for a catalogue many people keep. A project's own tests,
   model checkers and provers come in the same way. ADR 0005 still describes how.
 
-A run with no outside tool installed still produces the matrix (ENGINE §4).
+A need that mixes kinds is split along them. A scanner that holds a catalogue of rules and also sends requests of
+its own choosing is used for its catalogue: an outside tool runs on what Miqyas handed it (FOUNDATION §6), and
+choosing and sending stay Miqyas's own, through the gate (ADR 0008).
+
+Every law of the experiment engine is judged over runs Miqyas made (ENGINE §3), so a run with no outside tool
+installed still gives the matrix.
 
 ## Considered options
 
 - Keep ADR 0005's default: rejected. It was right for checks that look something up, and it stays for them. As the
-  rule for the whole product it leaves Miqyas only as strong as the tools it runs: it can find what they find, state
-  the coverage they report, and fix none of their misses. ADR 0012 had already stopped taking a tool's word for what
-  it covered.
+  rule for the whole product, wherever a tool exists it leaves Miqyas only as strong as that tool: it can find what
+  the tool finds, state the coverage the tool reports, and fix none of its misses. ADR 0012 had already stopped
+  taking a tool's word for what it covered.
 - Build everything, the substrate included: rejected. A browser or a database of Miqyas's own would test a target on
   something it doesn't run on. A hash function or a rule language of its own would make a bundle harder for a second
   verifier to check (ADRs 0007 and 0011).
@@ -38,17 +44,23 @@ A run with no outside tool installed still produces the matrix (ENGINE §4).
 
 - When a new need appears, the first question is which kind of work it is. Finding and judging are built; nothing is
   wrapped to do them.
-- FOUNDATION §7 lists everything borrowed, as substrate or as an outside tool, with the reason.
-- Substrate sits behind one interface, and its version is recorded in the bundle wherever it can change a verdict,
-  as ADR 0011 already requires of the CEL library. Swapping it must not change a verdict.
-- An outside tool adds facts and decides nothing. Its coverage is taken from what Miqyas handed it (ADR 0012), a
+- FOUNDATION §7 lists what is borrowed, as substrate or as an outside tool, with the reason.
+- Substrate is kept behind one interface: the worker contract for a browser and its driver, one module of the kernel
+  for a CEL library. Its version is recorded in the bundle wherever it can change what is recorded or a verdict, as
+  ADR 0011 already requires of the CEL library. Swapping one library for another that implements the same standard
+  must not change a verdict. A change of browser or database is recorded, and can.
+- An outside tool adds facts and gives no verdict. Its coverage is taken from what Miqyas handed it (ADR 0012), a
   missing tool makes its checks `blocked` (ADR 0006), and a verdict that rests on one says what kind of evidence the
-  tool gives (ADR 0015). No law of the experiment engine rests on an outside tool's facts.
-- Miqyas's own code takes the place of something borrowed only by measurement, and the change that proposes it names
-  the measurement first. For a tool that finds things, that is the corpus and the real defects of ADR 0018, per axis.
-  For substrate, it is the worker conformance suite and old against new on the fixtures. If Miqyas's own does at
-  least as well, it takes the place; if not, it is dropped.
+  tool gives (ADR 0015).
+- Miqyas's own code takes the place of something borrowed only when it is measured to do better, and the change that
+  proposes it names the measurement first: what is counted, on which public data fixed before the run, and by how
+  much. For something that finds by experiment, that is the real defects and the seeds of ADR 0018. For a catalogue,
+  it is a labelled set of cases from public sources, with what was missed and what was wrongly reported counted
+  apart. For substrate, it is the worker conformance suite and old against new on the fixtures, with the gain the
+  change is made for named and measured. If Miqyas's own doesn't do better, it is dropped.
 - This is more to build than ADR 0005 allowed for, and that cost is accepted. The order of building (MAP §6) bounds
   it: a part is built when a step needs it.
 - ADR 0005's consequences for adapters stand: tools the person installs, recorded-output shims in tests, and a
   licence check and a notice for each tool.
+- The first version's code still names Playwright and `libpg-query` as adapters. That goes when the old path is
+  deleted (FOUNDATION §15).
