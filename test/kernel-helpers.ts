@@ -11,7 +11,7 @@ export const text = (bytes: Uint8Array | undefined): string => new TextDecoder()
 /** A store held in memory. Every path is kept under `root`, as a folder on disk would keep it. */
 export class MemoryStore implements Store {
   readonly files = new Map<string, Uint8Array>();
-  constructor(readonly root = '/runs/a') {}
+  constructor(readonly root = 'runs/a') {}
 
   private key(path: string): string {
     return `${this.root}/${path}`;

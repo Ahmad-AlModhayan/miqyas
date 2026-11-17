@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import { BlobStore, blobPath } from '../../src/kernel/blobs.js';
+import { formatCheckpoint, parseCheckpoint } from '../../src/kernel/checkpoint.js';
 import { LedgerWriter } from '../../src/kernel/ledger.js';
 import { verifyIntact } from '../../src/kernel/verify.js';
 import { MemoryStore, sha256, utf8 } from '../kernel-helpers.js';
@@ -9,7 +10,7 @@ const AT = '2026-11-17T10:00:00Z';
 
 /** A finished run: run.open, a fact that names a blob, a verdict, the seal. */
 async function bundle(options: { seal?: boolean; checkpointEvery?: number } = {}) {
-  const store = new MemoryStore('/home/someone/project/.miqyas/runs/run-1');
+  const store = new MemoryStore('runs/a');
   const writer = await LedgerWriter.open(store, sha256, {
     origin: 'run-1',
     at: AT,
@@ -169,6 +170,22 @@ describe('verifying a proof bundle is intact', () => {
     ]);
   });
 
+  it('fails a sealed ledger whose checkpoint covers fewer records than it holds', async () => {
+    const store = new MemoryStore();
+    const writer = await LedgerWriter.open(store, sha256, { origin: 'run-1', at: AT, body: {}, checkpointEvery: 2 });
+    await writer.append('fact', { n: 1 }, AT);
+    const atTwo = store.textOf('checkpoint'); // written after the second record, and true of the first two lines
+    await writer.append('fact', { n: 2 }, AT);
+    await writer.seal({}, AT);
+    store.setText('checkpoint', atTwo);
+
+    const result = await verifyIntact(store, sha256);
+    expect(result.ok).toBe(false);
+    expect(result.problems).toEqual([
+      { path: 'checkpoint', reason: 'the ledger is sealed at 4 records and the checkpoint covers 2' },
+    ]);
+  });
+
   it('fails when the checkpoint is missing or is not one it recognises', async () => {
     const missing = await bundle();
     missing.store.files.delete(`${missing.store.root}/checkpoint`);
@@ -200,26 +217,55 @@ describe('verifying a proof bundle is intact', () => {
   });
 
   it('verifies the same bytes under another root, and no record holds an absolute path', async () => {
-    const { store, writer } = await bundle();
-    const copy = store.copyTo('D:/elsewhere/copied-bundle');
+    const { store } = await bundle();
+    const copy = store.copyTo('elsewhere/b');
 
     for (const s of [store, copy]) {
       const result = await verifyIntact(s, sha256);
       expect(result.problems).toEqual([]);
       expect(result.ok).toBe(true);
     }
-    const head = await writer.head();
+    const ledger = store.textOf('ledger.jsonl');
+    expect(ledger).toBe(
+      [
+        '{"seq":0,"t":"run.open","at":"2026-11-17T10:00:00Z","body":{"format":1}}',
+        '{"seq":1,"t":"fact","at":"2026-11-17T10:00:00Z","body":{"kind":"dep.package","body":{"name":"left-pad"},"blobs":{"lockfile":{"digest":"sha256:454eea274ef715bed0aef364fec823e04318850d28eb04f1c16a03a5127c071c","size":15,"mediaType":"application/json"}}}}',
+        '{"seq":2,"t":"verdict","at":"2026-11-17T10:00:00Z","body":{"claim":"deps@1","verdict":"pass"}}',
+        '{"seq":3,"t":"run.seal","at":"2026-11-17T10:00:00Z","body":{"result":"pass"}}',
+        '',
+      ].join('\n'),
+    );
+    // The root was computed once, outside this repository, by a short Python script using only hashlib and written
+    // straight from RFC 9162 section 2.1.1: a leaf is SHA-256(0x00 ‖ line) over each line above without its newline,
+    // a node is SHA-256(0x01 ‖ left ‖ right), split at the largest power of two below the count. The blob digest is
+    // SHA-256 of the 15 bytes {"packages":[]}, from the same script. None of this repository's code was used.
     expect((await verifyIntact(copy, sha256)).head).toEqual({
       origin: 'run-1',
-      size: head.size,
-      root: Buffer.from(head.root).toString('base64'),
+      size: 4,
+      root: '9YJF2iDT+xLSooiKK4rzb6bUGqdqHBvRllpNfmgBkAA=',
     });
 
-    const ledger = store.textOf('ledger.jsonl');
     expect(ledger).not.toContain(store.root);
-    expect(ledger).not.toContain('/home/');
     for (const line of ledger.trimEnd().split('\n')) {
       expect(line).not.toMatch(/"(\/|[A-Za-z]:[\\/])/); // no string value starts as an absolute path does
     }
+  });
+});
+
+describe('the checkpoint text (ALGORITHMS K3)', () => {
+  // Three lines: the origin, the number of lines, the root in base64. The root here is SHA-256 of nothing, the root
+  // of the empty tree, whose value is published widely; its 32 bytes are written out below.
+  const TEXT = 'run-1\n0\n47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=\n';
+  const ROOT = Uint8Array.from(
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'.match(/../g) as string[],
+    (h) => Number.parseInt(h, 16),
+  );
+
+  it('is written as three lines', () => {
+    expect(formatCheckpoint({ origin: 'run-1', size: 0, root: ROOT })).toBe(TEXT);
+  });
+
+  it('is read from those three lines', () => {
+    expect(parseCheckpoint(TEXT)).toEqual({ origin: 'run-1', size: 0, root: ROOT });
   });
 });
