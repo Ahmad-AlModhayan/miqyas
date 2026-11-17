@@ -874,9 +874,10 @@ read (the first line that applies decides):
 
 write, for an operation that names an object O the owner already has in S: a change, a deletion, an action on it,
 or a creation under it (a line on the owner's invoice, a comment on the owner's record)
-  mine    = the rows of O and the rows that refer to O; and what the owner reads back of O and of what is under it
+  mine    = the rows of O and the rows that refer to O, in stores not marked as logs or audit trails (L7);
+            and what the owner reads back of O and of what is under it
   broken  when the test run, sent as the lesser identity, changed or removed a row in mine, added a row that
-          refers to O, or changed what the owner reads back
+          belongs in mine, or changed what the owner reads back
   doesn't apply to a creation that names nothing of the owner's
   doesn't apply when the lesser identity's own interface offers that action on that object
 ```
@@ -899,7 +900,7 @@ for each constraint c the interface or the schema declares on a field of the ope
 for each field g that the object carries and the interface never sends in this operation:
   send the operation directly with g set to a value w that the undisturbed run doesn't store
   broken when the stored g equals w                the server took a field the interface never sends
-  in a sandbox only: w is not one of the inert values of D4
+  this test runs in a sandbox only, because w is not one of the inert values of D4
 ```
 
 ### L5. `again`
