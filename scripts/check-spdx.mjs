@@ -7,7 +7,29 @@ import { fileURLToPath } from 'node:url';
 
 const CODE_EXTENSIONS = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs']);
 const APACHE_PREFIXES = ['src/protocol/', 'src/scrub/', 'src/surfaces/', 'scripts/'];
-const AGPL_PREFIXES = ['src/adapters/', 'src/agents/', 'src/proof-core/', 'src/entry/', 'test/'];
+// The core, and the tests. `src/kernel/` and the folders after it are the ones docs/FOUNDATION.md §14
+// adds: each grows out of the core and may import the kernel, so it takes the core's licence, as
+// docs/OPEN_MODEL.md sets it.
+const AGPL_PREFIXES = [
+  'src/adapters/',
+  'src/agents/',
+  'src/proof-core/',
+  'src/entry/',
+  'test/',
+  'src/kernel/',
+  'src/gate/',
+  'src/engine/',
+  'src/model/',
+  'src/experiment/',
+  'src/capsule/',
+  'src/measure/',
+  'src/explore/',
+  'src/assure/',
+  'src/diagnose/',
+  'src/collectors/',
+  'src/claims/',
+  'src/bench/',
+];
 
 export function expectedSpdxForFile(filePath) {
   const norm = filePath.replaceAll('\\', '/').replace(/^\.\//, '');

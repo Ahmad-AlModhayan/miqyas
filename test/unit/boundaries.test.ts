@@ -65,3 +65,129 @@ describe('import boundaries', () => {
     expect(violations).toEqual([]);
   });
 });
+
+/** What the check says when a file in one folder under `src/` imports a file in another. */
+function importing(from: string, to: string) {
+  return checkSourceImports(`src/${from}/a.ts`, `import { b } from '../${to}/b.js';`);
+}
+
+/** The single violation the check gives when `from` may not import `to`. */
+function refusal(from: string, to: string) {
+  return [
+    {
+      file: `src/${from}/a.ts`,
+      specifier: `../${to}/b.js`,
+      reason: expect.stringContaining(`layer "${from}" cannot import layer "${to}"`),
+    },
+  ];
+}
+
+describe('import boundaries of the foundation folders (FOUNDATION §14)', () => {
+  it('lets the kernel import the protocol and nothing else', () => {
+    expect(importing('kernel', 'protocol')).toEqual([]);
+    expect(importing('kernel', 'scrub')).toEqual(refusal('kernel', 'scrub'));
+  });
+
+  // One row per folder that §14 lists below the base four, in §14's order:
+  // the folder, the one listed just above it (allowed), the one listed just below it (refused).
+  it.each([
+    ['gate', 'kernel', 'engine'],
+    ['engine', 'gate', 'model'],
+    ['model', 'engine', 'experiment'],
+    ['experiment', 'model', 'capsule'],
+    ['capsule', 'experiment', 'measure'],
+    ['measure', 'capsule', 'explore'],
+    ['explore', 'measure', 'assure'],
+    ['assure', 'explore', 'diagnose'],
+    ['diagnose', 'assure', 'collectors'],
+    ['collectors', 'diagnose', 'claims'],
+    ['claims', 'collectors', 'agents'],
+    ['agents', 'claims', 'bench'],
+    ['bench', 'agents', 'entry'],
+  ])('lets %s import %s, listed above it, and not %s, listed below it', (folder, above, below) => {
+    expect(importing(folder, above)).toEqual([]);
+    expect(importing(folder, below)).toEqual(refusal(folder, below));
+  });
+
+  it.each([
+    'gate',
+    'engine',
+    'model',
+    'experiment',
+    'capsule',
+    'measure',
+    'explore',
+    'assure',
+    'diagnose',
+    'collectors',
+    'claims',
+    'agents',
+    'bench',
+    'entry',
+  ])('lets %s import the base four: protocol, scrub, surfaces and kernel', (folder) => {
+    for (const base of ['protocol', 'scrub', 'surfaces', 'kernel']) {
+      expect(importing(folder, base)).toEqual([]);
+    }
+  });
+
+  it('lets protocol and scrub import nothing outside their own folder', () => {
+    expect(importing('protocol', 'protocol')).toEqual([]);
+    expect(importing('protocol', 'kernel')).toEqual(refusal('protocol', 'kernel'));
+    expect(importing('scrub', 'scrub')).toEqual([]);
+    expect(importing('scrub', 'protocol')).toEqual(refusal('scrub', 'protocol'));
+  });
+
+  it('lets surfaces import protocol and scrub, and neither the kernel nor the gate', () => {
+    expect(importing('surfaces', 'protocol')).toEqual([]);
+    expect(importing('surfaces', 'scrub')).toEqual([]);
+    expect(importing('surfaces', 'kernel')).toEqual(refusal('surfaces', 'kernel'));
+    expect(importing('surfaces', 'gate')).toEqual(refusal('surfaces', 'gate'));
+  });
+
+  it('lets the thin CLI import the protocol and not the kernel', () => {
+    expect(checkSourceImports('src/cli.ts', "import { hello } from './protocol/control.js';")).toEqual([]);
+    expect(checkSourceImports('src/cli.ts', "import { verify } from './kernel/verify.js';")).toEqual([
+      {
+        file: 'src/cli.ts',
+        specifier: './kernel/verify.js',
+        reason: expect.stringContaining('layer "cli" cannot import layer "kernel"'),
+      },
+    ]);
+  });
+
+  it('lets the entry folder import the folders listed above it, and not the thin CLI', () => {
+    expect(importing('entry', 'bench')).toEqual([]);
+    expect(importing('entry', 'gate')).toEqual([]);
+    expect(checkSourceImports('src/entry/a.ts', "import { run } from '../cli.js';")).toEqual([
+      {
+        file: 'src/entry/a.ts',
+        specifier: '../cli.js',
+        reason: expect.stringContaining('layer "entry" cannot import layer "cli"'),
+      },
+    ]);
+  });
+
+  it('keeps the earlier folders apart from the new ones until their code moves', () => {
+    // `adapters` and `proof-core` are not in §14: no new folder imports them, and they import no new folder.
+    expect(importing('engine', 'proof-core')).toEqual(refusal('engine', 'proof-core'));
+    expect(importing('collectors', 'adapters')).toEqual(refusal('collectors', 'adapters'));
+    expect(importing('proof-core', 'kernel')).toEqual(refusal('proof-core', 'kernel'));
+    expect(importing('adapters', 'collectors')).toEqual(refusal('adapters', 'collectors'));
+    // `agents` and `entry` are in both layouts and keep the rules they had.
+    expect(importing('agents', 'proof-core')).toEqual(refusal('agents', 'proof-core'));
+    expect(importing('agents', 'adapters')).toEqual(refusal('agents', 'adapters'));
+    expect(importing('entry', 'proof-core')).toEqual([]);
+    expect(importing('entry', 'adapters')).toEqual([]);
+  });
+
+  it('refuses a file in a folder that §14 does not list, and names the folders it knows', () => {
+    const violations = checkSourceImports('src/plugins/a.ts', '');
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({ file: 'src/plugins/a.ts', specifier: '' });
+    expect(violations[0]?.reason).toContain('outside the declared layers');
+    for (const known of ['kernel', 'gate', 'bench', 'entry', 'adapters', 'proof-core', 'src/cli.ts']) {
+      expect(violations[0]?.reason).toContain(known);
+    }
+    expect(violations[0]?.reason).not.toContain('plugins');
+  });
+});
