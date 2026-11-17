@@ -28,6 +28,8 @@ export interface Decision {
   readonly reasons: readonly string[];
 }
 
+const CAPSULE_OPERATIONS: readonly string[] = ['capture', 'restore', 'fork'];
+
 function classOfEffect(effect: Effect, run: RunFacts): { effectClass: EffectClass | null; reasons: readonly string[] } {
   switch (effect.kind) {
     case 'request': {
@@ -36,6 +38,8 @@ function classOfEffect(effect: Effect, run: RunFacts): { effectClass: EffectClas
       return { effectClass: c.effectClass, reasons: c.reasons };
     }
     case 'capsule':
+      // An operation the gate does not know has no class, and is refused wherever it lands.
+      return { effectClass: CAPSULE_OPERATIONS.includes(effect.operation) ? 'disrupt' : null, reasons: [] };
     case 'plant-seed':
       return { effectClass: 'disrupt', reasons: [] };
     case 'type-secret':

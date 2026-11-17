@@ -304,6 +304,15 @@ describe('an effect the gate does not know, or one that arrives without its targ
     expect(decide({ kind: 'upload-file', namedByPlan: true } as never, world(), everyGrant())).toMatchObject({ rule: 'refuse.no-target' });
   });
 
+  it('is refused in a sandbox too when a capsule operation is not one the gate knows', () => {
+    expect(decide({ kind: 'capsule', operation: 'export' as never, origin: O.sandbox }, world(), everyGrant())).toMatchObject({
+      answer: 'refuse',
+      rule: 'refuse.unknown-effect',
+      environment: 'sandbox',
+    });
+    expect(decide({ kind: 'capsule', operation: 'fork', origin: O.sandbox }, world(), noGrants())).toMatchObject({ answer: 'allow' });
+  });
+
   it('still allows page data sent to the scrubbed model call, which lands on no origin by design', () => {
     expect(decide({ kind: 'send-page-data', to: 'scrubbed-model-call' }, world(), noGrants())).toEqual({
       answer: 'allow',
