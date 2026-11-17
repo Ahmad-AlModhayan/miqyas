@@ -33,6 +33,28 @@ describe('the ledger writer and reader', () => {
     expect((await readLedger(store)).records).toHaveLength(3);
   });
 
+  it('keeps the order of appends made without waiting, and refuses a second writer', async () => {
+    const store = new MemoryStore();
+    const writer = await open(store);
+    const seqs = await Promise.all([1, 2, 3].map((n) => writer.append('fact', { n }, AT)));
+    expect(seqs).toEqual([1, 2, 3]);
+    expect((await readLedger(store)).records.map((r) => r.body)).toEqual([{ format: 1 }, { n: 1 }, { n: 2 }, { n: 3 }]);
+    await expect(open(store)).rejects.toThrow(/already exists/);
+  });
+
+  it('closes the ledger when the store fails a write', async () => {
+    const store = new MemoryStore();
+    const writer = await open(store);
+    const append = store.append.bind(store);
+    store.append = async () => {
+      throw new Error('disk full');
+    };
+    await expect(writer.append('fact', { n: 1 }, AT)).rejects.toThrow(/disk full/);
+    store.append = append;
+    await expect(writer.append('fact', { n: 2 }, AT)).rejects.toThrow(/earlier write failed/);
+    expect((await readLedger(store)).records).toHaveLength(1);
+  });
+
   it('ends with the seal, and refuses any record after it', async () => {
     const store = new MemoryStore();
     const writer = await open(store);

@@ -65,6 +65,15 @@ describe('verifying a proof bundle is intact', () => {
     expect((await verifyIntact(missing.store, sha256)).problems).toEqual([
       { path: blobPath(missing.ref.digest), record: 1, reason: expect.stringMatching(/there is no blob/) },
     ]);
+
+    const store = new MemoryStore();
+    const writer = await LedgerWriter.open(store, sha256, { origin: 'run-1', at: AT, body: {} });
+    const ref = await new BlobStore(store, sha256).put(utf8('hello'), 'text/plain');
+    await writer.append('fact', { blobs: { greeting: { ...ref, size: 6 } } }, AT);
+    await writer.seal({}, AT);
+    expect((await verifyIntact(store, sha256)).problems).toEqual([
+      { path: blobPath(ref.digest), record: 1, reason: 'the blob "greeting" holds 5 bytes and the record says 6' },
+    ]);
   });
 
   it('fails when lines are removed from the end, naming the missing records and the missing seal', async () => {
