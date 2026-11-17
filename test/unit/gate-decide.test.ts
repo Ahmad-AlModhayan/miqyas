@@ -265,6 +265,58 @@ describe('the permit', () => {
   });
 });
 
+// What the type system forbids, an untyped caller can still hand in. None of it is allowed.
+describe('an effect the gate does not know, or one that arrives without its target', () => {
+  it('is refused when its kind is not one the gate knows', () => {
+    expect(decide({ kind: 'weird' } as never, world(), everyGrant())).toMatchObject({
+      answer: 'refuse',
+      rule: 'refuse.unknown-effect',
+      effectClass: null,
+      environment: null,
+      origin: null,
+    });
+    expect(decide({ kind: 'weird', origin: O.sandbox } as never, world(), everyGrant())).toMatchObject({
+      answer: 'refuse',
+      rule: 'refuse.unknown-effect',
+    });
+  });
+
+  it('is refused when a request has no URL', () => {
+    expect(decide(request({ method: 'GET', cause: 'page' } as never, 'observe'), world(), everyGrant())).toMatchObject({
+      answer: 'refuse',
+      rule: 'refuse.no-target',
+      environment: null,
+    });
+  });
+
+  it.each([
+    { kind: 'capsule', operation: 'capture' },
+    { kind: 'plant-seed', subject: 'public-corpus-copy' },
+    { kind: 'type-secret', namedByStep: true },
+    { kind: 'upload-file', namedByPlan: true },
+    { kind: 'get-past-challenge', challenge: 'captcha' },
+  ])('is refused when a kind that lands on an origin has none: $kind', (effect) => {
+    expect(decide(effect as never, world(), everyGrant())).toMatchObject({ answer: 'refuse', environment: null, origin: null });
+  });
+
+  it('refuses a secret typed or a file uploaded with no origin by a rule of its own', () => {
+    expect(decide({ kind: 'type-secret', namedByStep: true } as never, world(), everyGrant())).toMatchObject({ rule: 'refuse.no-target' });
+    expect(decide({ kind: 'upload-file', namedByPlan: true } as never, world(), everyGrant())).toMatchObject({ rule: 'refuse.no-target' });
+  });
+
+  it('still allows page data sent to the scrubbed model call, which lands on no origin by design', () => {
+    expect(decide({ kind: 'send-page-data', to: 'scrubbed-model-call' }, world(), noGrants())).toEqual({
+      answer: 'allow',
+      effectClass: null,
+      rule: 'allow.no-target',
+      environment: null,
+      origin: null,
+      missing: [],
+      reasons: [],
+    });
+  });
+});
+
 describe('the grants a caller hands in', () => {
   it('count only when a builder issued them: a hand-made value grants nothing', () => {
     const forged = { active: true, allowWrites: true, allowDisrupt: true, allowExec: true, allowHosts: ['shop.example.com'] };

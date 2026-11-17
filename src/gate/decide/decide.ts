@@ -14,7 +14,11 @@ export interface Decision {
   readonly answer: 'allow' | 'refuse';
   /** The class found, or null for an effect that is not done to a target. */
   readonly effectClass: EffectClass | null;
-  /** `deny.<id>`, `permit.exceeded`, `ceiling.<class>.<environment>` or `allow.no-target`. */
+  /**
+   * `deny.<id>`, `permit.exceeded`, `ceiling.<class>.<environment>`, `allow.no-target` (page data sent to the model
+   * call), `refuse.unknown-effect` (a kind the gate does not know) or `refuse.no-target` (a kind that lands on an
+   * origin, handed in without one).
+   */
   readonly rule: string;
   readonly environment: string | null;
   readonly origin: string | null;
@@ -112,7 +116,11 @@ export function decide(effect: Effect, run: RunFacts, grantsIn: Grants): Decisio
     if (k.startedByEngine === true && k.noNetwork === true && k.readOnlyRepository === true) return allow('ceiling.execute.container');
     return grants.allowExec ? allow('ceiling.execute.allow-exec') : refuse('ceiling.execute.refused');
   }
-  if (effectClass === null || env === null) return allow('allow.no-target');
+  // Only page data sent to the model call lands on no origin by design. A kind the gate does not know, and a kind that
+  // lands on an origin but arrives without one, are refused: an untyped caller can hand in either.
+  if (effect.kind === 'send-page-data') return allow('allow.no-target');
+  if (effectClass === null) return refuse('refuse.unknown-effect');
+  if (env === null) return refuse('refuse.no-target');
 
   if (effect.kind === 'request') {
     const permit = (EFFECT_CLASSES as readonly string[]).includes(effect.session?.permit) ? effect.session.permit : 'observe';
