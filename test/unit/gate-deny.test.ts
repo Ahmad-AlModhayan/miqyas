@@ -17,6 +17,10 @@ const allowed = (effect: Effect) => expect(decide(effect, strong(), everyGrant()
 describe('the list of deny rules', () => {
   it('has the stable ids, in the order they are checked, each with the line it comes from', () => {
     expect(DENY_RULES.map((r) => [r.id, r.source])).toEqual([
+      [
+        'deny.live-physical-unreadable',
+        'never write to or disrupt a live physical process, whatever the flags and whoever owns it: an entry that cannot be read as an origin could be any origin',
+      ],
       ['deny.leave-the-run', 'never leave the set of origins the run is about: the target’s origin and the backends its own pages call'],
       ['deny.foreign-origin-active', 'never probe, write to or disrupt an origin that isn’t a sandbox, a test host, an owned host or the backend of one'],
       ['deny.live-physical-process', 'never write to or disrupt a live physical process, whatever the flags and whoever owns it'],
@@ -75,6 +79,31 @@ describe('never write to or disrupt a live physical process', () => {
   it('refuses it in a sandbox too: whoever owns it', () => {
     const w = world({ livePhysical: [O.sandbox] });
     expect(decide(probeSent('POST', `${O.sandbox}/x`, 'write'), w, everyGrant()).rule).toBe('deny.live-physical-process');
+  });
+});
+
+// Ticket 78: an entry that cannot be read as an origin could be any origin, so nothing is written to or disrupted anywhere.
+describe('an entry of livePhysical that cannot be read as an origin', () => {
+  const everyOrigin = Object.keys(O) as (keyof typeof O)[];
+
+  it.each([
+    ['no scheme', 'line-controller.test:502'],
+    ['a bare host', 'line-controller.test'],
+    ['not a string', 502],
+  ])('(%s) refuses every write and disrupt, on every origin, with every grant', (_form, entry) => {
+    const w = world({ livePhysical: [O.physical, entry as never], ownershipTokenHosts: ['shop.example.com', 'staging.example.com', 'line-controller.test'] });
+    for (const k of everyOrigin) {
+      for (const e of [
+        probeSent('POST', `${O[k]}/x`, 'write'),
+        probeSent('GET', `${O[k]}/x`, 'disrupt', {}, { declared: 'disrupt' }),
+        { kind: 'capsule', operation: 'restore', origin: O[k] } as Effect,
+      ]) {
+        expect(decide(e, w, everyGrant())).toMatchObject({ answer: 'refuse', rule: 'deny.live-physical-unreadable' });
+      }
+    }
+    // A read is not a write: it is judged as before.
+    expect(decide(pageGet(`${O.sandbox}/`), w, everyGrant()).answer).toBe('allow');
+    expect(decide(probeSent('GET', `${O.local}/x`, 'probe'), w, everyGrant()).answer).toBe('allow');
   });
 });
 

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { envWithBin, writeScannerShim } from '../scanner-shim.js';
 import { dedupeFindings } from '../../src/proof-core/findings.js';
 import { buildCheck3AuthTemplates } from '../../src/proof-core/auth-templates.js';
 import type { PlanResult } from '../../src/proof-core/ledger.js';
@@ -50,8 +51,6 @@ afterEach(() => {
 });
 
 function writeGitleaksShim(binDir: string, findingsForDir: unknown[], findingsForGit: unknown[] = []): void {
-  mkdirSync(binDir, { recursive: true });
-  const shimPath = path.join(binDir, 'gitleaks');
   const script = `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
@@ -62,8 +61,7 @@ const list = args[0] === 'git' ? ${JSON.stringify(findingsForGit)} : ${JSON.stri
 if (rp) fs.writeFileSync(rp, JSON.stringify(list));
 process.exit(list.length ? 1 : 0);
 `;
-  writeFileSync(shimPath, script, 'utf8');
-  chmodSync(shimPath, 0o755);
+  writeScannerShim(binDir, 'gitleaks', script);
 }
 
 function makeFakeCrawl(servedArtifacts: NonNullable<CrawlResult['servedArtifacts']> = []): CrawlResult {
@@ -232,7 +230,7 @@ describe('readiness profile core', () => {
       [{ RuleID: 'generic-api-key', Description: 'Generic API Key', File: '0001-bundle-app.js.txt', StartLine: 1, Match: 'REDACTED', Secret: 'REDACTED' }],
       [{ RuleID: 'aws-access-token', Description: 'AWS', File: '.env', StartLine: 2, Commit: '11112222', Match: 'REDACTED', Secret: 'REDACTED' }],
     );
-    const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` };
+    const env = envWithBin(binDir);
     const crawl = makeFakeCrawl([
       { kind: 'source-map', name: 'app.js.map', url: 'http://127.0.0.1:4173/app.js.map', text: '{"version":3}' },
     ]);
@@ -285,7 +283,7 @@ describe('readiness profile core', () => {
       [{ RuleID: 'generic-api-key', Description: 'Generic API Key', File: '0001-bundle-_app.js.txt', StartLine: 1, Match: 'REDACTED', Secret: 'REDACTED' }],
       [],
     );
-    const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` };
+    const env = envWithBin(binDir);
     const crawl = makeFakeCrawl([{ kind: 'bundle', name: '/app.js', url: 'http://127.0.0.1:4173/app.js', text: 'const x = 1;' }]);
     const res = await evaluateGrade1Profile({ dryRun: false, noModel: true, crawl, gitleaks: { env } });
     const deduped = dedupeFindings(res.findings);
@@ -349,7 +347,6 @@ describe('readiness profile core', () => {
     const makeOsvEnv = (vulns: Array<{ id: string; severity: string }>, exitCode = 1, stderr = '') => {
       const binDir = path.join(dir, `bin-${Math.random().toString(36).slice(2, 8)}`);
       mkdirSync(binDir, { recursive: true });
-      const shim = path.join(binDir, 'osv-scanner');
       const report = vulns.length
         ? {
             results: [
@@ -369,8 +366,9 @@ describe('readiness profile core', () => {
             ],
           }
         : { results: [] };
-      writeFileSync(
-        shim,
+      writeScannerShim(
+        binDir,
+        'osv-scanner',
         `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('2.7.0'); process.exit(0); }
@@ -380,8 +378,7 @@ process.stdout.write(${JSON.stringify(JSON.stringify(report))});
 process.exit(${exitCode});
 `,
       );
-      chmodSync(shim, 0o755);
-      return { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` };
+      return envWithBin(binDir);
     };
 
     const dbMiss = await evaluateCheck13Dependencies({

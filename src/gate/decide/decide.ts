@@ -15,6 +15,7 @@ import {
 } from './classes.js';
 import { DENY_RULES } from './deny.js';
 import { targetOf, type Effect, type RunFacts } from './effects.js';
+import { areReadableRunFacts } from './facts.js';
 import { isIssuedGrants, noGrants, type Grants } from './grants.js';
 import { classOfOrigin, hasOwnershipToken, type OriginClassification } from './origin.js';
 import { classOfRequest } from './wire.js';
@@ -25,8 +26,9 @@ export interface Decision {
   readonly effectClass: EffectClass | null;
   /**
    * `deny.<id>`, `permit.exceeded`, `ceiling.<class>.<environment>`, `allow.no-target` (page data sent to the model
-   * call), `refuse.unknown-effect` (a kind the gate does not know) or `refuse.no-target` (a kind that lands on an
-   * origin, handed in without one).
+   * call), `refuse.unknown-effect` (a kind the gate does not know, or no effect at all), `refuse.no-target` (a kind
+   * that lands on an origin, handed in without one), `refuse.unreadable-run-facts` (run facts that are not an object,
+   * or a list in them missing or not a list) or `refuse.unreadable-input` (an effect or a fact not of its shape).
    */
   readonly rule: string;
   readonly environment: EnvironmentClass | null;
@@ -111,12 +113,26 @@ function ceilingMissing(
   return missing;
 }
 
+const isObject = (v: unknown): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
+
 /**
  * Decide an effect (B3). A deny rule refuses first, whatever was granted. Then the permit: a class above what the
- * collector holds is refused, except that a page's own request under an interact permit is a person using the
- * product. Then the ceiling table. Grants that no builder issued grant nothing.
+ * collector holds is refused. Then the ceiling table. Grants that no builder issued grant nothing. It never throws:
+ * an effect or run facts it cannot read are refused, with a rule that says so.
  */
 export function decide(effect: Effect, run: RunFacts, grantsIn: Grants): Decision {
+  const none = { effectClass: null, environment: null, origin: null, missing: [], reasons: [] };
+  if (!isObject(effect)) return { answer: 'refuse', rule: 'refuse.unknown-effect', ...none };
+  if (!areReadableRunFacts(run)) return { answer: 'refuse', rule: 'refuse.unreadable-run-facts', ...none };
+  try {
+    return decideReadable(effect, run, grantsIn);
+  } catch {
+    // Something in the effect or the facts is not the shape its type says. Nothing about it can be known.
+    return { answer: 'refuse', rule: 'refuse.unreadable-input', ...none };
+  }
+}
+
+function decideReadable(effect: Effect, run: RunFacts, grantsIn: Grants): Decision {
   const grants = isIssuedGrants(grantsIn) ? grantsIn : noGrants();
   const { effectClass, reasons } = classOfEffect(effect, run);
   const target = targetOf(effect);
@@ -125,7 +141,7 @@ export function decide(effect: Effect, run: RunFacts, grantsIn: Grants): Decisio
   const refuse = (rule: string, missing: readonly Need[] = []): Decision => ({ answer: 'refuse', rule, missing, ...base });
   const allow = (rule: string): Decision => ({ answer: 'allow', rule, missing: [], ...base });
 
-  const ctx = { effect, effectClass, env, run };
+  const ctx = { effect, effectClass, env, run, reasons };
   for (const rule of DENY_RULES) if (rule.matches(ctx)) return refuse(rule.id);
 
   if (effect.kind === 'run-code') {
@@ -139,11 +155,9 @@ export function decide(effect: Effect, run: RunFacts, grantsIn: Grants): Decisio
   if (effectClass === null) return refuse('refuse.unknown-effect');
   if (env === null) return refuse('refuse.no-target');
 
-  if (effect.kind === 'request') {
-    const permit = permitOf(effect);
-    const byPerson = effect.request.cause === 'page' && permit === 'interact' && !atLeast(effectClass, 'disrupt');
-    if (!byPerson && !atLeast(permit, effectClass)) return refuse('permit.exceeded');
-  }
+  // A class above the permit is refused, with no exception: a form a plan step submits is classed interact (B1), so a
+  // request under an interact permit that comes out higher was raised by its route or its declared class.
+  if (effect.kind === 'request' && !atLeast(permitOf(effect), effectClass)) return refuse('permit.exceeded');
   if (effectClass === 'execute') return refuse('ceiling.execute.refused');
 
   const rule = `ceiling.${effectClass}.${env.environment}`;
