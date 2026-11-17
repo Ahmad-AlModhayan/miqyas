@@ -80,15 +80,56 @@ describe('a method that is not safe', () => {
     expect(classOfRequest({ ...collector('GET'), method: undefined as never }, { permit: 'probe' }, noRoutes).effectClass).toBe('write');
   });
 
-  it('makes a write of what a page sends too, under an observe permit as under an interact permit', () => {
+  it('makes a write of what a page sends under any permit but interact', () => {
     expect(classOfRequest(page('POST'), { permit: 'observe' }, noRoutes).effectClass).toBe('write');
-    expect(classOfRequest(page('DELETE'), { permit: 'interact' }, noRoutes).effectClass).toBe('write');
+    expect(classOfRequest(page('DELETE'), { permit: 'write' }, noRoutes).effectClass).toBe('write');
   });
 
   it('makes a write of a URL that cannot be read, because nothing can be known about it', () => {
     const c = classOfRequest(collector('GET', 'not a url'), { permit: 'probe' }, noRoutes);
     expect(c.effectClass).toBe('write');
     expect(c.reasons).toContain('wire.unreadable-url');
+  });
+});
+
+// Ticket 76, B1: a request the page sends because of a person's plan step stays interact, whatever its method: it is
+// the person using the product. A spending route, a route seen to change state and a declared class still raise it.
+describe('what a page sends under an interact permit, because of a plan step', () => {
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'post'])('stays interact when its method is %j', (method) => {
+    expect(classOfRequest(page(method), { permit: 'interact' }, noRoutes)).toEqual({
+      effectClass: 'interact',
+      reasons: ['wire.page-interact', 'wire.unsafe-method-plan-step'],
+    });
+  });
+
+  it('is still a write on a spending route and on a route seen to change state', () => {
+    const facts = routes({ spendingRoutes: ['https://app.test/pay'], seenToChange: ['https://app.test/items/:id/archive'] });
+    expect(classOfRequest(page('POST', 'https://app.test/pay'), { permit: 'interact' }, facts)).toEqual({
+      effectClass: 'write',
+      reasons: ['wire.page-interact', 'wire.unsafe-method-plan-step', 'wire.spending-route'],
+    });
+    expect(classOfRequest(page('GET', 'https://app.test/items/3/archive'), { permit: 'interact' }, facts)).toEqual({
+      effectClass: 'write',
+      reasons: ['wire.page-interact', 'wire.seen-to-change'],
+    });
+  });
+
+  it('is still raised by a declared class', () => {
+    expect(classOfRequest(page('POST', 'https://app.test/x', { declared: 'disrupt' }), { permit: 'interact' }, noRoutes)).toEqual({
+      effectClass: 'disrupt',
+      reasons: ['wire.page-interact', 'wire.unsafe-method-plan-step', 'wire.declared'],
+    });
+  });
+
+  it('is still a write when its URL cannot be read', () => {
+    expect(classOfRequest(page('POST', 'not a url'), { permit: 'interact' }, noRoutes).effectClass).toBe('write');
+  });
+
+  it('is only what a page sends: a collector’s own POST under an interact permit is a write', () => {
+    expect(classOfRequest(collector('POST'), { permit: 'interact' }, noRoutes)).toEqual({
+      effectClass: 'write',
+      reasons: ['wire.collector-probe', 'wire.unsafe-method'],
+    });
   });
 });
 
@@ -261,6 +302,33 @@ describe('a route seen to change state', () => {
 
   it('leaves a route that was not seen to change as it was, whatever else is listed', () => {
     expect(classOfRequest(collector('GET', 'https://app.test/items/3'), { permit: 'probe' }, facts).effectClass).toBe('probe');
+  });
+});
+
+// Ticket 78: an entry that cannot be read as a route could be any route, so it raises every request to at least a write.
+describe('an entry of a route list that cannot be read as a route', () => {
+  const unreadable = ['/pay', 'localhost:4000/pay', 'app.test/pay', 42, null];
+
+  it.each(unreadable)('in spendingRoutes (%j) makes every request at least a write', (entry) => {
+    const facts = routes({ spendingRoutes: ['https://app.test/api/send-sms', entry as never] });
+    const c = classOfRequest(collector('GET', 'https://elsewhere.test/read'), { permit: 'probe' }, facts);
+    expect(c.effectClass).toBe('write');
+    expect(c.reasons).toContain('wire.unreadable-spending-route');
+    expect(classOfRequest(page('GET'), { permit: 'observe' }, facts).effectClass).toBe('write');
+    expect(classOfRequest(page('GET'), { permit: 'interact' }, facts).effectClass).toBe('write');
+  });
+
+  it.each(unreadable)('in seenToChange (%j) makes every request at least a write', (entry) => {
+    const facts = routes({ seenToChange: [entry as never] });
+    const c = classOfRequest(collector('GET', 'https://elsewhere.test/read'), { permit: 'probe' }, facts);
+    expect(c.effectClass).toBe('write');
+    expect(c.reasons).toContain('wire.unreadable-seen-to-change');
+    expect(classOfRequest(page('GET'), { permit: 'interact' }, facts).effectClass).toBe('write');
+  });
+
+  it('never lowers a class: a declared disrupt stays a disrupt', () => {
+    const facts = routes({ spendingRoutes: ['/pay'] });
+    expect(classOfRequest(collector('GET', 'https://app.test/x', { declared: 'disrupt' }), { permit: 'probe' }, facts).effectClass).toBe('disrupt');
   });
 });
 

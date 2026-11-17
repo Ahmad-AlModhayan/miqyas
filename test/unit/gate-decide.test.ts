@@ -261,10 +261,77 @@ describe('the permit', () => {
     expect(decide(probeSent('POST', `${O.sandbox}/x`, 'probe'), world(), everyGrant())).toMatchObject({ answer: 'refuse', rule: 'permit.exceeded' });
   });
 
-  it('covers a person using the product: a page’s POST under an interact permit is a write the ceiling still judges', () => {
-    const post = (k: keyof typeof O) => request({ method: 'POST', url: `${O[k]}/form`, cause: 'page' }, 'interact');
-    expect(decide(post('sandbox'), world(), noGrants())).toMatchObject({ answer: 'allow', effectClass: 'write' });
-    expect(decide(post('other'), world(), everyGrant())).toMatchObject({ answer: 'refuse' });
+});
+
+// Ticket 76, B1 and the ADR 0008 table: a form a plan step submits is the person using the product, an interact.
+describe('a form a plan step submits', () => {
+  const submit = (url: string, permit: 'observe' | 'interact' = 'interact', extra: object = {}) =>
+    request({ method: 'POST', url, cause: 'page' }, permit, extra);
+
+  it('is interact, and allowed on another origin, on a named test host without the token, and in a sandbox, with no grant', () => {
+    expect(decide(submit(`${O.other}/form`), world(), noGrants())).toMatchObject({
+      answer: 'allow',
+      effectClass: 'interact',
+      rule: 'ceiling.interact.other',
+    });
+    expect(decide(submit(`${O.named}/form`), world(), noGrants())).toMatchObject({
+      answer: 'allow',
+      effectClass: 'interact',
+      rule: 'ceiling.interact.named-test-host',
+    });
+    expect(decide(submit(`${O.sandbox}/form`), world(), noGrants())).toMatchObject({
+      answer: 'allow',
+      effectClass: 'interact',
+      rule: 'ceiling.interact.sandbox',
+    });
+  });
+
+  it('is a write under an observe permit, and refused before it leaves, with every grant', () => {
+    for (const k of ['sandbox', 'named'] as const) {
+      expect(decide(submit(`${O[k]}/form`, 'observe'), world(), everyGrant())).toMatchObject({
+        answer: 'refuse',
+        effectClass: 'write',
+        rule: 'permit.exceeded',
+      });
+    }
+    expect(decide(submit(`${O.other}/form`, 'observe'), world(), everyGrant())).toMatchObject({ answer: 'refuse', effectClass: 'write' });
+  });
+
+  it('is not what a collector sends: a collector’s own POST is still a write', () => {
+    expect(decide(probeSent('POST', `${O.sandbox}/form`, 'probe'), world(), everyGrant())).toMatchObject({
+      answer: 'refuse',
+      effectClass: 'write',
+      rule: 'permit.exceeded',
+    });
+    const underInteract = request({ method: 'POST', url: `${O.sandbox}/form`, cause: 'collector' }, 'interact', { loginAttempt: 'not-a-login' });
+    expect(decide(underInteract, world(), everyGrant())).toMatchObject({ answer: 'refuse', effectClass: 'write', rule: 'permit.exceeded' });
+  });
+
+  it('is still what it declares: a declared disrupt is a disrupt, refused above the interact permit, in a sandbox, with every grant', () => {
+    expect(decide(submit(`${O.sandbox}/form`, 'interact', {}), world(), everyGrant()).answer).toBe('allow');
+    const declared = request({ method: 'POST', url: `${O.sandbox}/form`, cause: 'page', declared: 'disrupt' }, 'interact');
+    expect(decide(declared, world(), everyGrant())).toMatchObject({ answer: 'refuse', effectClass: 'disrupt', rule: 'permit.exceeded' });
+    const declaredWrite = request({ method: 'POST', url: `${O.sandbox}/form`, cause: 'page', declared: 'write' }, 'interact');
+    expect(decide(declaredWrite, world(), everyGrant())).toMatchObject({ answer: 'refuse', effectClass: 'write', rule: 'permit.exceeded' });
+  });
+
+  it('is still a write on a spending route, refused above the interact permit, in a sandbox, with every grant', () => {
+    const w = world({ spendingRoutes: [`${O.sandbox}/pay`] });
+    expect(decide(submit(`${O.sandbox}/pay`), w, everyGrant())).toMatchObject({ answer: 'refuse', effectClass: 'write', rule: 'permit.exceeded' });
+  });
+
+  it('is refused by every deny rule that matches it, with every grant', () => {
+    const strong = world({ ownershipTokenHosts: ['shop.example.com', 'staging.example.com', 'line-controller.test'] });
+    const refusedBy = (e: ReturnType<typeof submit>, rule: string, w = strong) =>
+      expect(decide(e, w, everyGrant())).toMatchObject({ answer: 'refuse', rule });
+    refusedBy(submit(`${O.unrelated}/form`), 'deny.leave-the-run');
+    refusedBy(request({ method: 'POST', url: `${O.other}/form`, cause: 'page', declared: 'probe' }, 'interact'), 'deny.foreign-origin-active');
+    refusedBy(submit(`${O.physical}/valve`), 'deny.live-physical-process');
+    refusedBy(submit(`${O.sandbox}/form`), 'deny.live-physical-unreadable', world({ livePhysical: ['line-controller.test'] }));
+    refusedBy(submit(`${O.local}/login`, 'interact', { loginAttempt: { secret: 'not-named', distinctSecretsTriedOnAccount: 1 } }), 'deny.brute-force-login');
+    refusedBy(submit(`${O.local}/login`, 'interact', { loginAttempt: { secret: 'named-by-step', distinctSecretsTriedOnAccount: 2 } }), 'deny.brute-force-login');
+    // A read from the page on the live physical process is not a write, and is allowed.
+    expect(decide(pageGet(`${O.physical}/status`, 'interact'), strong, everyGrant()).answer).toBe('allow');
   });
 });
 
@@ -282,6 +349,47 @@ describe('an effect the gate does not know, or one that arrives without its targ
       answer: 'refuse',
       rule: 'refuse.unknown-effect',
     });
+  });
+
+  // Ticket 78: decide returns a refusal a caller can record, and never throws.
+  it.each([null, undefined, 42, 'request'])('is refused, not thrown, when the effect is %j', (effect) => {
+    expect(decide(effect as never, world(), everyGrant())).toMatchObject({
+      answer: 'refuse',
+      rule: 'refuse.unknown-effect',
+      effectClass: null,
+      environment: null,
+      origin: null,
+    });
+  });
+
+  it.each([null, undefined, 42, 'facts', []])('is refused, not thrown, when the run facts are %j', (run) => {
+    expect(decide(pageGet(`${O.sandbox}/`), run as never, everyGrant())).toMatchObject({
+      answer: 'refuse',
+      rule: 'refuse.unreadable-run-facts',
+    });
+  });
+
+  it.each(['targets', 'engineStarted', 'ownershipTokenHosts', 'observedCalls', 'spendingRoutes', 'seenToChange', 'knownReads', 'livePhysical'])(
+    'is refused, not thrown, when the run facts have no list %s, or one that is not a list',
+    (list) => {
+      const missing = { ...world() } as Record<string, unknown>;
+      delete missing[list];
+      expect(decide(pageGet(`${O.sandbox}/`), missing as never, everyGrant())).toMatchObject({
+        answer: 'refuse',
+        rule: 'refuse.unreadable-run-facts',
+      });
+      expect(decide(pageGet(`${O.sandbox}/`), world({ [list]: 'not a list' }), everyGrant())).toMatchObject({
+        answer: 'refuse',
+        rule: 'refuse.unreadable-run-facts',
+      });
+    },
+  );
+
+  it('is refused, not thrown, when a request or an entry of a list is not the shape it should be', () => {
+    const unreadable = { answer: 'refuse', rule: 'refuse.unreadable-input' };
+    expect(decide({ kind: 'request', request: null, session: { permit: 'interact' } } as never, world(), everyGrant())).toMatchObject(unreadable);
+    expect(decide(pageGet(`${O.sandbox}/`), world({ engineStarted: [null as never] }), everyGrant())).toMatchObject(unreadable);
+    expect(decide(probeSent('POST', `${O.sandbox}/x`, 'write'), world({ knownReads: [7 as never] }), everyGrant())).toMatchObject(unreadable);
   });
 
   it('is refused when a request has no URL', () => {

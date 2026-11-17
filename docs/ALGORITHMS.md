@@ -223,10 +223,11 @@ The gate works out the class of each request from the request. A caller may decl
 
 ```
 classOf(req, session):
-  if req.cause == page and session.permit == interact:  c = interact       # the page, because of a plan step
+  planStep = req.cause == page and session.permit == interact
+  if planStep:                                          c = interact       # the page, because of a plan step
   elif req.cause == page:                               c = observe        # the page, during a crawl
   else:                                                 c = probe          # sent by a collector itself
-  if not safeMethod(req) and not knownRead(req):        c = max(c, write)
+  if not safeMethod(req) and not knownRead(req) and not planStep:   c = max(c, write)
   if route(req) in spendingRoutes:                      c = max(c, write)
   if route(req) in seenToChange:                        c = max(c, write)
   return max(c, req.declared)
@@ -247,11 +248,16 @@ an empty one never takes a route out, and never makes a request a read.
 classOfOrigin(o, run):
   if the engine started the process serving o in this run, and its only route out is the gate:  sandbox
   if o was named with --allow-host and the ownership token was found:                            owned
-  if o is loopback, .localhost or .test:                                                         local test
-  if o's name carries a test label:                                                              named test
+  if o is given, and is loopback, .localhost or .test:                                           local test
+  if o is given, and its name carries a test label:                                              named test
   if a page of an origin of this run was observed calling o:                                     backend of that origin
   else:                                                                                          other
+
+given = o is an origin of the run (named by the person, or started by the engine), or its host was named with --allow-host
 ```
+
+A name gives a class only to an origin the person gave: an origin a page calls is a backend, and gets no more than
+the origin that calls it.
 
 ### B3. Deciding
 

@@ -46,6 +46,11 @@ export function originOf(url: string): string | null {
   return `${scheme}//${canonicalHost(u.hostname)}${u.port === '' ? '' : `:${u.port}`}`;
 }
 
+/** True when an entry of a list of origins can be read as an origin: a URL of the web with a host. */
+export function isReadableOrigin(entry: unknown): boolean {
+  return typeof entry === 'string' && originOf(entry) !== null;
+}
+
 // The one canonical form of a host: lower case, with exactly one trailing dot removed (`example.com.` is `example.com`).
 // A host that still has an empty label after that is not in the form, and classing never gives it a class.
 function canonicalHost(hostname: string): string {
