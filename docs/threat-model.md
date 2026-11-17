@@ -123,7 +123,7 @@ into the sections above when the foundation is what the code does. Until then, t
 - **Capsules hold sandbox data only.** The experiment engine captures and restores the state of a target it started
   itself (ADR 0017). A capsule is never made from a production database, lives in a store beside the run, and is
   deleted when the run ends unless the person keeps it. Capturing, restoring and forking are refused on any origin
-  the engine didn't start, whatever was granted. Row values a probe reaches on a live host are still never written to
+  that isn't a sandbox, whatever was granted. Row values a probe reaches on a live host are still never written to
   disk.
 - **A footprint never lowers a class.** What an action was seen to change in a sandbox may raise the class the gate
   gives that request elsewhere. "No change seen" is never evidence that a request only reads.
