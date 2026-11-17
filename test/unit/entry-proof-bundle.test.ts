@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // A run with --proof-bundle (docs/FOUNDATION.md §5): the folder it writes, what its first and last records hold, and
 // the head it prints. Real temporary folders; the kernel is not mocked.
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -105,6 +105,14 @@ describe('a run with a proof bundle', () => {
     expect(text).not.toContain(path.basename(tmp));
     expect(text).not.toMatch(/[A-Za-z]:[\\/]/);
     expect(text).not.toMatch(/\\\\/);
+
+    const copy = path.join(await mkdtemp(path.join(os.tmpdir(), 'miqyas-bundle-copy-')), 'elsewhere');
+    try {
+      await cp(dir, copy, { recursive: true });
+      expect((await verifyIntact(new FsStore(copy), nodeSha256)).ok).toBe(true);
+    } finally {
+      await rm(path.dirname(copy), { recursive: true, force: true });
+    }
   });
 
   it('leaves a ledger with no seal when the run throws, and prints no head', async () => {
