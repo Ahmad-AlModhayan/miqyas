@@ -1,8 +1,11 @@
-# Choosing a CEL library for the kernel
+# Choosing a CEL library for the kernel (2026-11-17)
 
-Research for ticket 43 (part of spec 41), 2026-11. The question: which TypeScript CEL library does the kernel use, and
-does it hold up against the CEL conformance suite? Sources are the packages as published, run here, and the upstream
-licence files. No expression in this note comes from a claim or a customer.
+Research for [`docs/cel-subset.md`](../cel-subset.md) and ticket 43 (part of spec 41). The question: which TypeScript
+CEL library does the kernel use, and does it hold up against the CEL conformance suite? Sources are the packages as
+published, run here, and the upstream licence files. No expression in this note comes from a claim or a customer.
+
+Tags: [V] verified by running the package here, or read from its published files or registry metadata, in 2026-11.
+[M] recalled or reported by an earlier trial, not re-checked. A claim with no tag is the note's own reasoning.
 
 ## What the kernel needs
 
@@ -36,8 +39,11 @@ own terms (an integer is a bigint, an error means an error):
    It includes features Miqyas does not allow, so it is a measure of the library's completeness, not of fitness.
 2. The **subset**: the cases inside the allowed subset (468 cases in the trial run). This is the number that matters.
 
-The trial scripts are not in the repository. The subset, vendored, is in
-[`test/conformance/cel/`](../../test/conformance/cel/README.md) and runs in CI against the chosen library.
+The trial scripts are not in the repository (see "Re-running the trial" below). The subset, vendored, is in
+[`test/conformance/cel/`](../../test/conformance/cel/README.md) and runs in CI against the chosen library. The
+vendored file was chosen by the rule in its README, not by the trial's script. It also holds 468 cases, all of which
+pass with `@bufbuild/cel` [V], but it is a different set: the trial's 468 include the four backtick field-name cases
+the library fails, and the file leaves those out.
 
 ## Results
 
@@ -67,9 +73,11 @@ features Miqyas leaves out:
 **`cel-js` (ChromeGG).** Fails the basic literal tests, the string functions (`startsWith`, `endsWith`, `contains`,
 `matches` all fail every case), and most macros. It is not a candidate.
 
+The numbers in this section are from the trial run [M].
+
 ## Behaviour that the suite does not measure
 
-Run on the same machine, each case once:
+Run on the same machine, each case once [M]:
 
 | Probe | `@bufbuild/cel` | `@marcbachmann/cel-js` |
 |---|---|---|
@@ -88,7 +96,15 @@ does not depend on either.
 
 Both libraries evaluate integers as exact 64-bit values (`bigint`) and neither has a clock the kernel can reach. A
 browser bundle of `@bufbuild/cel` (esbuild, minified, for the browser platform, with the string extension) builds
-without any Node module and is 284 KB; of `@marcbachmann/cel-js`, 82 KB.
+without any Node module and is 284 KB; of `@marcbachmann/cel-js`, 82 KB [M]. `cel-js` (ChromeGG) was not
+measured for bundle size or for Node-only APIs: it was ruled out on correctness first.
+
+**A missing field.** How each library treats `item.missing` when `item` has no such field:
+
+- `@bufbuild/cel`: an error value, "field not found: missing" [V] (`test/unit/kernel-cel.test.ts`, "a missing field"), so the
+  kernel's `evaluate` gives `error`. `has(item.missing)` is `false`.
+- `@marcbachmann/cel-js` and `cel-js` (ChromeGG): not measured. Neither is installed in the repository, and the trial
+  did not record it.
 
 ## The pick: `@bufbuild/cel` 0.6.2
 
@@ -104,8 +120,10 @@ Costs, and what the kernel does about each:
 - It is 0.x and marked beta, so a release may change behaviour. The dependency is pinned to the exact version, the
   library and version are exported as `CEL_LIBRARY` so a proof bundle can record them, and the conformance subset runs
   in CI so a change shows up as a failing case.
-- It has no type checker. A rule that compares text with an integer is an evaluation error, which the kernel reads as
-  `error`, not a load-time rejection. The kernel's own static checks cover the limits and the subset.
+- It has no type checker. A rule that orders text against an integer (`'a' < 1`) is an evaluation error, which the
+  kernel reads as `error`, not a load-time rejection; `==` and `!=` across types give `false` and `true`, as CEL
+  defines. The kernel's own static checks cover the limits, the subset and the cost bound, and the cost bound takes a
+  value read from a variable at the largest the input limits allow, since its type is not known.
 - It installs `@bufbuild/cel-spec` (about 6 MB, the conformance data) as a runtime dependency. The kernel does not
   import it at run time; the subset file in the repository is a copy of part of its data.
 - It rejects a `//` comment that has no newline after it, and has no backtick-quoted names. The subset excludes both.
@@ -129,6 +147,20 @@ All are permissive. `@bufbuild/cel`, `@bufbuild/cel-spec` and `@bufbuild/protobu
 their npm tarballs (`@bufbuild/re2` does); the licence is in the `package.json` of each and in the `LICENSE` file of the
 upstream repositories (`bufbuild/cel-es`, `bufbuild/protobuf-es`). The notices are in [`NOTICE.md`](../../NOTICE.md).
 The conformance data in `@bufbuild/cel-spec` is from google/cel-spec, also Apache-2.0.
+
+## Re-running the trial
+
+The data is google/cel-spec v0.25.1 as republished by `@bufbuild/cel-spec` 0.6.2 (`dist/esm/testdata/conformance.js`,
+which exports `tests`, a tree of suites whose leaves hold each case as `original`).
+
+1. In a scratch directory outside the repository: `npm init -y`, then
+   `npm install @bufbuild/cel@0.6.2 @bufbuild/cel-spec@0.6.2 @marcbachmann/cel-js@8.0.0 cel-js@0.8.2`.
+2. Walk the `tests` tree, and for each case evaluate `expr` with each library's own parse-and-evaluate call, binding
+   the case's `bindings` converted from the suite's JSON form (an `int64Value` is a `bigint`, a `mapValue` a map).
+3. Compare with `value` (equal in the suite's terms) or `evalError` (any error). Count the universe as the cases whose
+   bindings and value are all JSON-expressible, and the subset as those the kernel's `checkStatic` accepts.
+
+The vendored subset re-runs with `npx vitest run test/unit/kernel-cel-conformance.test.ts`.
 
 ## Open points
 
