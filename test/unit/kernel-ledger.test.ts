@@ -114,6 +114,50 @@ describe('the ledger writer and reader', () => {
     expect(await writer.append('fact', { size: 2, ok: true, none: null, name: 'x' }, AT)).toBe(1);
   });
 
+  it('refuses what JSON would drop or change without saying: minus zero, a symbol key, a hidden property', async () => {
+    const store = new MemoryStore();
+    const writer = await open(store);
+    const hidden = Object.defineProperty({ shown: 1 }, 'kept', { value: 2, enumerable: false });
+
+    await expect(writer.append('fact', { n: -0 }, AT)).rejects.toThrow(LedgerError);
+    await expect(writer.append('fact', { [Symbol('s')]: 1, n: 1 } as never, AT)).rejects.toThrow(LedgerError);
+    await expect(writer.append('fact', hidden as never, AT)).rejects.toThrow(LedgerError);
+
+    expect(store.textOf('ledger.jsonl').split('\n').filter((line) => line !== '')).toHaveLength(1);
+    expect(await writer.append('fact', { n: 0 }, AT)).toBe(1);
+  });
+
+  it('refuses a body that answers differently each time it is read, and writes nothing', async () => {
+    const store = new MemoryStore();
+    const writer = await open(store);
+    let reads = 0;
+    // A property read through a getter: a whole number the first time it is read, a fraction after that.
+    const shifting = {
+      get size() {
+        reads += 1;
+        return reads === 1 ? 1 : 1.5;
+      },
+    };
+
+    await expect(writer.append('fact', shifting as never, AT)).rejects.toThrow(LedgerError);
+
+    expect(store.textOf('ledger.jsonl').split('\n').filter((line) => line !== '')).toHaveLength(1);
+    expect(await writer.append('fact', { size: 1 }, AT)).toBe(1);
+  });
+
+  it('checks the line it is about to write, so a body that changes between the check and the write is refused', async () => {
+    const store = new MemoryStore();
+    const writer = await open(store);
+    // A proxy describes its property as the plain value 1, and answers 1.5 whenever the property is read.
+    const twoFaced = new Proxy({ size: 1 }, { get: (target, key) => (key === 'size' ? 1.5 : Reflect.get(target, key)) });
+
+    await expect(writer.append('fact', twoFaced, AT)).rejects.toThrow(/body\.size is 1\.5/);
+
+    const read = await readLedger(store);
+    expect(read.problems).toEqual([]);
+    expect(read.records.map((r) => r.t)).toEqual(['run.open']);
+  });
+
   it('refuses a record whose blobs are not exact {digest, size, mediaType} entries, and writes nothing', async () => {
     const store = new MemoryStore();
     const writer = await open(store);
