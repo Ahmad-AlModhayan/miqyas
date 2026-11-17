@@ -36,9 +36,14 @@ or fail. _Avoid_: observation (the old screenshot-and-tree bundle), data point, 
 **Collector**: anything that records facts by touching the world: a worker, an adapter, a reader of files, a probe. A
 collector measures and never judges. _Avoid_: scanner (a tool an adapter runs).
 
-**Adapter**: a collector that runs an existing tool (a runner, driver or scanner) without rebuilding it, and records
-what the tool was given and what it found.
+**Adapter**: a collector that runs an outside tool (a scanner, a runner, a model checker or a prover) and records
+what the tool was given and what it found. It adds facts and decides nothing.
 _Avoid_: plugin, wrapper, integration.
+
+**Substrate**: what Miqyas stands on to carry out what it decided: the browser and the library that drives it, the
+database a target keeps its state in, the operating system, hash functions, a CEL library. It is borrowed, sits
+behind one interface, and its version is recorded wherever it can change a verdict.
+_Avoid_: dependency (wider: an outside tool is one too).
 
 **Derivation**: a pure, versioned function that computes facts from facts, and can be re-run from a bundle to the same
 result. _Avoid_: analysis, post-processing.

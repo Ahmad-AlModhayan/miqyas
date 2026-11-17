@@ -54,7 +54,7 @@ Read it as three questions asked of a target, and one record that answers for al
 | Kernel | holds the ledger, judges claims, folds verdicts, verifies bundles | FOUNDATION §4, §5 | ALGORITHMS A, K |
 | Gate | classes every request at the wire and every origin, allows or refuses, records the decision | FOUNDATION §6 | B |
 | Workers | hold a session on a surface, take actions, record facts | FOUNDATION §7 | F4 |
-| Collectors | adapters around existing tools, readers of files, probes | FOUNDATION §3, §7 | |
+| Collectors | adapters around outside tools, readers of files, probes | FOUNDATION §3, §7 | |
 | Run engine | turns a request into a graph of collection, runs it, judges each claim when its facts are closed | FOUNDATION §10 | E |
 | Experiment engine | runs pairs of runs over a target's operations and reports which laws were broken | ENGINE | L |
 | Capsules | capture, restore and fork a sandboxed target's state, and check that it came back the same | ENGINE §6 | M |
@@ -136,9 +136,12 @@ One gate classes each request from the request and each origin by what was estab
 nothing the gate classes as a write, so it can change a target only where a plain read does. Experiments that change
 state run only in a sandbox Miqyas started. The bundle shows everything that was done, refused requests included.
 
-**10. It uses the world's tools and is honest about what each proves.**
-Scanners, runners, model checkers and provers come in as collectors. Their word is never taken for what they covered,
-and each verdict is labelled tested, checked to a bound, or proved. There is no blended score.
+**10. What finds and what judges is its own, and what it borrows is named.**
+Capsules, explorers, experiments, oracles, the judge, the record and the gate are Miqyas's own code and algorithms
+(ADR 0019). It stands on a real browser and a real database, because that is what a target runs on. Scanners,
+runners, model checkers and provers come in as collectors: their word is never taken for what they covered, and each
+verdict is labelled tested, checked to a bound, or proved. There is no blended score, and a run with none of them
+installed still produces the matrix.
 
 **11. One engine, every surface.**
 A surface is a vocabulary of facts. A browser, an API, a command-line program, a sync engine under faults and a

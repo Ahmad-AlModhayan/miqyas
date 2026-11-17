@@ -22,4 +22,6 @@ no tool with a fitting licence does the job within the limits of ADR 0002, and t
   bundled tool also adds it to a third-party section in `NOTICE.md`.
 
 Later decisions: ADR 0006 makes a missing tool `blocked`. ADR 0012 adds shared readers for common formats and takes
-coverage from what Miqyas handed a tool, not from what the tool reports.
+coverage from what Miqyas handed a tool, not from what the tool reports. ADR 0019 turns the default around: what
+finds by experiment and what judges is Miqyas's own, and this ADR now describes only the tools that come in behind
+adapters. Playwright is substrate there, not an adapter.

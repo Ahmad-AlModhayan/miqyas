@@ -18,7 +18,7 @@ Miqyas is a verification platform built around a proof core, an agent team, and 
 (PRD Vision). Within that platform:
 
 - **In scope for early access (M1–M2):** web targets in Chromium, the hardening of §3.11 and the Grade 1 readiness
-  profile of §3.12, judged by code, with existing tools behind adapters (ADR 0005).
+  profile of §3.12, judged by code, with outside tools behind adapters (ADRs 0005 and 0019).
 - **In scope for v1.0:** web apps in Chromium, Android apps on an emulator or device, Tauri desktop apps on Windows,
   Linux and macOS, command-line programs, and engine scenarios for Wasl's `wasld`, across CLI, CI gate, MCP and
   self-hosted runs.

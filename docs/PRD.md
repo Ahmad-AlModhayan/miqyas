@@ -5,8 +5,8 @@
 | Product | Miqyas is a verification platform: the place any software passes through before anyone trusts it — across web, mobile, desktop, servers and industrial/factory systems. Phase 1 proves the proof core and adapter model first on Grade 1 web launch readiness. |
 | Owner | Kahf Labs |
 | Status | Building. Milestone 1 (hardening, then the live Wasl run) is under way; Grade 1 public early access follows. |
-| Version | 0.4 (2026-11-13) |
-| Changes | 0.4: define the verification-platform vision (proof core, agent team, adapters; five surfaces; CLI, CI gate, MCP and self-hosted entry points) above Phase 1 web Grade 1 readiness. 0.3: the readiness hub. Grade 1 readiness for indie and vibe-coded launches comes first, on the web. The incumbent is Lovable's built-in Security checks. Miqyas orchestrates existing runners instead of rebuilding them (ADR 0005). The hardening decisions of map ticket 26 are folded in. 0.2: Miqyas becomes Kahf's testing platform, built on an evaluation of TestSprite on 2026-10-28. |
+| Version | 0.5 (2026-11-17) |
+| Changes | 0.5: what finds a defect by experiment and what judges is Miqyas's own; outside tools stay behind adapters and add facts (ADR 0019). 0.4: define the verification-platform vision (proof core, agent team, adapters; five surfaces; CLI, CI gate, MCP and self-hosted entry points) above Phase 1 web Grade 1 readiness. 0.3: the readiness hub. Grade 1 readiness for indie and vibe-coded launches comes first, on the web. The incumbent is Lovable's built-in Security checks. Miqyas orchestrates existing runners instead of rebuilding them (ADR 0005). The hardening decisions of map ticket 26 are folded in. 0.2: Miqyas becomes Kahf's testing platform, built on an evaluation of TestSprite on 2026-10-28. |
 | License | Decoupled open-core: core verification engine under GNU AGPL v3.0 (`AGPL-3.0-only`, [`LICENSE`](../LICENSE)) with mandatory CLA; worker protocol, scrubber, surface drivers, thin CLI launcher, presets, and schemas under `Apache-2.0` ([`LICENSE-APACHE`](../LICENSE-APACHE)). |
 | Related | SRS `docs/SRS.md`, charter `docs/CHARTER.md`, threat model `docs/threat-model.md`, ADRs `docs/adr/`, glossary `CONTEXT.md`.  |
 
@@ -21,8 +21,8 @@ each check one angle and leave proof scattered. Miqyas brings verification toget
 - **Proof core**: every check, from any source, ends in one verdict in the ledger with evidence and coverage.
 - **Agent team**: agents that understand the target software, author plans, crawl states, run active checks, and inject
   faults on any surface.
-- **Existing tools as adapters**: the world's runners, drivers and scanners plugged in behind adapters, never rebuilt
-  (ADR 0005).
+- **Outside tools as adapters**: the world's runners and scanners plug in behind adapters and add facts. What finds
+  a defect by experiment and what judges is Miqyas's own (ADRs 0005 and 0019).
 
 Four entry points meet teams where they work:
 
@@ -104,7 +104,8 @@ $0.02, and a 50-case plan took 23 s. It fell short where a tester must be strict
 **(a) Why a better model or a vendor update does not replace it**
 - The gap is accounting, not intelligence. The ledger, coverage, the corpus score and the mutation self-check are
   code that checks the tools and the model.
-- Miqyas orchestrates; it doesn't compete with the runners. A better scanner becomes a better adapter.
+- What finds a defect by experiment and what judges every check is Miqyas's own code (ADR 0019). A better scanner
+  still becomes a better adapter.
 - Reach is per-app integration: a backend's REST surface, two test accounts, a repository's history, a WebDriver
   plugin in a Tauri shell, a fake Drive beside a real sync engine. No model release ships these.
 - A cloud tester's business is running your app in its cloud. Self-hosted runs with any model cut against it.
@@ -155,7 +156,8 @@ web, mobile and desktop.
 - No load, spike or stress testing. Small fixed probes stay within the limits of ADR 0002.
 - Hosted cloud execution is out of scope for the open-source CLI in Phase 1 (optional managed hosted runners and proprietary UI clients live outside this public repository).
 - Never uses or reads real users' accounts. On a live host, only test accounts the person makes.
-- No rebuilding of runners, drivers or scanners (ADR 0005).
+- No rebuilding of what a target runs on (the browser, the database), and none of an outside tool's catalogue
+  unless Miqyas's own is measured to do at least as well (ADR 0019).
 - iOS later (P2). Replacing usability tests with people.
 
 ## 6. Scope
