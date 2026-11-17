@@ -117,6 +117,51 @@ describe('a named test host', () => {
   });
 });
 
+// The classing works on one canonical form of a host: lower case, with exactly one trailing dot removed. A host that
+// still has an empty label after that is not in the form and never gains a class.
+describe('a host that is not in canonical form', () => {
+  it('is not a named test host when the dot at the end shifts the registered name into the checked labels', () => {
+    for (const url of ['https://test.com.', 'https://staging.com.', 'https://dev.to.']) {
+      expect(envOf(url, run({ targets: [url] }))).toBe('other');
+    }
+  });
+
+  it('is not a named or local test host when a label is empty', () => {
+    for (const url of ['https://staging..example.com', 'https://.staging.example.com', 'https://staging.example.com..', 'http://localhost..', 'http://x..test', 'http://a..localhost']) {
+      expect(envOf(url, run({ targets: [url] }))).toBe('other');
+    }
+  });
+
+  it('gets the class of the same name without its one trailing dot', () => {
+    expect(envOf('https://staging.example.com.')).toBe('named-test-host');
+    expect(envOf('https://staging.example.com')).toBe('named-test-host');
+    expect(envOf('http://x.test.')).toBe('local-test-host');
+    expect(envOf('http://x.test')).toBe('local-test-host');
+  });
+
+  it('counts localhost. as localhost: the one rule strips a single trailing dot', () => {
+    expect(envOf('http://localhost.:3000')).toBe('local-test-host');
+    expect(envOf('http://127.0.0.1.:3000')).toBe('local-test-host');
+  });
+
+  it('is the same class in upper case, and an IPv6 literal in brackets is judged as a literal', () => {
+    expect(envOf('HTTPS://STAGING.Example.COM')).toBe('named-test-host');
+    expect(envOf('http://[::1]:3000')).toBe('local-test-host');
+    expect(envOf('http://[2001:db8::1]:3000')).toBe('other');
+  });
+
+  it('names the same host with and without the trailing dot for --allow-host and the token', () => {
+    const url = 'https://shop.example.com.';
+    const facts = run({ targets: [url], ownershipTokenHosts: ['shop.example.com'] });
+    expect(envOf(url, facts, grantsFromFlags(['--allow-host', 'shop.example.com']))).toBe('owned-host');
+  });
+
+  it('is the same origin as the name without the dot, so a sandbox started on one is a sandbox on the other', () => {
+    const facts = run({ targets: ['http://localhost:4100'], engineStarted: [{ origin: 'http://localhost:4100', onlyRouteOutIsGate: true }] });
+    expect(envOf('http://localhost.:4100/x', facts)).toBe('sandbox');
+  });
+});
+
 describe('an owned host', () => {
   const url = 'https://shop.example.com';
 

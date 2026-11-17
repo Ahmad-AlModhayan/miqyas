@@ -43,12 +43,24 @@ export function originOf(url: string): string | null {
   const u = parse(url);
   if (u === null) return null;
   const scheme = u.protocol === 'ws:' ? 'http:' : u.protocol === 'wss:' ? 'https:' : u.protocol;
-  return `${scheme}//${u.host}`;
+  return `${scheme}//${canonicalHost(u.hostname)}${u.port === '' ? '' : `:${u.port}`}`;
 }
 
-/** The host name of a URL, lower case, or null when it has none. */
+// The one canonical form of a host: lower case, with exactly one trailing dot removed (`example.com.` is `example.com`).
+// A host that still has an empty label after that is not in the form, and classing never gives it a class.
+function canonicalHost(hostname: string): string {
+  const lower = hostname.toLowerCase();
+  return lower.endsWith('.') ? lower.slice(0, -1) : lower;
+}
+
+function hasEmptyLabel(host: string): boolean {
+  return !host.startsWith('[') && host.split('.').includes('');
+}
+
+/** The host name of a URL in its canonical form (lower case, one trailing dot removed), or null when it has none. */
 export function hostOf(url: string): string | null {
-  return parse(url)?.hostname.toLowerCase() ?? null;
+  const u = parse(url);
+  return u === null ? null : canonicalHost(u.hostname);
 }
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
@@ -67,6 +79,10 @@ function carriesTestLabel(host: string): boolean {
   if (IPV4.test(host) || host.startsWith('[')) return false;
   const labels = host.split('.');
   // The last label is the top-level domain and the one before it is the registered name: neither marks a host as a test host.
+  // Known limit: this takes the last two labels as "top-level domain and registered name". Under a public suffix of
+  // more than one label that is wrong: `staging.co.uk` is itself a registered name, and is classed here as a named test
+  // host. Telling them apart needs a public-suffix list, which this module does not have. To be settled before the
+  // gate is wired to anything.
   return labels.slice(0, -2).some((l) => TEST_LABELS.has(l));
 }
 
@@ -90,6 +106,8 @@ function classify(
   if (facts.engineStarted.some((s) => originOf(s.origin) === norm && s.onlyRouteOutIsGate === true)) {
     return make('sandbox', 'origin.sandbox');
   }
+  // A name with an empty label is not in canonical form: it is never a test host, an owned host or a backend.
+  if (hasEmptyLabel(host)) return make('other', 'origin.other');
   if (allowHosts.includes(host) && facts.ownershipTokenHosts.some((h) => h.toLowerCase() === host)) {
     return make('owned-host', 'origin.owned-host');
   }
