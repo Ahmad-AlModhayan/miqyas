@@ -103,17 +103,18 @@ export class LedgerWriter {
     return { size: this.leaves.length, root: await rootOfLeaves(this.leaves, this.sha256) };
   }
 
+  /** Every refusal is a rejected LedgerError, and a refused record takes no seq and writes nothing. */
   private write(t: RecordType, body: Json, at: string): Promise<number> {
-    if (this.sealed) return Promise.reject(new LedgerError('the ledger is sealed: nothing may follow run.seal'));
-    if (this.broken !== undefined) return Promise.reject(new LedgerError('an earlier write failed; the ledger is closed'));
-    const notAllowed = describeNonJson(body, 'body');
-    if (notAllowed !== undefined) return Promise.reject(new LedgerError(`${notAllowed}: a record holds only JSON, with integers`));
-    const badBlob = isPlainObject(body) && 'blobs' in body ? readBlobRefs(body.blobs).problems[0] : undefined;
-    if (badBlob !== undefined) return Promise.reject(new LedgerError(`${badBlob}: each is {digest, size, mediaType}`));
-    if (typeof at !== 'string') return Promise.reject(new LedgerError('the record time must be a string'));
+    let json: string;
+    try {
+      json = this.serialize(this.next, t, body, at);
+    } catch (error) {
+      if (error instanceof LedgerError) return Promise.reject(error);
+      // A body nested deeper than the stack allows, for one: refused like any other, not thrown.
+      return Promise.reject(new LedgerError(`the record could not be checked: ${String(error)}`));
+    }
     if (t === 'run.seal') this.sealed = true;
     const seq = this.next++;
-    const json = JSON.stringify({ seq, t, at, body });
     const done = this.queue.then(async () => {
       if (this.broken !== undefined) throw new LedgerError('an earlier write failed; the ledger is closed');
       try {
@@ -130,6 +131,18 @@ export class LedgerWriter {
     });
     this.queue = done.catch(() => undefined);
     return done;
+  }
+
+  /** The record's line without its newline. Throws LedgerError for a record the verifier would fail. */
+  private serialize(seq: number, t: RecordType, body: Json, at: string): string {
+    if (this.sealed) throw new LedgerError('the ledger is sealed: nothing may follow run.seal');
+    if (this.broken !== undefined) throw new LedgerError('an earlier write failed; the ledger is closed');
+    const notAllowed = describeNonJson(body, 'body');
+    if (notAllowed !== undefined) throw new LedgerError(`${notAllowed}: a record holds only JSON, with integers`);
+    const badBlob = isPlainObject(body) && 'blobs' in body ? readBlobRefs(body.blobs).problems[0] : undefined;
+    if (badBlob !== undefined) throw new LedgerError(`${badBlob}: each is {digest, size, mediaType}`);
+    if (typeof at !== 'string') throw new LedgerError('the record time must be a string');
+    return JSON.stringify({ seq, t, at, body });
   }
 
   private async checkpoint(): Promise<void> {
@@ -198,7 +211,13 @@ export async function readLedger(store: Store): Promise<LedgerRead> {
   }
 
   read.lines.forEach((line, seq) => {
-    const record = parseRecord(line, seq);
+    let record: LedgerRecord | string;
+    try {
+      record = parseRecord(line, seq);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      record = 'the line is nested too deeply to read'; // what the writer refuses to write
+    }
     if (typeof record === 'string') read.problems.push({ path: LEDGER_PATH, record: seq, reason: record });
     else read.records.push(record);
   });

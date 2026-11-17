@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { LedgerError, LedgerWriter, readLedger } from '../../src/kernel/ledger.js';
+import { type Json, LedgerError, LedgerWriter, readLedger } from '../../src/kernel/ledger.js';
 import { MemoryStore, sha256, utf8 } from '../kernel-helpers.js';
 
 const AT = '2026-11-17T10:00:00Z';
@@ -135,6 +135,36 @@ describe('the ledger writer and reader', () => {
     }
     expect((await readLedger(store)).records).toHaveLength(1);
     expect(await writer.append('fact', { blobs: { a: { digest, size: 1, mediaType: 'x' } } }, AT)).toBe(1);
+  });
+
+  it('refuses input nested too deeply as a rejected LedgerError, writes nothing, and stays open', async () => {
+    const store = new MemoryStore();
+    const writer = await open(store);
+    let deep: Json = 0;
+    for (let i = 0; i < 200_000; i++) deep = [deep];
+
+    let append: Promise<number> | undefined;
+    expect(() => {
+      append = writer.append('fact', { deep }, AT);
+    }).not.toThrow();
+    await expect(append).rejects.toBeInstanceOf(LedgerError);
+    let seal: Promise<number> | undefined;
+    expect(() => {
+      seal = writer.seal({ deep }, AT);
+    }).not.toThrow();
+    await expect(seal).rejects.toBeInstanceOf(LedgerError);
+
+    expect((await readLedger(store)).records).toHaveLength(1);
+    expect(await writer.append('fact', { n: 1 }, AT)).toBe(1);
+  });
+
+  it('names a line nested too deeply to read as a problem, and does not throw', async () => {
+    const store = new MemoryStore();
+    const deep = `${'['.repeat(200_000)}0${']'.repeat(200_000)}`;
+    store.setText('ledger.jsonl', `{"seq":0,"t":"run.open","at":"x","body":{"deep":${deep}}}\n`);
+
+    const read = await readLedger(store);
+    expect(read.problems).toEqual([{ path: 'ledger.jsonl', record: 0, reason: 'the line is nested too deeply to read' }]);
   });
 
   it('names the record when a line cannot be read', async () => {
