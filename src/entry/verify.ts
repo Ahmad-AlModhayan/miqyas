@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // `miqyas verify <bundle>` (docs/FOUNDATION.md §5, "Verifying"). It needs no target, model or network: it reads the
-// folder it is given and answers the questions of §5 one by one, each apart. This version answers the first, "Intact?",
-// with the kernel's verifyIntact. The others are listed as not checked yet, so that a pass is never read as more than
-// it is, and each takes its place in QUESTIONS when it is built.
+// folder it is given and answers the questions of §5 one by one, each apart. This version answers the first two,
+// "Intact?" and "Does the result follow?", with the kernel's verifyIntact and verifyResult. The others are listed as
+// not checked yet, so that a pass is never read as more than it is, and each takes its place in QUESTIONS when built.
 import { stat } from 'node:fs/promises';
 import type { Problem } from '../kernel/ledger.js';
 import type { Sha256, Store } from '../kernel/store.js';
-import { verifyIntact } from '../kernel/verify.js';
+import { verifyIntact, verifyResult } from '../kernel/verify.js';
 import { FsStore, nodeSha256 } from './fs-store.js';
 
 export interface VerifyReport {
@@ -28,7 +28,7 @@ interface Question {
 
 const QUESTIONS: Question[] = [
   { title: 'Intact?', answer: intact },
-  { title: 'Does the result follow?' },
+  { title: 'Does the result follow?', answer: (store) => verifyResult(store) },
   { title: 'Do the verdicts follow?' },
   { title: 'Do the derived facts follow?' },
 ];

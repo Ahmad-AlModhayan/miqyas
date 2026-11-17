@@ -21,8 +21,8 @@ async function makeBundle(at: string): Promise<void> {
   await runWithProofBundle({ dir: at, runId: 'run-1', open: { format: 1 }, now: clock, print: () => undefined }, async (recorder) => {
     const blob = await recorder.putBlob(new TextEncoder().encode('<html>the page</html>'), 'text/html');
     await recorder.record('fact', { kind: 'page', note: 'alpha', blobs: { body: blob } });
-    await recorder.record('verdict', { claim: 'c1', result: 'pass' });
-    return { result: 0, fold: { verdict: 'pass' } };
+    await recorder.record('verdict', { claim: 'c1@1', verdict: 'pass' });
+    return { result: 0, fold: { verdict: 'pass', verdicts: 1 } };
   });
 }
 
@@ -65,10 +65,15 @@ describe('verify on an untouched bundle', () => {
 
   it('says that the questions this version does not answer are not answered, so a pass is not read as more', async () => {
     const out = text((await verifyBundle(dir)).lines);
-    expect(out).toContain('2. Does the result follow? not checked yet');
     expect(out).toContain('3. Do the verdicts follow? not checked yet');
     expect(out).toContain('4. Do the derived facts follow? not checked yet');
     expect(out).toMatch(/cannot show who made it|can't show who made it/);
+  });
+
+  it('answers that the result follows: the fold of the verdict records is what the seal says', async () => {
+    const r = await verifyBundle(dir);
+    expect(r.lines).toContain('2. Does the result follow? yes');
+    expect(r.lines).toContain('   the seal (record 3) says pass over 1 verdict; the fold of the 1 verdict record gives pass');
   });
 
   it('still verifies when the folder is copied somewhere else', async () => {
@@ -77,6 +82,47 @@ describe('verify on an untouched bundle', () => {
     const r = await verifyBundle(copy);
     expect(r.exitCode).toBe(0);
     await rm(copy, { recursive: true, force: true });
+  });
+});
+
+describe('verify on an intact bundle whose seal does not follow from its verdicts', () => {
+  /** Written through the writer, so the bundle is intact and only the seal's result is wrong. */
+  async function sealWith(at: string, verdicts: string[], fold: { verdict: string; verdicts: number }): Promise<void> {
+    tick = 0;
+    await runWithProofBundle({ dir: at, runId: 'run-2', open: { format: 1 }, now: clock, print: () => undefined }, async (recorder) => {
+      for (const [i, verdict] of verdicts.entries()) await recorder.record('verdict', { claim: `c${i + 1}@1`, verdict });
+      return { result: 0, fold };
+    });
+  }
+
+  it('answers no, naming the seal and the verdict record that disagree, while it is still intact', async () => {
+    const at = path.join(tmp, 'wrong-fold');
+    await sealWith(at, ['pass', 'fail'], { verdict: 'pass', verdicts: 2 });
+    const r = await verifyBundle(at);
+    expect(r.exitCode).toBe(1);
+    expect(r.lines).toContain('1. Intact? yes');
+    expect(r.lines).toContain('2. Does the result follow? NO');
+    expect(r.lines).toContain('   the seal (record 3) says pass over 2 verdicts; the fold of the 2 verdict records gives fail');
+    expect(r.lines).toContain('   record 2: c2@1 fail');
+    await rm(at, { recursive: true, force: true });
+  });
+
+  it('answers no when the seal counts verdicts the ledger does not hold', async () => {
+    const at = path.join(tmp, 'wrong-count');
+    await sealWith(at, ['pass'], { verdict: 'pass', verdicts: 2 });
+    const r = await verifyBundle(at);
+    expect(r.lines).toContain('1. Intact? yes');
+    expect(r.lines).toContain('2. Does the result follow? NO');
+    expect(r.lines).toContain('   the seal (record 2) says pass over 2 verdicts; the fold of the 1 verdict record gives pass');
+    await rm(at, { recursive: true, force: true });
+  });
+
+  it('answers no for a run with no seal, which never passes', async () => {
+    const lines = await readLines();
+    await writeLines(lines.slice(0, -1));
+    const r = await verifyBundle(dir);
+    expect(r.lines).toContain('2. Does the result follow? NO');
+    expect(r.lines).toContain("   there is no seal: the run didn't finish, so no result follows");
   });
 });
 
