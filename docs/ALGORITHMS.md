@@ -821,7 +821,7 @@ experiment(capsule S, axis, operation):       # a collector's work: it records, 
   checks:     reference_ok    the reference run returned the data and left its expected footprint
               identity_live   a request the test identity is allowed to make succeeded in the same fork
               same_state      the fidelity check (M2) passed for this recipe in this run
-              agree           the two test runs compare the same
+              agree           the two test runs compare the same (`together` counts its N tries instead, L6)
               allowed         the gate refused none of the runs
   record:     one `experiment` fact
 
@@ -862,7 +862,7 @@ the `build` axis runs both builds in one run (L8). Status codes are recorded and
 ### L3. `who`
 
 ```
-read:
+read (the first line that applies decides):
   own     = tokens(reference run)                      what the owner receives
   other   = tokens(test run)                           what the lesser identity receives for the same request
   offered = tokens the lesser identity received anywhere through its own interface in this run
@@ -872,19 +872,19 @@ read:
   broken     when leak is not empty, and the lesser identity's interface was explored to its coverage rule
   can't tell when leak is not empty and the exploring fell short
 
-write, for an operation that names an object the owner already has in S: a change, a deletion, an action on it,
+write, for an operation that names an object O the owner already has in S: a change, a deletion, an action on it,
 or a creation under it (a line on the owner's invoice, a comment on the owner's record)
-  touched = the owner's rows in S that the reference run changed, and what the owner then reads back of them
-  broken  when the test run, sent as the lesser identity, changed any row in touched,
-          or changed what the owner reads back
+  mine    = the rows of O and the rows that refer to O; and what the owner reads back of O and of what is under it
+  broken  when the test run, sent as the lesser identity, changed or removed a row in mine, added a row that
+          refers to O, or changed what the owner reads back
   doesn't apply to a creation that names nothing of the owner's
   doesn't apply when the lesser identity's own interface offers that action on that object
 ```
 
-The answer to a write doesn't show whether it took effect, so a write is always judged on what is read back.
-Data that is meant to be shared is in `offered`, because the lesser identity's own pages show it. A response of 200
-with an empty list leaks nothing and holds. The identities tried are every pair the run was given accounts for, and
-nobody.
+The answer to a write doesn't show whether it took effect, so a write is judged on the state: the rows, and what the
+owner reads back. Data that is meant to be shared is in `offered`, because the lesser identity's own pages show it. A
+response of 200 with an empty list leaks nothing and holds. The identities tried are every pair the run was given
+accounts for, and nobody.
 
 ### L4. `door`
 
@@ -899,6 +899,7 @@ for each constraint c the interface or the schema declares on a field of the ope
 for each field g that the object carries and the interface never sends in this operation:
   send the operation directly with g set to a value w that the undisturbed run doesn't store
   broken when the stored g equals w                the server took a field the interface never sends
+  in a sandbox only: w is not one of the inert values of D4
 ```
 
 ### L5. `again`
@@ -920,7 +921,7 @@ and the footprint (M4) is recorded beside it without deciding.
 ```
 s_ab = state after a, then b          s_ba = state after b, then a
 for try i in 1..N:  s_i = state after a and b released at the same moment by the proxy
-broken        when some s_i is neither s_ab nor s_ba
+broken        when some s_i is neither s_ab nor s_ba; one such try is enough, and takes the place of `agree` (L1)
 held in N     otherwise
 
 tried on pairs of writes whose footprints (M4) touch the same table
@@ -937,8 +938,8 @@ points = each statement and outgoing call seen in the undisturbed run, in order
 for each point i and each mode (fail, time out):
   run with that one fault
   f_i = footprint_i, leaving out rows in stores the recipe or the book marks as logs or audit trails,
-        which rightly stay
-  broken when f_i is neither empty nor the whole undisturbed footprint               a partial change
+        which rightly stay; whole = the undisturbed footprint with the same rows left out
+  broken when f_i is neither empty nor whole                                         a partial change
   broken when f_i is empty and the response compares the same as the undisturbed one (L2)     a swallowed error
 ```
 
@@ -959,7 +960,8 @@ presentation   the relations of F1
 ### L9. The matrix
 
 ```
-cell(operation, axis) = doesn't apply | not tested | held | held in N | broken | can't tell (why)
+cell(operation, axis) = doesn't apply | not tested | held | broken | can't tell (why)
+                        for `together`, held carries its number of tries (L6)
 coverage(axis)        = cells tested / cells that apply
 ```
 
@@ -1008,10 +1010,10 @@ only when every store is `own`.
 fidelity(sandbox, recipe):
   R = for each identity of the run, the reads recorded while the state was reached, in the order recorded,
       up to 50; with no read recorded the check can't run
-  replay R twice with nothing in between; what differs is volatile(R) (L2)
+  replay R twice with nothing in between; what differs is volatile(R) (L2); the first replay is the reference
   c = capture(sandbox); restore(sandbox, c); replay R                 # restored
   f = fork(c); replay R on f                                          # forked
-  same = in each replay, every response has the tokens (L2) it had before, volatile(R) left out
+  same = in each later replay, every response has the tokens (L2) it had in the reference, volatile(R) left out
 
 fidelity fact body:
   { recipe, capsule, reads,                     // how many reads were replayed

@@ -72,10 +72,11 @@ Four things make these laws usable without knowing intent.
   redirect, or a page that says "please log in" with a 200, and can answer a stranger with a 200 and an empty list.
   A law is broken only when the content shows it: the lesser identity's response carries items whose keyed digests
   match the owner's; the stored row holds the value that was forbidden.
-- **State is judged as the application shows it.** The answer to a write doesn't say whether the write happened, so a
-  law about state is judged on what each identity can then read back through the application, with the footprint as
-  the supporting record. What a server keeps for itself (a log line, a revision, a counter) may differ between two
-  runs without any law being broken; the protocol says as much.
+- **State is judged on the state, never on the answer to a write.** The answer doesn't say whether the write
+  happened. So a law about state is judged on what each identity can then read back through the application and on
+  what the footprint shows was stored. For `again` only what the application shows decides: what a server keeps for
+  itself (a log line, a revision, a counter) may differ between two runs without the law being broken, and the
+  protocol says as much.
 
 Each law is a claim Miqyas ships, judged by the one judge like any other, with examples that must fail (FOUNDATION
 §4). Most are `pair` claims: items from the reference run on one side, items from the test run on the other, joined
@@ -92,7 +93,7 @@ why.
 ```
                 who   door   again   together   failure   round trip   after   view
  GET  /invoices/:id    held  n/a    held    n/a        n/a       n/a          held    held
- POST /invoices        held  BROKEN held    held (40)  can't     held         n/a     held
+ POST /invoices        n/a   BROKEN held    held (40)  can't     held         n/a     held
  PUT  /invoices/:id    BROKEN held  held    BROKEN     held      held         n/a     held
  DELETE /invoices/:id  held  n/a    held    n/a        held      n/a          held    n/a
 ```
@@ -177,8 +178,8 @@ way out is the gate.
 
 **What an action did.** With the state before and after in hand, the difference is the action's **footprint**: rows
 added, changed and removed, by table and column, aligned by their natural keys and with generated values (ids, times)
-left out; requests sent; what the page shows. `door`, `together` and `failure` are judged on footprints; for
-`again` a footprint is the supporting record (§3).
+left out; requests sent; what the page shows. `who` for writes, `door`, `together` and `failure` are judged on
+footprints together with what is read back; for `again` a footprint is only the supporting record (§3).
 A footprint records what the recipe could see, and says so: a write to a queue or to another service is outside it.
 For that reason a footprint may raise the class the gate gives a request and never lower it, and "no change observed"
 is never evidence that a request is a read.
@@ -247,12 +248,12 @@ the engine does less:
 |---|---|
 | a sandbox | every axis |
 | a test host, or an owned host, with `--active` | `who` for reads, `view`, `presentation`: requests that only read |
-| the same, with `--allow-writes` and what the gate requires | `door`, `again` and `round trip`, with the inert values of ALGORITHMS D4, tagged for clean-up; `after` for a test account's own log-out |
+| the same, with `--allow-writes` and what the gate requires | `door` for declared constraints, `again` and `round trip`, with the inert values of ALGORITHMS D4, tagged for clean-up; `after` for a test account's own log-out |
 | any other host | `presentation` and what a visitor sees |
 
-`together`, `failure`, `who` for writes, and `after` for a deletion or a revocation are sandbox-only. So is `build`,
-which needs the previous build and this one started in the same run (§9). Elsewhere their cells read "can't tell:
-needs a sandbox", and a law that can't run at all is `blocked`.
+`together`, `failure`, `who` for writes, `door` for fields the interface never sends, and `after` for a deletion or
+a revocation are sandbox-only. So is `build`, which needs the previous build and this one started in the same run
+(§9). Elsewhere their cells read "can't tell: needs a sandbox", and a law that can't run at all is `blocked`.
 
 ## 11. Measuring the engine
 

@@ -230,10 +230,10 @@ Reading the table: a counterexample settles an `every` or a `none` claim at any 
 `some` claim at any coverage. Not finding one settles nothing until `covered` is true. An error is never read as true
 or false, in `where` as much as in `holds`, and an error in `covered` means not covered.
 
-A claim over measurements can say when one is **usable**. A replay as a second account shows nothing if that account's
-session had expired, so the claim names the checks that must have passed: the owner's own request returned the data,
-and the second account could make a request it is allowed. An item that isn't usable is uncertain. It can make
-neither a pass nor a fail.
+A `set` or `pair` claim over measurements can say when one is **usable**. A replay as a second account shows nothing
+if that account's session had expired, so the claim names the checks that must have passed: the owner's own request
+returned the data, and the second account could make a request it is allowed. An item that isn't usable is
+uncertain. It can make neither a pass nor a fail.
 
 When no item is inside the claim, an `every` or `none` claim is **vacuous**. A vacuous claim is `not_checked`, with
 the reason "nothing to check", unless the claim says `vacuous: 'pass'`, which a claim may say only when its coverage
@@ -409,7 +409,7 @@ one gate (ADR 0008).
 | interact | use the product through its own interface the way a person's plan says, submissions included |
 | probe | send a request the interface didn't send, that only reads |
 | write | send a request that changes stored state or spends the target's money |
-| disrupt | break or degrade the target on purpose: faults, restarts, clock skew, a mutated build, load; capturing and restoring a sandbox's state |
+| disrupt | break or degrade the target on purpose: faults, restarts, clock skew, a mutated build, load; capturing, restoring and forking a sandbox's state |
 | execute | run the target's own code on this machine: its tests, its command-line program |
 
 An **environment class belongs to an origin**, not to a run. Every origin a run touches is classed by itself:
@@ -465,7 +465,7 @@ engine started, an experiment may write as any identity it made and send what an
 - **What was seen to change counts.** A route whose footprint in a sandbox wasn't empty is classed as a write from
   then on, whatever its method. A footprint can raise a class and never lower one (ALGORITHMS B1, M4).
 - **Capsules are sandbox-only.** Capturing, restoring and forking are `disrupt` effects, and a deny rule refuses them
-  on any origin the engine didn't start, whatever was granted.
+  on any origin that isn't a sandbox, whatever was granted.
 - **Seeds go only into the corpus.** Planting a defect to measure the experiment engine is refused on any subject
   that isn't a copy of an application from the public corpus (ADR 0018).
 - **Isolation for every session.** The in-process proxy that keeps a browser session to its origins (requests,
@@ -663,7 +663,7 @@ Checks 9, 10 and 12 are the `who` axis of the experiment engine, run on a host t
 decided as that law is (ALGORITHMS L3): on what each response carries, never on its status. Each names what makes a
 replay usable: the session's own request returned the data, and the other identity is live. On such a host a response
 is all there is to read, so check 12 shows that nothing came back to a request with no session, not that nothing was
-spent. The law for writes, judged on what is read back, runs in a sandbox (MAP §6, step 6).
+spent. The law for writes, judged on the state and on what is read back, runs in a sandbox (MAP §6, step 6).
 
 The drop order under a time limit is no longer a list in code: each claim has a priority, and §10 uses it.
 
