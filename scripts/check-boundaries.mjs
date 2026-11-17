@@ -75,6 +75,11 @@ const VENDOR_LAYER_ONLY = {
   'libpg-query': 'adapters',
 };
 
+// Paths whose files may import only other files by a relative path: no npm package and no built-in, `node:`
+// or not. The deciding half of the gate (FOUNDATION §6) is data and pure functions, and this is how the lint
+// shows it. Imports of a relative path still follow the layer rules above.
+const NO_BARE_IMPORTS_UNDER = ['src/gate/decide/'];
+
 function normalizePosix(p) {
   return p.split(path.sep).join('/');
 }
@@ -233,7 +238,17 @@ export function checkSourceImports(filePath, source) {
   const fileDir = path.posix.dirname(rel);
   const allowed = ALLOWED_LAYERS[fromLayer];
 
+  const bareImportsRefusedUnder = NO_BARE_IMPORTS_UNDER.find((prefix) => rel.startsWith(prefix));
+
   for (const spec of extractImports(source)) {
+    if (bareImportsRefusedUnder !== undefined && !spec.startsWith('.')) {
+      violations.push({
+        file: rel,
+        specifier: spec,
+        reason: `files under ${bareImportsRefusedUnder} may import no package and no built-in, only relative paths`,
+      });
+    }
+
     // Check vendor isolation rules
     for (const [pkg, requiredLayer] of Object.entries(VENDOR_LAYER_ONLY)) {
       if ((spec === pkg || spec.startsWith(`${pkg}/`)) && fromLayer !== requiredLayer) {

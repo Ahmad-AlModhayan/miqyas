@@ -191,3 +191,48 @@ describe('import boundaries of the foundation folders (FOUNDATION §14)', () => 
     expect(violations[0]?.reason).not.toContain('plugins');
   });
 });
+
+describe('the deciding module imports no input or output library (FOUNDATION §6, ticket 49)', () => {
+  const decide = 'src/gate/decide/decide.ts';
+
+  it('lets a file on the deciding path import its own siblings and the layers the layer rules allow', () => {
+    const source = [
+      "import { CEILING } from './classes.js';",
+      "import type { Grants } from './grants.js';",
+      "import { WORKER_PROTOCOL_VERSION } from '../../protocol/worker.js';",
+      "export { CEILING } from './classes.js';",
+    ].join('\n');
+    expect(checkSourceImports(decide, source)).toEqual([]);
+  });
+
+  it.each([
+    ['a node: built-in', "import { readFile } from 'node:fs/promises';", 'node:fs/promises'],
+    ['a built-in without the node: prefix', "import { createHash } from 'crypto';", 'crypto'],
+    ['an npm package', "import Ajv from 'ajv';", 'ajv'],
+    ['a type-only import of a package', "import type { Schema } from 'ajv';", 'ajv'],
+    ['a side-effect import', "import 'node:net';", 'node:net'],
+    ['a re-export', "export { request } from 'node:https';", 'node:https'],
+    ['a dynamic import', "const m = await import('node:child_process');", 'node:child_process'],
+    ['a require', "const fs = require('node:fs');", 'node:fs'],
+  ])('refuses %s in a file on the deciding path', (_name, source, specifier) => {
+    const violations = checkSourceImports(decide, source);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({ file: decide, specifier });
+    expect(violations[0]?.reason).toContain('may import no package and no built-in');
+  });
+
+  it('does not extend the rule to the rest of the gate, which is where the I/O will live', () => {
+    expect(checkSourceImports('src/gate/collectors.ts', "import { readFile } from 'node:fs/promises';")).toEqual([]);
+  });
+
+  it('keeps the layer rules on the deciding path: it may not import the engine', () => {
+    const violations = checkSourceImports(decide, "import { run } from '../../engine/run.js';");
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.reason).toContain('layer "gate" cannot import layer "engine"');
+  });
+
+  it('passes for the live deciding module', async () => {
+    const violations = await checkProjectBoundaries();
+    expect(violations.filter((v) => v.file.startsWith('src/gate/decide/'))).toEqual([]);
+  });
+});
