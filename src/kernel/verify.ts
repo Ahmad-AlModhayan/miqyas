@@ -7,6 +7,7 @@ import { BlobError, BlobStore, blobPath, readBlobRefs } from './blobs.js';
 import { type Checkpoint, parseCheckpoint, toBase64 } from './checkpoint.js';
 import { type LedgerRecord, type Problem, readLedger } from './ledger.js';
 import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, equalBytes, fromUtf8, isPlainObject } from './store.js';
+import { foldedResult } from './judge.js';
 import { treeRoot } from './tree.js';
 
 export interface Intact {
@@ -106,4 +107,40 @@ async function checkBlobs(record: LedgerRecord, blobs: BlobStore, problems: Prob
       addProblem(path, `the blob "${name}": ${error.message}`);
     }
   }
+}
+
+/** The second question (docs/FOUNDATION.md §5): does the result follow? The fold of the verdict records is the seal's. */
+export interface Follows {
+  ok: boolean;
+  /** One line each: what the seal says and what the fold gives, then each verdict record, or why there is no answer. */
+  lines: string[];
+}
+
+export async function verifyResult(store: Store): Promise<Follows> {
+  const { records } = await readLedger(store);
+  const seal = records.find((r) => r.t === 'run.seal');
+  if (seal === undefined) return { ok: false, lines: ["there is no seal: the run didn't finish, so no result follows"] };
+
+  const verdicts: { seq: number; claim: string; verdict: string }[] = [];
+  for (const r of records) {
+    if (r.t !== 'verdict') continue;
+    const body = isPlainObject(r.body) ? r.body : {};
+    verdicts.push({
+      seq: r.seq,
+      claim: typeof body.claim === 'string' ? body.claim : '(no claim named)',
+      verdict: typeof body.verdict === 'string' ? body.verdict : '(no verdict)',
+    });
+  }
+  const folded = foldedResult(verdicts.map((v) => v.verdict));
+  const result = isPlainObject(seal.body) && isPlainObject(seal.body.result) ? seal.body.result : {};
+  const said = typeof result.verdict === 'string' ? result.verdict : '(nothing)';
+  const saidCount = typeof result.verdicts === 'number' ? result.verdicts : -1;
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const lines = [
+    `the seal (record ${seal.seq}) says ${said} over ${saidCount < 0 ? 'an unstated number of verdicts' : plural(saidCount, 'verdict')}; ` +
+      `the fold of the ${plural(folded.verdicts, 'verdict record')} gives ${folded.verdict}`,
+  ];
+  const ok = said === folded.verdict && saidCount === folded.verdicts;
+  if (!ok) for (const v of verdicts) lines.push(`record ${v.seq}: ${v.claim} ${v.verdict}`);
+  return { ok, lines };
 }
