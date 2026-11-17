@@ -284,6 +284,47 @@ describe('an effect the gate does not know, or one that arrives without its targ
     });
   });
 
+  // Ticket 78: decide returns a refusal a caller can record, and never throws.
+  it.each([null, undefined, 42, 'request'])('is refused, not thrown, when the effect is %j', (effect) => {
+    expect(decide(effect as never, world(), everyGrant())).toMatchObject({
+      answer: 'refuse',
+      rule: 'refuse.unknown-effect',
+      effectClass: null,
+      environment: null,
+      origin: null,
+    });
+  });
+
+  it.each([null, undefined, 42, 'facts', []])('is refused, not thrown, when the run facts are %j', (run) => {
+    expect(decide(pageGet(`${O.sandbox}/`), run as never, everyGrant())).toMatchObject({
+      answer: 'refuse',
+      rule: 'refuse.unreadable-run-facts',
+    });
+  });
+
+  it.each(['targets', 'engineStarted', 'ownershipTokenHosts', 'observedCalls', 'spendingRoutes', 'seenToChange', 'knownReads', 'livePhysical'])(
+    'is refused, not thrown, when the run facts have no list %s, or one that is not a list',
+    (list) => {
+      const missing = { ...world() } as Record<string, unknown>;
+      delete missing[list];
+      expect(decide(pageGet(`${O.sandbox}/`), missing as never, everyGrant())).toMatchObject({
+        answer: 'refuse',
+        rule: 'refuse.unreadable-run-facts',
+      });
+      expect(decide(pageGet(`${O.sandbox}/`), world({ [list]: 'not a list' }), everyGrant())).toMatchObject({
+        answer: 'refuse',
+        rule: 'refuse.unreadable-run-facts',
+      });
+    },
+  );
+
+  it('is refused, not thrown, when a request or an entry of a list is not the shape it should be', () => {
+    const unreadable = { answer: 'refuse', rule: 'refuse.unreadable-input' };
+    expect(decide({ kind: 'request', request: null, session: { permit: 'interact' } } as never, world(), everyGrant())).toMatchObject(unreadable);
+    expect(decide(pageGet(`${O.sandbox}/`), world({ engineStarted: [null as never] }), everyGrant())).toMatchObject(unreadable);
+    expect(decide(probeSent('POST', `${O.sandbox}/x`, 'write'), world({ knownReads: [7 as never] }), everyGrant())).toMatchObject(unreadable);
+  });
+
   it('is refused when a request has no URL', () => {
     expect(decide(request({ method: 'GET', cause: 'page' } as never, 'observe'), world(), everyGrant())).toMatchObject({
       answer: 'refuse',

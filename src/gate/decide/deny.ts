@@ -4,7 +4,7 @@
 
 import { atLeast, type EffectClass } from './classes.js';
 import type { Effect, LoginAttempt, RunFacts } from './effects.js';
-import { originOf, originsOfTheRun, type OriginClassification } from './origin.js';
+import { isReadableOrigin, originOf, originsOfTheRun, type OriginClassification } from './origin.js';
 
 /** What a rule is judged on. */
 export interface DenyContext {
@@ -42,6 +42,13 @@ function ownProbe(ctx: DenyContext): Extract<Effect, { kind: 'request' }> | null
 
 // In the order they are checked. A rule that binds in a sandbox says so; the limits on probes do not.
 export const DENY_RULES: readonly DenyRule[] = [
+  {
+    // First, so that a refusal names the cause the person can fix: the list they wrote, not the origin.
+    id: 'deny.live-physical-unreadable',
+    source:
+      'never write to or disrupt a live physical process, whatever the flags and whoever owns it: an entry that cannot be read as an origin could be any origin',
+    matches: (c) => writeOrMore(c) && !c.run.livePhysical.every(isReadableOrigin),
+  },
   {
     id: 'deny.leave-the-run',
     source: 'never leave the set of origins the run is about: the target’s origin and the backends its own pages call',

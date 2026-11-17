@@ -264,6 +264,33 @@ describe('a route seen to change state', () => {
   });
 });
 
+// Ticket 78: an entry that cannot be read as a route could be any route, so it raises every request to at least a write.
+describe('an entry of a route list that cannot be read as a route', () => {
+  const unreadable = ['/pay', 'localhost:4000/pay', 'app.test/pay', 42, null];
+
+  it.each(unreadable)('in spendingRoutes (%j) makes every request at least a write', (entry) => {
+    const facts = routes({ spendingRoutes: ['https://app.test/api/send-sms', entry as never] });
+    const c = classOfRequest(collector('GET', 'https://elsewhere.test/read'), { permit: 'probe' }, facts);
+    expect(c.effectClass).toBe('write');
+    expect(c.reasons).toContain('wire.unreadable-spending-route');
+    expect(classOfRequest(page('GET'), { permit: 'observe' }, facts).effectClass).toBe('write');
+    expect(classOfRequest(page('GET'), { permit: 'interact' }, facts).effectClass).toBe('write');
+  });
+
+  it.each(unreadable)('in seenToChange (%j) makes every request at least a write', (entry) => {
+    const facts = routes({ seenToChange: [entry as never] });
+    const c = classOfRequest(collector('GET', 'https://elsewhere.test/read'), { permit: 'probe' }, facts);
+    expect(c.effectClass).toBe('write');
+    expect(c.reasons).toContain('wire.unreadable-seen-to-change');
+    expect(classOfRequest(page('GET'), { permit: 'interact' }, facts).effectClass).toBe('write');
+  });
+
+  it('never lowers a class: a declared disrupt stays a disrupt', () => {
+    const facts = routes({ spendingRoutes: ['/pay'] });
+    expect(classOfRequest(collector('GET', 'https://app.test/x', { declared: 'disrupt' }), { permit: 'probe' }, facts).effectClass).toBe('disrupt');
+  });
+});
+
 describe('a declared class', () => {
   it('may be higher than the one found, and then it is the class', () => {
     expect(classOfRequest(collector('GET', 'https://app.test/x', { declared: 'disrupt' }), { permit: 'probe' }, noRoutes)).toEqual({

@@ -36,6 +36,7 @@ export interface WireClass {
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function segmentsOf(url: string, foldCase: boolean): { origin: string; segments: string[] } | null {
+  if (typeof url !== 'string') return null;
   const origin = originOf(url);
   if (origin === null) return null;
   const pathname = new URL(url).pathname;
@@ -52,6 +53,11 @@ function segmentsOf(url: string, foldCase: boolean): { origin: string; segments:
       return foldCase ? d.toLowerCase() : d;
     });
   return { origin, segments };
+}
+
+/** True when an entry of a route list can be read as a route: a URL of the web with a host, its query ignored. */
+export function isReadableRoute(entry: unknown): boolean {
+  return typeof entry === 'string' && segmentsOf(entry, true) !== null;
 }
 
 function routeMatches(pattern: string, url: string, foldCase: boolean): boolean {
@@ -182,6 +188,9 @@ export function classOfRequest(req: WireRequest, session: { readonly permit: Eff
     if (routes.spendingRoutes.some((r) => routeMatches(r, req.url, true))) raise('write', 'wire.spending-route');
     if (routes.seenToChange.some((r) => routeMatches(r, req.url, true))) raise('write', 'wire.seen-to-change');
   }
+  // An entry that cannot be read as a route could be any route, this one included: every request is then a write.
+  if (!routes.spendingRoutes.every(isReadableRoute)) raise('write', 'wire.unreadable-spending-route');
+  if (!routes.seenToChange.every(isReadableRoute)) raise('write', 'wire.unreadable-seen-to-change');
   if (req.declared !== undefined && !atLeast(c, req.declared)) {
     raise(req.declared, 'wire.declared');
   }
