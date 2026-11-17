@@ -97,6 +97,39 @@ describe('FsStore: paths that would leave the folder', () => {
     await expect(store.write('blobs/new', utf8('x'))).rejects.toBeInstanceOf(StorePathError);
     expect(await readdir(outside)).toEqual(['secret']);
   });
+
+  // A file link needs no privilege on Linux and macOS; on Windows it needs developer mode or the right to make one.
+  // Where it can't be made the test says so by failing on the symlink call, not by skipping the assertions.
+  it('refuses a ledger that is a link to a file outside the folder, for read, append and write, and leaves the target as it was', async () => {
+    const outside = path.join(tmp, 'outside.txt');
+    await writeFile(outside, 'not the bundle\n');
+    await mkdir(root);
+    await symlink(outside, path.join(root, 'ledger.jsonl'), 'file');
+    const store = new FsStore(root);
+    await expect(store.read('ledger.jsonl')).rejects.toBeInstanceOf(StorePathError);
+    await expect(store.append('ledger.jsonl', utf8('x\n'))).rejects.toBeInstanceOf(StorePathError);
+    await expect(store.write('ledger.jsonl', utf8('x\n'))).rejects.toBeInstanceOf(StorePathError);
+    expect(await readFile(outside, 'utf8')).toBe('not the bundle\n');
+  });
+
+  it('refuses a dangling link at the ledger, and creates nothing at its target', async () => {
+    const target = path.join(tmp, 'made-outside.txt');
+    await mkdir(root);
+    await symlink(target, path.join(root, 'ledger.jsonl'), 'file');
+    const store = new FsStore(root);
+    await expect(store.read('ledger.jsonl')).rejects.toBeInstanceOf(StorePathError);
+    await expect(store.append('ledger.jsonl', utf8('x\n'))).rejects.toBeInstanceOf(StorePathError);
+    await expect(store.write('ledger.jsonl', utf8('x\n'))).rejects.toBeInstanceOf(StorePathError);
+    expect(await readdir(tmp)).toEqual(['bundle']);
+  });
+
+  it('refuses a blob file that is a link', async () => {
+    const outside = path.join(tmp, 'outside.bin');
+    await writeFile(outside, 'x');
+    await mkdir(path.join(root, 'blobs', 'sha256', 'ab'), { recursive: true });
+    await symlink(outside, path.join(root, 'blobs', 'sha256', 'ab', 'cd'), 'file');
+    await expect(new FsStore(root).read('blobs/sha256/ab/cd')).rejects.toBeInstanceOf(StorePathError);
+  });
 });
 
 describe('FsStore: the rewrite of a file is never half done', () => {

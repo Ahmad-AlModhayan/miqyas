@@ -3,7 +3,7 @@
 // from node:crypto. The kernel does no input or output of its own; this is what it is handed. A path is relative,
 // uses "/", and stays inside the folder: the store refuses anything else before it touches the disk.
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFile, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Sha256, Store } from '../kernel/store.js';
 
@@ -62,6 +62,7 @@ export class FsStore implements Store {
     const file = path.join(this.root, ...relative.split('/'));
     if (makeFolders) await mkdir(path.dirname(file), { recursive: true });
     await this.checkLinks(path.dirname(file));
+    await checkNotALink(file);
     return file;
   }
 
@@ -79,6 +80,22 @@ export class FsStore implements Store {
       throw new StorePathError(`${JSON.stringify(folder)} leads outside the bundle folder`);
     }
   }
+}
+
+/**
+ * The file itself must not be a link, dangling or not: reading one reads wherever it points, and appending to a
+ * dangling one creates a file there. lstat, not stat, so that the link is seen and not what it leads to.
+ */
+async function checkNotALink(file: string): Promise<void> {
+  let isLink: boolean;
+  try {
+    isLink = (await lstat(file)).isSymbolicLink();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return;
+    throw error;
+  }
+  if (isLink) throw new StorePathError(`${JSON.stringify(path.basename(file))} is a link, and a bundle file must not be one`);
 }
 
 function checkRelative(relative: string): void {
