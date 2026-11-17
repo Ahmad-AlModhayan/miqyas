@@ -10,8 +10,7 @@ import { type OsvExecOptions, findRepoLockfiles, runOsvScannerOffline } from '..
 import { type LockfilesFound, type OsvScan, recordLockfiles, recordOsvScan } from '../collectors/dependencies.js';
 import type { RunRecorder } from '../engine/recorder.js';
 import { loadClaim } from '../kernel/claim.js';
-import { type Verdict, judgeSet } from '../kernel/judge.js';
-import type { Json } from '../kernel/ledger.js';
+import { type Verdict, claimRef, judgeSet } from '../kernel/judge.js';
 import { nodeSha256 } from './fs-store.js';
 
 /** The claim file, found from this module whether it runs from src/entry or from dist/entry. */
@@ -30,7 +29,7 @@ export async function runCheck13(recorder: RunRecorder, options: Check13Options)
   const bytes = new Uint8Array(await readFile(CHECK_13_CLAIM));
   const loaded = await loadClaim(bytes, nodeSha256);
   await recorder.record('claim', {
-    claim: `${loaded.claim.id}@${loaded.claim.version}`,
+    claim: claimRef(loaded.claim),
     rule: loaded.rule,
     file: new TextDecoder().decode(bytes),
   });
@@ -46,6 +45,6 @@ export async function runCheck13(recorder: RunRecorder, options: Check13Options)
   facts.push(...(await recordOsvScan(recorder, REPOSITORY_SUBJECT, scan)));
 
   const verdict = judgeSet(loaded, { subject: REPOSITORY_SUBJECT, facts });
-  await recorder.record('verdict', verdict as unknown as Json); // plain data: the judge builds it from JSON values only
+  await recorder.record('verdict', verdict);
   return verdict;
 }

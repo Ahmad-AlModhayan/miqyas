@@ -7,7 +7,7 @@ import { BlobError, BlobStore, blobPath, readBlobRefs } from './blobs.js';
 import { type Checkpoint, parseCheckpoint, toBase64 } from './checkpoint.js';
 import { type LedgerRecord, type Problem, readLedger } from './ledger.js';
 import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, equalBytes, fromUtf8, isPlainObject } from './store.js';
-import { foldedResult } from './judge.js';
+import { sealResult } from './judge.js';
 import { treeRoot } from './tree.js';
 
 export interface Intact {
@@ -131,7 +131,7 @@ export async function verifyResult(store: Store): Promise<Follows> {
       verdict: typeof body.verdict === 'string' ? body.verdict : '(no verdict)',
     });
   }
-  const folded = foldedResult(verdicts.map((v) => v.verdict));
+  const folded = sealResult(verdicts.map((v) => v.verdict));
   const result = isPlainObject(seal.body) && isPlainObject(seal.body.result) ? seal.body.result : {};
   const said = typeof result.verdict === 'string' ? result.verdict : '(nothing)';
   const saidCount = typeof result.verdicts === 'number' ? result.verdicts : -1;

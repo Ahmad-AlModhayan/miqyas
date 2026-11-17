@@ -5,7 +5,7 @@
 // They are handed what the tools found as plain data and never run a tool or read a file themselves; the entry point
 // does that with the adapter that already exists (docs/FOUNDATION.md §15) and hands the result over.
 import type { RunRecorder } from '../engine/recorder.js';
-import type { Fact, PlacedFact } from '../kernel/judge.js';
+import type { Fact, PlacedFact } from '../kernel/fact.js';
 import type { Json } from '../kernel/ledger.js';
 
 export const LOCKFILE_READER = 'lockfile-reader@1';
@@ -47,7 +47,7 @@ const OSV_REASONS = {
 } as const;
 
 async function recordFact(recorder: RunRecorder, fact: Fact): Promise<PlacedFact> {
-  const seq = await recorder.record('fact', fact as unknown as Json);
+  const seq = await recorder.record('fact', fact);
   return { seq, fact };
 }
 

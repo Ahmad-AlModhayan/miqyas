@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runCheck13 } from '../../src/entry/check13.js';
 import { runWithProofBundle } from '../../src/entry/proof-bundle.js';
 import { verifyBundle } from '../../src/entry/verify.js';
-import { foldedResult } from '../../src/kernel/judge.js';
+import { sealResult } from '../../src/kernel/judge.js';
 import { evaluateCheck13Dependencies } from '../../src/proof-core/readiness.js';
 import { envWithBin, writeScannerShim } from '../scanner-shim.js';
 
@@ -59,7 +59,7 @@ async function newPath(name: string, repoPath: string, runEnv: NodeJS.ProcessEnv
   const dir = path.join(tmp, 'bundles', name);
   await runWithProofBundle({ dir, runId: name, open: { format: 1 }, print: () => undefined }, async (recorder) => {
     const verdict = await runCheck13(recorder, { repoPath, osv: { env: runEnv } });
-    return { result: verdict, fold: foldedResult([verdict.verdict]) };
+    return { result: verdict, fold: sealResult([verdict.verdict]) };
   });
   const ledger = readFileSync(path.join(dir, 'ledger.jsonl'), 'utf8');
   const records = ledger.trim().split('\n').map((l) => JSON.parse(l) as Recorded);

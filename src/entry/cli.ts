@@ -61,9 +61,9 @@ import {
   type BenchRegression,
 } from '../proof-core/scoring.js';
 import { NO_SCRUB, parseScrubRules, scrubDir, scrubText, type ScrubRules } from '../scrub/scrub.js';
-import { foldedResult } from '../kernel/judge.js';
 import { runCheck13 } from './check13.js';
-import { buildRunOpen, runWithProofBundle, type RunOpenInput } from './proof-bundle.js';
+import { buildRunOpen } from './proof-bundle.js';
+import { runBundled, runPrintClose, type RunSteps } from './run-command.js';
 import { verifyBundle } from './verify.js';
 import { openWebSurfaceDriver } from '../surfaces/web/driver.js';
 import { DEFAULT_CRAWL_DEPTH, DEFAULT_CRAWL_MAX_SCREENS, DEFAULT_CRAWL_RPS } from '../surfaces/web/crawler.js';
@@ -495,91 +495,56 @@ async function cmdRun(args: string[], o: Opts, inject: Injected, quiet = false):
   if (exec.noModel && exec.quote && !silent) process.stderr.write(formatQuote(exec.quote) + '\n');
   if (!silent) process.stderr.write(`miqyas: ${plans.length} plan(s)${scopeLabel} against ${o.url}${modeLabel}; run folder ${runDir}\n`);
 
-  const verificationOptions = (driver: Awaited<ReturnType<typeof openWebSurfaceDriver>>): Parameters<typeof runVerification>[0] => ({
-    runId: id,
-    url: o.url as string,
-    plans,
-    runDir,
-    ...(inject.runsDir !== undefined ? { runsDir: inject.runsDir } : {}),
-    ...(retentionDays !== undefined ? { retentionDays } : {}),
-    driver,
-    agent: exec.agent,
-    noModel: exec.noModel,
-    ...(exec.spendGuard ? { spendGuard: exec.spendGuard } : {}),
-    ...(exec.quote ? { quote: exec.quote } : {}),
-    scrub,
-    scrubMethod,
-    settings,
-    ...(repoPath ? { repoPath } : {}),
-    ...(inject.clock ? { clock: inject.clock } : {}),
-    ...(inject.hostPolicyDeps ? { hostPolicyDeps: inject.hostPolicyDeps } : {}),
-    onPlan: (r) => !silent && process.stderr.write(`  ${r.planId}: ${o['dry-run'] ? dryRunStatus(r.error, r.verdict) : r.verdict} (${(r.durationMs / 1000).toFixed(1)} s)\n`),
-  });
+  const url = o.url;
+  // Open the browser, run, print the report, close the browser: one sequence, on both paths.
+  const steps: RunSteps<Awaited<ReturnType<typeof openWebSurfaceDriver>>, RunResult> = {
+    openDriver: () => openWebSurfaceDriver({ headed: settings.headed, allowOtherOrigins: settings.allowOtherOrigins }),
+    run: (driver) =>
+      runVerification({
+        runId: id,
+        url,
+        plans,
+        runDir,
+        ...(inject.runsDir !== undefined ? { runsDir: inject.runsDir } : {}),
+        ...(retentionDays !== undefined ? { retentionDays } : {}),
+        driver,
+        agent: exec.agent,
+        noModel: exec.noModel,
+        ...(exec.spendGuard ? { spendGuard: exec.spendGuard } : {}),
+        ...(exec.quote ? { quote: exec.quote } : {}),
+        scrub,
+        scrubMethod,
+        settings,
+        ...(repoPath ? { repoPath } : {}),
+        ...(inject.clock ? { clock: inject.clock } : {}),
+        ...(inject.hostPolicyDeps ? { hostPolicyDeps: inject.hostPolicyDeps } : {}),
+        onPlan: (r) => !silent && process.stderr.write(`  ${r.planId}: ${o['dry-run'] ? dryRunStatus(r.error, r.verdict) : r.verdict} (${(r.durationMs / 1000).toFixed(1)} s)\n`),
+      }),
+    print: (result) => {
+      if (!quiet) {
+        process.stdout.write(o.json ? JSON.stringify(result.report, null, 2) + '\n' : renderHuman(result.report) + `\nReport: ${path.join(runDir, 'report.md')}\n`);
+      }
+    },
+  };
 
   // --proof-bundle: the run also writes a proof bundle into its folder as it goes, and check 13 runs on the new path
-  // (docs/FOUNDATION.md §5, §15). Without it the run is exactly what it was: the code after this block.
-  if (o['proof-bundle']) return await runWithBundle({ o, id, runDir, plans, settings, quiet, profile, repoPath, inject, exec, verificationOptions });
-
-  const driver = await openWebSurfaceDriver({ headed: settings.headed, allowOtherOrigins: settings.allowOtherOrigins });
-  try {
-    const result = await runVerification(verificationOptions(driver));
-    if (!quiet) {
-      process.stdout.write(o.json ? JSON.stringify(result.report, null, 2) + '\n' : renderHuman(result.report) + `\nReport: ${path.join(runDir, 'report.md')}\n`);
-    }
-    return result.exitCode;
-  } finally {
-    await driver.close();
+  // (docs/FOUNDATION.md §5, §15). Without it the run is exactly what it was.
+  if (o['proof-bundle']) {
+    return await runBundled(
+      {
+        bundle: {
+          dir: runDir,
+          runId: id,
+          open: await buildRunOpen({ url, plans, settings, ...(exec.quote ? { quote: exec.quote } : {}) }),
+          now: inject.now ?? (() => new Date()),
+        },
+        judge: async (recorder) => (profile === 'grade-1' ? [await runCheck13(recorder, repoPath !== undefined ? { repoPath } : {})] : []),
+        printHead: (line) => (o.json ? process.stderr : process.stdout).write(line + '\n'),
+      },
+      steps,
+    );
   }
-}
-
-interface BundleRun {
-  o: Opts;
-  id: string;
-  runDir: string;
-  plans: Plan[];
-  settings: RunOpenInput['settings'];
-  quiet: boolean;
-  profile: ReadinessProfile | undefined;
-  repoPath: string | undefined;
-  inject: Injected;
-  exec: { quote?: RunQuote };
-  verificationOptions: (driver: Awaited<ReturnType<typeof openWebSurfaceDriver>>) => Parameters<typeof runVerification>[0];
-}
-
-/**
- * The run with --proof-bundle. The current path runs as it does without the flag, report printed before the browser
- * closes; then check 13 runs on the new path when the run's profile includes it. The seal holds the fold of the
- * verdict records, and beside it, apart, what the current path concluded. The exit code is still the current path's.
- */
-async function runWithBundle(r: BundleRun): Promise<number> {
-  const { o, runDir, quiet } = r;
-  const headLines: string[] = [];
-  const exitCode = await runWithProofBundle(
-    {
-      dir: runDir,
-      runId: r.id,
-      open: await buildRunOpen({ url: o.url as string, plans: r.plans, settings: r.settings, ...(r.exec.quote ? { quote: r.exec.quote } : {}) }),
-      now: r.inject.now ?? (() => new Date()),
-      print: (line) => headLines.push(line),
-    },
-    async (recorder) => {
-      const driver = await openWebSurfaceDriver({ headed: o.headed, allowOtherOrigins: r.settings.allowOtherOrigins });
-      let result: RunResult;
-      try {
-        result = await runVerification(r.verificationOptions(driver));
-        if (!quiet) {
-          process.stdout.write(o.json ? JSON.stringify(result.report, null, 2) + '\n' : renderHuman(result.report) + `\nReport: ${path.join(runDir, 'report.md')}\n`);
-        }
-      } finally {
-        await driver.close();
-      }
-      const verdicts = r.profile === 'grade-1' ? [await runCheck13(recorder, r.repoPath !== undefined ? { repoPath: r.repoPath } : {})] : [];
-      const currentPath = { verdict: result.report.verdict, exitCode: result.exitCode, plans: result.report.plans.map((p) => ({ id: p.planId, verdict: p.verdict })) };
-      return { result: result.exitCode, fold: { ...foldedResult(verdicts.map((v) => v.verdict)), currentPath } };
-    },
-  );
-  for (const line of headLines) (o.json ? process.stderr : process.stdout).write(line + '\n');
-  return exitCode;
+  return (await runPrintClose(steps)).exitCode;
 }
 
 /** miqyas verify <bundle>: reads the folder it is given and nothing else. */

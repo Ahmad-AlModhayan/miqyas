@@ -1,144 +1,116 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The `run` command around the run itself (docs/FOUNDATION.md §5): what it prints, where, and in what order against
-// closing the browser, with and without --proof-bundle. The browser and the current run are stood in for, so that
-// only what the command does around them is tested; the kernel, the recorder and the judge are real.
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+// The `run` command around the run itself (docs/FOUNDATION.md §5): what it prints, and in what order against closing
+// the browser, with and without --proof-bundle. Both paths run one sequence, handed its parts as plain functions here:
+// a driver that only closes, a run that gives a report, a print that notes it. The kernel, the recorder, the bundle
+// store, check 13 and verify are real.
+import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-const driverState = vi.hoisted(() => ({ closeError: null as Error | null, events: [] as string[] }));
-
-vi.mock('../../src/surfaces/web/driver.js', async (importOriginal) => {
-  const original = await importOriginal<Record<string, unknown>>();
-  return {
-    ...original,
-    openWebSurfaceDriver: async () => ({
-      close: async () => {
-        driverState.events.push('close');
-        if (driverState.closeError) throw driverState.closeError;
-      },
-    }),
-  };
-});
-
-vi.mock('../../src/proof-core/orchestrator.js', async (importOriginal) => {
-  const original = await importOriginal<Record<string, unknown>>();
-  return {
-    ...original,
-    runVerification: async () => {
-      driverState.events.push('run');
-      return {
-        exitCode: 0,
-        report: {
-          verdict: 'pass',
-          dryRun: false,
-          plans: [],
-          totals: { plans: 0, plansPassed: 0, assertions: 0, passed: 0 },
-          method: { settings: { failOn: 'none' } },
-          findings: [],
-        },
-      };
-    },
-  };
-});
-
-const { main } = await import('../../src/entry/cli.js');
-const { verifyBundle } = await import('../../src/entry/verify.js');
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { runCheck13 } from '../../src/entry/check13.js';
+import { type CurrentPathResult, type RunSteps, runBundled, runPrintClose } from '../../src/entry/run-command.js';
+import { verifyBundle } from '../../src/entry/verify.js';
 
 let tmp: string;
-let plan: string;
-let written: { stream: 'out' | 'err'; text: string }[];
+let events: string[];
 
 beforeEach(async () => {
   tmp = await mkdtemp(path.join(os.tmpdir(), 'miqyas-runcmd-'));
-  plan = path.join(tmp, 'plan.json');
-  await writeFile(
-    plan,
-    JSON.stringify({ format: 'miqyas-plan', version: 1, id: 'p', steps: [{ id: 's1', type: 'action', text: 'Open' }, { id: 'a1', type: 'assertion', text: "'Hello'" }] }),
-  );
-  driverState.closeError = null;
-  driverState.events = [];
-  written = [];
-  vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
-    written.push({ stream: 'out', text: String(chunk) });
-    driverState.events.push('stdout');
-    return true;
-  });
-  vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
-    written.push({ stream: 'err', text: String(chunk) });
-    return true;
-  });
+  events = [];
 });
 afterEach(async () => {
-  vi.restoreAllMocks();
   await rm(tmp, { recursive: true, force: true });
 });
 
-const runArgs = (out: string, ...extra: string[]) => ['run', plan, '--url', 'http://127.0.0.1:9/', '--no-model', '--out', out, ...extra];
-const inject = () => ({ spendDir: path.join(tmp, 'spend'), runsDir: path.join(tmp, 'runs') });
+const report: CurrentPathResult = { exitCode: 0, report: { verdict: 'pass', plans: [{ planId: 'p', verdict: 'pass' }] } };
 
-describe('run without --proof-bundle', { timeout: 300_000 }, () => {
-  it('prints the report before it closes the browser, so a close that throws still leaves the report, then the error', async () => {
-    driverState.closeError = new Error('the browser would not close');
-    const out = path.join(tmp, 'out');
-    expect(await main(runArgs(out, '--json'), inject())).toBe(3);
-    expect(driverState.events).toEqual(['run', 'stdout', 'close']);
-    expect(written.filter((w) => w.stream === 'out').map((w) => JSON.parse(w.text).verdict)).toEqual(['pass']);
-    const report = written.findIndex((w) => w.stream === 'out');
-    const error = written.findIndex((w) => w.stream === 'err' && w.text.includes('the browser would not close'));
-    expect(error).toBeGreaterThan(report);
+/** The parts of a run as plain functions, each noting when it ran; `close` throws when given an error. */
+function steps(options: { closeError?: Error; runError?: Error } = {}): RunSteps<{ close(): Promise<void> }, CurrentPathResult> {
+  return {
+    openDriver: async () => {
+      events.push('open');
+      return {
+        close: async () => {
+          events.push('close');
+          if (options.closeError) throw options.closeError;
+        },
+      };
+    },
+    run: async () => {
+      events.push('run');
+      if (options.runError) throw options.runError;
+      return report;
+    },
+    print: (result) => events.push(`print ${result.report.verdict}`),
+  };
+}
+
+const bundled = (dir: string, judge: Parameters<typeof runBundled>[0]['judge'] = async () => []) => ({
+  bundle: { dir, runId: 'run-1', open: { url: 'http://127.0.0.1:9/' }, now: () => new Date('2026-11-18T00:00:00Z') },
+  judge: async (recorder: Parameters<typeof judge>[0]) => {
+    events.push('judge');
+    return await judge(recorder);
+  },
+  printHead: (line: string) => events.push(line.replace(/: .*/, '')),
+});
+
+const ledger = async (dir: string) => (await readFile(path.join(dir, 'ledger.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
+
+describe('run without --proof-bundle', () => {
+  it('opens the browser, runs, prints the report, then closes the browser', async () => {
+    expect(await runPrintClose(steps())).toBe(report);
+    expect(events).toEqual(['open', 'run', 'print pass', 'close']);
   });
 
-  it('writes no ledger and no checkpoint, and prints no head', async () => {
-    const out = path.join(tmp, 'out');
-    expect(await main(runArgs(out), inject())).toBe(0);
-    const files = await readdir(out).catch(() => [] as string[]);
-    expect(files).not.toContain('ledger.jsonl');
-    expect(files).not.toContain('checkpoint');
-    expect(written.some((w) => w.text.includes('proof bundle head'))).toBe(false);
+  it('prints the report before it closes the browser, so a close that throws still leaves the report, then the error', async () => {
+    await expect(runPrintClose(steps({ closeError: new Error('the browser would not close') }))).rejects.toThrow('the browser would not close');
+    expect(events).toEqual(['open', 'run', 'print pass', 'close']);
+  });
+
+  it('closes the browser when the run throws, and prints nothing', async () => {
+    await expect(runPrintClose(steps({ runError: new Error('the run broke') }))).rejects.toThrow('the run broke');
+    expect(events).toEqual(['open', 'run', 'close']);
   });
 });
 
-describe('run with --proof-bundle', { timeout: 300_000 }, () => {
-  it('prints the head on stdout after the report, seals the fold of its verdicts, and the bundle verifies', async () => {
+describe('run with --proof-bundle', () => {
+  it('runs the same sequence, then judges, then prints the head; seals the fold of its verdicts; the bundle verifies', async () => {
     const out = path.join(tmp, 'out');
-    expect(await main(runArgs(out, '--proof-bundle'), inject())).toBe(0);
-    const stdout = written.filter((w) => w.stream === 'out').map((w) => w.text);
-    expect(stdout.at(-1)).toMatch(/^proof bundle head: \d+ records, root [A-Za-z0-9+/=]+\n$/);
-    expect(written.filter((w) => w.stream === 'err').some((w) => w.text.includes('proof bundle head'))).toBe(false);
+    expect(await runBundled(bundled(out), steps())).toBe(0);
+    expect(events).toEqual(['open', 'run', 'print pass', 'close', 'judge', 'proof bundle head']);
 
-    const records = (await readFile(path.join(out, 'ledger.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
-    const seal = records.at(-1);
+    const seal = (await ledger(out)).at(-1);
     expect(seal.t).toBe('run.seal');
-    // No profile, so no claim ran: the fold of no verdict is not known, never a pass.
-    expect(seal.body.result).toEqual({ verdict: 'not_known', verdicts: 0, currentPath: { verdict: 'pass', exitCode: 0, plans: [] } });
+    // No claim ran: the fold of no verdict is not known, never a pass.
+    expect(seal.body.result).toEqual({ verdict: 'not_known', verdicts: 0, currentPath: { verdict: 'pass', exitCode: 0, plans: [{ id: 'p', verdict: 'pass' }] } });
     expect((await verifyBundle(out)).exitCode).toBe(0);
   });
 
-  it('with --json prints the head on stderr and keeps stdout for the report alone', async () => {
+  it('prints the report before it closes the browser, so a close that throws still leaves the report, then the error, unsealed', async () => {
     const out = path.join(tmp, 'out');
-    expect(await main(runArgs(out, '--proof-bundle', '--json'), inject())).toBe(0);
-    const stdout = written.filter((w) => w.stream === 'out').map((w) => w.text);
-    expect(stdout).toHaveLength(1);
-    expect(JSON.parse(stdout[0]!).verdict).toBe('pass');
-    expect(written.filter((w) => w.stream === 'err').some((w) => /^proof bundle head: /.test(w.text))).toBe(true);
+    await expect(runBundled(bundled(out), steps({ closeError: new Error('the browser would not close') }))).rejects.toThrow('the browser would not close');
+    expect(events).toEqual(['open', 'run', 'print pass', 'close']);
+    expect((await ledger(out)).some((r) => r.t === 'run.seal')).toBe(false);
   });
 
-  it('a copy of the bundle in another folder still verifies, and the ledger holds none of the paths it was given', async () => {
+  it('seals check 13 on the new path; a copy of the bundle in another folder still verifies, and holds none of the paths it was given', async () => {
     const out = path.join(tmp, 'deep', 'run folder');
-    expect(await main(runArgs(out, '--proof-bundle', '--repo', tmp), inject())).toBe(0);
-    const ledger = await readFile(path.join(out, 'ledger.jsonl'), 'utf8');
-    expect(ledger).not.toContain(tmp);
-    expect(ledger).not.toContain(path.basename(tmp));
-    expect(ledger).not.toMatch(/(^|[^A-Za-z])[A-Za-z]:[\\/]/); // a drive, not the scheme of a URL
+    expect(await runBundled(bundled(out, async (recorder) => [await runCheck13(recorder, { repoPath: tmp })]), steps())).toBe(0);
+    const records = await ledger(out);
+    expect(records.filter((r) => r.t === 'verdict').map((r) => r.body.verdict)).toEqual(['not_checked']);
+    expect(records.at(-1).body.result).toMatchObject({ verdict: 'not_known', verdicts: 1 });
+
+    const text = await readFile(path.join(out, 'ledger.jsonl'), 'utf8');
+    expect(text).not.toContain(tmp);
+    expect(text).not.toContain(path.basename(tmp));
+    expect(text).not.toMatch(/(^|[^A-Za-z])[A-Za-z]:[\\/]/); // a drive, not the scheme of a URL
 
     const copy = path.join(await mkdtemp(path.join(os.tmpdir(), 'miqyas-runcmd-copy-')), 'moved');
     try {
       await cp(out, copy, { recursive: true });
-      const report = await verifyBundle(copy);
-      expect(report.lines.join('\n')).toContain('1. Intact? yes');
-      expect(report.exitCode).toBe(0);
+      const verified = await verifyBundle(copy);
+      expect(verified.lines.join('\n')).toContain('1. Intact? yes');
+      expect(verified.exitCode).toBe(0);
     } finally {
       await rm(path.dirname(copy), { recursive: true, force: true });
     }

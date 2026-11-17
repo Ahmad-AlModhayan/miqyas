@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ClaimRejection, loadClaim } from '../../src/kernel/claim.js';
-import { type Fact, type PlacedFact, fold, judgeSet } from '../../src/kernel/judge.js';
+import type { Fact, PlacedFact } from '../../src/kernel/fact.js';
+import { fold, judgeSet } from '../../src/kernel/judge.js';
 import { sha256 } from '../kernel-helpers.js';
 
 const CLAIM_FILE = path.resolve(import.meta.dirname, '../../src/claims/readiness-13-dependencies.json');
@@ -108,8 +109,14 @@ describe("check 13's claim", () => {
   });
 });
 
+
 /** A small claim whose rule can error: a score compared as a number. */
-const scoreClaim = (examples: unknown[], holds = 'item.score > 7') => ({
+const done = { kind: 'collection', by: 'c@1', body: { status: 'complete' } };
+const failingExample = { name: 'nine fails', expect: 'fail', facts: [{ kind: 't.item', by: 'c@1', body: { score: 9 } }, done] };
+const passingExample = { name: 'one passes', expect: 'pass', facts: [{ kind: 't.item', by: 'c@1', body: { score: 1 } }, done] };
+const unknownExample = { name: 'not collected is not known', expect: 'not_checked', facts: [{ kind: 'collection', by: 'c@1', body: { status: 'failed' } }] };
+const allThree = [failingExample, passingExample, unknownExample];
+const scoreClaim = (examples: unknown[] = allThree, holds = 'item.score > 7', extra: Record<string, unknown> = {}) => ({
   id: 'test.score',
   version: 1,
   title: 'no item scores over 7',
@@ -119,19 +126,60 @@ const scoreClaim = (examples: unknown[], holds = 'item.score > 7') => ({
   from: 't.item',
   holds,
   covered: 'ctx.collections["c@1"].status == "complete"',
+  ...extra,
   examples,
 });
-const done = { kind: 'collection', by: 'c@1', body: { status: 'complete' } };
-const failingExample = { name: 'nine fails', expect: 'fail', facts: [{ kind: 't.item', by: 'c@1', body: { score: 9 } }, done] };
+const complete = () => fact('collection', 'c@1', { status: 'complete' });
+const item = (score: unknown, more: Partial<Fact> = {}): Fact => ({ ...fact('t.item', 'c@1', { score } as Fact['body']), ...more });
 
 describe('the judge', () => {
   it('reads a rule that gives an error as uncertain, never as a pass', async () => {
-    const loaded = await loadClaim(encode(scoreClaim([failingExample])), sha256);
-    const facts = placed(fact('t.item', 'c@1', { score: 'high' }), fact('collection', 'c@1', { status: 'complete' }));
-    const verdict = judgeSet(loaded, { subject: 'repository', facts });
+    const loaded = await loadClaim(encode(scoreClaim()), sha256);
+    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(item('high'), complete()) });
     expect(verdict.verdict).toBe('not_checked');
     expect(verdict.reason).toBe('uncertain items: an expression gave an error');
     expect(verdict.items).toEqual({ held: 0, failed: 0, outside: 0, uncertain: 1 });
+  });
+
+  it('a counterexample fails it even beside an item whose rule gives an error', async () => {
+    const loaded = await loadClaim(encode(scoreClaim()), sha256);
+    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(item('high'), item(9), complete()) });
+    expect(verdict.verdict).toBe('fail');
+    expect(verdict.shown).toEqual([4]);
+  });
+
+  it('with nothing to check, passes marked vacuous when the claim says vacuous: pass', async () => {
+    const loaded = await loadClaim(encode(scoreClaim(allThree, undefined, { vacuous: 'pass' })), sha256);
+    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(complete()) });
+    expect(verdict.verdict).toBe('pass');
+    expect(verdict.vacuous).toBe(true);
+    expect(verdict.reason).toBeUndefined();
+  });
+
+  it('with nothing to check, is not known, marked vacuous, when the claim says vacuous: not_checked', async () => {
+    const loaded = await loadClaim(encode(scoreClaim(allThree, undefined, { vacuous: 'not_checked' })), sha256);
+    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(complete()) });
+    expect(verdict.verdict).toBe('not_checked');
+    expect(verdict.reason).toBe('nothing to check');
+    expect(verdict.vacuous).toBe(true);
+  });
+
+  it('a pass over items checked is not vacuous', async () => {
+    const loaded = await loadClaim(encode(scoreClaim(allThree, undefined, { vacuous: 'pass' })), sha256);
+    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(item(1), complete()) });
+    expect(verdict.verdict).toBe('pass');
+    expect(verdict.vacuous).toBeUndefined();
+  });
+
+  it('gives depth measured when a fact it read withholds a field, derived when one was derived, facts otherwise', async () => {
+    const loaded = await loadClaim(encode(scoreClaim()), sha256);
+    const depthOf = (...facts: Fact[]) => judgeSet(loaded, { subject: 'repository', facts: placed(...facts) }).depth;
+    expect(depthOf(item(1, { withheld: ['score'] }), complete())).toBe('measured');
+    expect(depthOf(item(1, { from: [1] }), complete())).toBe('derived');
+    expect(depthOf(item(1, { withheld: ['score'], from: [1] }), complete())).toBe('measured');
+    expect(depthOf(item(1), complete())).toBe('facts');
+    // A fact outside the view withholds nothing from this claim.
+    expect(depthOf(item(1), complete(), fact('t.other', 'c@1', { score: 1 }), { ...fact('t.other', 'c@1', {}), withheld: ['score'] })).toBe('facts');
   });
 
   it('folds: any fail fails, anything not known is not known, an empty set never passes', () => {
@@ -143,23 +191,48 @@ describe('the judge', () => {
 });
 
 describe('a claim file that is refused', () => {
-  it('has no failing example', async () => {
-    const passing = { name: 'one passes', expect: 'pass', facts: [{ kind: 't.item', by: 'c@1', body: { score: 1 } }, done] };
-    await expect(loadClaim(encode(scoreClaim([passing])), sha256)).rejects.toThrow(/no failing example/);
+  const refused = (claim: unknown) => expect(loadClaim(encode(claim), sha256)).rejects;
+
+  it('has no failing example, no passing one, or none that is not known (ADR 0014)', async () => {
+    await refused(scoreClaim([passingExample, unknownExample])).toThrow(/no example that gives fail/);
+    await refused(scoreClaim([failingExample, unknownExample])).toThrow(/no example that gives pass/);
+    await refused(scoreClaim([failingExample, passingExample])).toThrow(/no example that gives not_checked/);
   });
 
   it('has an example that does not give what it says', async () => {
     const wrong = { name: 'nine passes', expect: 'pass', facts: failingExample.facts };
-    await expect(loadClaim(encode(scoreClaim([failingExample, wrong])), sha256)).rejects.toThrow(/"nine passes" gives fail, not pass/);
+    await refused(scoreClaim([...allThree, wrong])).toThrow(/"nine passes" gives fail, not pass/);
   });
 
   it('has a rule over a CEL limit, or outside the subset', async () => {
     const long = `item.score > 7${' || item.score > 7'.repeat(70)}`;
-    await expect(loadClaim(encode(scoreClaim([failingExample], long)), sha256)).rejects.toThrow(/^holds: limit: .*maxLength/);
-    await expect(loadClaim(encode(scoreClaim([failingExample], 'item.score > 7.5')), sha256)).rejects.toBeInstanceOf(ClaimRejection);
+    await refused(scoreClaim(allThree, long)).toThrow(/^holds: limit: .*maxLength/);
+    await refused(scoreClaim(allThree, 'item.score > 7.5')).toBeInstanceOf(ClaimRejection);
   });
 
   it('has a shape the judge does not judge yet', async () => {
-    await expect(loadClaim(encode({ ...scoreClaim([failingExample]), shape: 'pair' }), sha256)).rejects.toThrow(/only "set" is judged so far/);
+    await refused({ ...scoreClaim(), shape: 'pair' }).toThrow(/only "set" is judged so far/);
+  });
+
+  it('has a quantifier other than none, naming it', async () => {
+    for (const quantifier of ['every', 'some', 'count']) {
+      await refused({ ...scoreClaim(), quantifier }).toThrow(new RegExp(`quantifier "${quantifier}": only "none" is judged so far`));
+    }
+  });
+
+  it('uses where, usable or count, naming the field', async () => {
+    for (const field of ['where', 'usable', 'count']) {
+      await refused(scoreClaim(allThree, undefined, { [field]: 'true' })).toThrow(new RegExp(`has "${field}": it is not judged yet`));
+    }
+  });
+
+  it('has a key it does not know, at the top, in its view or in an example, naming the key', async () => {
+    await refused(scoreClaim(allThree, undefined, { vacous: 'pass' })).toThrow(/unknown key "vacous"/);
+    await refused({ ...scoreClaim(), view: { kinds: ['t.item', 'collection'], subjects: ['x'] } }).toThrow(/unknown key "view.subjects"/);
+    await refused(scoreClaim([{ ...failingExample, expected: 'fail' }, passingExample, unknownExample])).toThrow(/example 0 has an unknown key "expected"/);
+  });
+
+  it('has a vacuous rule other than pass or not_checked', async () => {
+    await refused(scoreClaim(allThree, undefined, { vacuous: 'fail' })).toThrow(/vacuous other than pass or not_checked/);
   });
 });
