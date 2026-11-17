@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { compile, evaluate } from '../../src/kernel/cel.js';
 
@@ -64,4 +65,21 @@ describe('an evaluation error is never true or false', () => {
       expect(evaluate(compile('true'), { item: value })).toBe('error');
     }
   });
+});
+
+describe('the examples in docs/cel-subset.md', () => {
+  const doc = readFileSync(new URL('../../docs/cel-subset.md', import.meta.url), 'utf8');
+  const examples: Array<[string, string, Record<string, unknown>, 'true' | 'false']> = [
+    ['where', 'item.role == "button" && !item.hidden', { item: { role: 'button', hidden: false } }, 'true'],
+    ['holds', 'item.name.size() > 0 && !normalize(item.name).contains("click here")', { item: { name: ' Save ' } }, 'true'],
+    ['usable', 'item.owner_status == 200 && item.other_status != 401', { item: { owner_status: 200, other_status: 401 } }, 'false'],
+    ['count', 'n >= 1 && n <= 3', { n: 2 }, 'true'],
+    ['covered', 'ctx.pages.size() > 0 && ctx.inputs.accounts.size() >= 2', { ctx: { pages: ['/'], inputs: { accounts: ['a', 'b'] } } }, 'true'],
+  ];
+  for (const [place, expression, variables, verdict] of examples) {
+    it(`${place}: appears in the document and gives ${verdict}`, () => {
+      expect(doc).toContain('```cel\n' + expression + '\n```');
+      expect(evaluate(compile(expression), variables)).toBe(verdict);
+    });
+  }
 });
