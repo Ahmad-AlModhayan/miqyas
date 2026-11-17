@@ -77,7 +77,9 @@ describe('the CEL conformance suite, the subset Miqyas allows, against the chose
   });
 
   it('holds the tests the data file says it holds', () => {
-    expect(suite.tests.length).toBeGreaterThanOrEqual(400);
+    expect(suite.tests.length).toBe(468);
+    const readme = readFileSync(new URL('../conformance/cel/README.md', import.meta.url), 'utf8');
+    expect(readme.replace(/\s+/g, ' ')).toContain(`The file holds ${suite.tests.length} cases`);
     const sections = new Set(suite.tests.map((test) => test.section.split('/')[0]));
     for (const section of ['basic', 'comparisons', 'integer_math', 'lists', 'logic', 'macros', 'string', 'fields']) {
       expect(sections.has(section), section).toBe(true);

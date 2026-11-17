@@ -13,7 +13,8 @@ change of library or of version is checked against the same cases in CI.
   CEL value, for example `{"int64Value": "3"}`).
 - Licence: Apache-2.0, the licence of cel-spec. Its notice is in [`NOTICE.md`](../../../NOTICE.md).
 
-The expressions, bindings and expected values are the suite's own and are not edited.
+The expressions, bindings and expected values are the suite's own and are not edited. The file holds 468 cases, in
+the suite's order.
 
 ## How the subset was chosen
 
@@ -25,7 +26,9 @@ A case is left out when it:
 
 - uses a feature outside the subset: bytes, doubles, unsigned integers, timestamps and durations, protobuf messages,
   optional syntax (`.?`, `[?`), comments, `type()` and other functions that are not allowed;
-- uses a backtick-quoted field name (the library does not parse them);
+- uses a backtick-quoted field name (the library does not parse them). A backtick inside a string literal is fine,
+  and the `parse/string_literals` cases with one are kept: they show that the kernel's own tokenizer and the library
+  read escapes and raw strings the same way;
 - needs a type declaration, a container or a check-only run (the kernel has no type checker);
 - binds a variable to a map whose keys are not text (a fact is JSON data, and JSON keys are text).
 

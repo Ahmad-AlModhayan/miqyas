@@ -225,6 +225,14 @@
    }
   },
   {
+   "section": "basic/functions",
+   "name": "binop",
+   "expr": "1 + 1",
+   "value": {
+    "int64Value": "2"
+   }
+  },
+  {
    "section": "comparisons/eq_literal",
    "name": "eq_int",
    "expr": "1 == 1",
@@ -1301,6 +1309,22 @@
    "expr": "string(-456)",
    "value": {
     "stringValue": "-456"
+   }
+  },
+  {
+   "section": "conversions/identity",
+   "name": "int",
+   "expr": "int(1)",
+   "value": {
+    "int64Value": "1"
+   }
+  },
+  {
+   "section": "conversions/identity",
+   "name": "string",
+   "expr": "string('hello')",
+   "value": {
+    "stringValue": "hello"
    }
   },
   {
@@ -2756,6 +2780,54 @@
   },
   {
    "section": "parse/string_literals",
+   "name": "single_quoted_escaped_punctuation",
+   "expr": "' \\\\ \\? \\\" \\' \\` '",
+   "value": {
+    "stringValue": " \\ ? \" ' ` "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "double_quoted_escaped_punctuation",
+   "expr": "\" \\\\ \\? \\\" \\' \\` \"",
+   "value": {
+    "stringValue": " \\ ? \" ' ` "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "triple_single_quoted_escaped_punctuation",
+   "expr": "''' \\\\ \\? \\\" \\' \\` '''",
+   "value": {
+    "stringValue": " \\ ? \" ' ` "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "triple_double_quoted_escaped_punctuation",
+   "expr": "\"\"\" \\\\ \\? \\\" \\' \\` \"\"\"",
+   "value": {
+    "stringValue": " \\ ? \" ' ` "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "triple_single_quoted_unescaped_punctuation",
+   "expr": "''' ? \" ' ` '''",
+   "value": {
+    "stringValue": " ? \" ' ` "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "triple_double_quoted_unescaped_punctuation",
+   "expr": "\"\"\" ? \" ' ` \"\"\"",
+   "value": {
+    "stringValue": " ? \" ' ` "
+   }
+  },
+  {
+   "section": "parse/string_literals",
    "name": "single_quoted_escaped_special_control_characters",
    "expr": "' \\a \\b \\f \\t \\v '",
    "value": {
@@ -3248,6 +3320,70 @@
    "expr": "\"\"\" 򈢈 \"\"\"",
    "value": {
     "stringValue": " 򈢈 "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "raw_single_quoted_escapes",
+   "expr": "r' \\\\ \\? \\\" \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 '",
+   "value": {
+    "stringValue": " \\\\ \\? \\\" \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "raw_double_quoted_escapes",
+   "expr": "r\" \\\\ \\? \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 \"",
+   "value": {
+    "stringValue": " \\\\ \\? \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "raw_triple_single_quoted_escapes",
+   "expr": "r''' \\\\ \\? \\\" \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 '''",
+   "value": {
+    "stringValue": " \\\\ \\? \\\" \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "raw_triple_double_quoted_escapes",
+   "expr": "r\"\"\" \\\\ \\? \\\" \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 \"\"\"",
+   "value": {
+    "stringValue": " \\\\ \\? \\\" \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "upper_raw_single_quoted_escapes",
+   "expr": "R' \\\\ \\? \\\" \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 '",
+   "value": {
+    "stringValue": " \\\\ \\? \\\" \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "upper_raw_double_quoted_escapes",
+   "expr": "R\" \\\\ \\? \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 \"",
+   "value": {
+    "stringValue": " \\\\ \\? \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "upper_raw_triple_single_quoted_escapes",
+   "expr": "R''' \\\\ \\? \\\" \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 '''",
+   "value": {
+    "stringValue": " \\\\ \\? \\\" \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 "
+   }
+  },
+  {
+   "section": "parse/string_literals",
+   "name": "upper_raw_triple_double_quoted_escapes",
+   "expr": "R\"\"\" \\\\ \\? \\\" \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 \"\"\"",
+   "value": {
+    "stringValue": " \\\\ \\? \\\" \\' \\` \\a \\b \\f \\t \\v \\n \\r \\000 \\x00 \\X00 \\u0000 \\U00000000 "
    }
   },
   {
