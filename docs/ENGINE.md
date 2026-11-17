@@ -246,12 +246,13 @@ the engine does less:
 | Where | What runs |
 |---|---|
 | a sandbox | every axis |
-| a test host, or an owned host, with `--active` | `who` for reads, `view`, `presentation`, `build`: requests that only read |
+| a test host, or an owned host, with `--active` | `who` for reads, `view`, `presentation`: requests that only read |
 | the same, with `--allow-writes` and what the gate requires | `door`, `again` and `round trip`, with the inert values of ALGORITHMS D4, tagged for clean-up; `after` for a test account's own log-out |
 | any other host | `presentation` and what a visitor sees |
 
-`together`, `failure`, `who` for writes, and `after` for a deletion or a revocation are sandbox-only. Elsewhere their
-cells read "can't tell: needs a sandbox", and a law that can't run at all is `blocked`.
+`together`, `failure`, `who` for writes, and `after` for a deletion or a revocation are sandbox-only. So is `build`,
+which needs the previous build and this one started in the same run (§9). Elsewhere their cells read "can't tell:
+needs a sandbox", and a law that can't run at all is `blocked`.
 
 ## 11. Measuring the engine
 
@@ -276,7 +277,7 @@ This is a design, and this is the evidence for and against it as of the date abo
 
 | Axis | What has been shown | Where the false alarms came from |
 |---|---|---|
-| who | A black-box tester that replays requests as another account, and reads the effect back from another page, found 89 vulnerabilities in 20 applications, 54 of them new. On changes to another user's data it raised no false alarm in 53 findings, where a widely used replay tool managed 62% precision. On reads, which it compares by similarity, 8 of its 44 reports were false alarms. An older study worked out what each role can reach and tried the rest by direct request, which is the "interface as intent" idea used here. | data meant to be public; pages with nothing sensitive; a fixed similarity threshold on pages that vary; an expired session |
+| who | A black-box tester that replays requests as another account, and reads the effect back from another page, found 89 vulnerabilities in 20 applications, 54 of them new. On changes to another user's data it raised no false alarm in 53 findings, where a widely used replay tool managed 62% precision. On reads, which that tester compares by similarity, 8 of its 44 reports were false alarms. An older study worked out what each role can reach and tried the rest by direct request, which is the "interface as intent" idea used here. | data meant to be public; pages with nothing sensitive; a fixed similarity threshold on pages that vary; an expired session |
 | together | Reading the database traces of 12 shop applications turned up 22 exploitable races in 11 of them (stock, vouchers, carts). A person had to name each invariant and trigger each race by hand, about two hours apiece. A newer technique releases requests within a millisecond of each other. | races that a lock or a re-check prevents; timing |
 | door | Limits a form enforces and the server doesn't were found in every one of six applications by one tool, and 47 across nine applications by its predecessor. | a refusal page that resembles success; limits the product doesn't really need |
 | failure | In large data stores, 92% of catastrophic failures came from mishandling errors the software itself had signalled, and simple tests of the error paths would have caught 58%. Nothing comparable was found for web applications. | faults at points that can't fail; effects that rightly stay, such as a sent email |

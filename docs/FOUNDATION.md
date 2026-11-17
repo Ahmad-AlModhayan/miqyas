@@ -176,7 +176,7 @@ interface Claim {
   view: Partial<View>;             // the engine fills in the subject and, for a plan step, the window
   vacuous?: 'pass' | 'not_checked';   // what an empty domain means; default 'not_checked'
   uses?: string[];                 // derivations this claim relies on, pinned as id@version
-  usable?: string;                 // CEL over one item, pair or event: unless true, the measurement can't be used
+  usable?: string;                 // `set` and `pair` claims: CEL over one item or pair; unless true, it isn't used
 
   all?: Claim[]; any?: Claim[];    // a combination; an empty list is rejected
 

@@ -872,11 +872,12 @@ read:
   broken     when leak is not empty, and the lesser identity's interface was explored to its coverage rule
   can't tell when leak is not empty and the exploring fell short
 
-write, for an operation on an object the owner already has in S (a change, a deletion, an action on it):
+write, for an operation that names an object the owner already has in S: a change, a deletion, an action on it,
+or a creation under it (a line on the owner's invoice, a comment on the owner's record)
   touched = the owner's rows in S that the reference run changed, and what the owner then reads back of them
   broken  when the test run, sent as the lesser identity, changed any row in touched,
           or changed what the owner reads back
-  doesn't apply to an operation that creates something new: it addresses nothing of the owner's
+  doesn't apply to a creation that names nothing of the owner's
   doesn't apply when the lesser identity's own interface offers that action on that object
 ```
 
