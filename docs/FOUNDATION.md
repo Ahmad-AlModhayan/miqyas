@@ -100,8 +100,8 @@ Rules every collector follows:
   (ADR 0003).
 
 A **finding** is a fact of kind `finding`: a problem no claim asked about, with a source (a derivation, an adapter or
-an agent), a severity and the facts it rests on. A model-proposed finding is `unconfirmed` until a derivation backs
-it. Findings are recorded in the ledger and never carry a verdict.
+an agent), a severity and the facts it rests on. A model-proposed finding is `unconfirmed` until a derivation or an
+experiment backs it. Findings are recorded in the ledger and never carry a verdict.
 
 ### Kinds in the foundation
 
@@ -110,7 +110,7 @@ it. Findings are recorded in the ledger and never carry a verdict.
 | `ui.snapshot` | web worker; later mobile and desktop | URL, title, language, direction, viewport, whether it was truncated, whether the page had settled; the rendered nodes (role, name, state, text, box in whole pixels, whether rendered) as a JSON blob, and the screenshot as a blob |
 | `ui.event` | web worker | a page error, a console error, a dialog |
 | `ui.control` | crawl | one control tried: its label, what changed (URL, nodes, requests), or why it wasn't tried |
-| `http.exchange` | web worker, API worker | method, URL and its route template, status, selected headers, body shape and keyed digest, its cause, and as whom it was sent (anonymous, account A, account B) |
+| `http.exchange` | web worker, API worker | method, URL and its route template, status, selected headers, body shape and keyed digest, its cause, and as whom it was sent (nobody, or a named account with its role) |
 | `asset` | web worker | one served file (bundle, source map) or storage entry, as a blob |
 | `code.coverage` | web worker | which functions and blocks of the served scripts ran, per session |
 | `a11y.violation` | axe adapter | rule, impact, the node |
@@ -124,8 +124,9 @@ it. Findings are recorded in the ledger and never carry a verdict.
 | `sample` | any collector | one numeric measurement with its unit: a duration, a size, a yes or no |
 | `model.state`, `model.edge` | derivations | the target model: a state and a transition between two states (ALGORITHMS C) |
 | `entity`, `property` | extractors | one thing a target is made of, and one observation about it: yes, no or not known, with how it is known (ENGINE §8) |
-| `capsule`, `experiment` | the experiment engine | a capture of a sandbox and the recipe that made it; two runs from one capsule that differ along one axis, their checks and the outcome (ENGINE §3 to §6) |
-| `footprint` | the experiment engine | what one action changed, as far as the recipe could see: rows by table and column, requests sent, what the page shows |
+| `capsule`, `fidelity` | the experiment engine | a capture of a sandbox: its manifest, the recipe that made it and what that recipe did with each store; whether a restore and a fork answered as the original did, and which reads moved (ALGORITHMS M1, M2) |
+| `experiment` | the experiment engine | the runs of one experiment and the result of each of its checks. It holds no result of its own: the law's claim is judged over it (ALGORITHMS L1) |
+| `footprint` | a derivation over two recorded listings of state | what one action changed, as far as the recipe could see: rows by table and column, requests sent, what the page shows (ALGORITHMS M4) |
 | `collection` | every collector, or the engine | see above |
 | `finding` | derivations, adapters, agents | see above |
 
@@ -175,6 +176,7 @@ interface Claim {
   view: Partial<View>;             // the engine fills in the subject and, for a plan step, the window
   vacuous?: 'pass' | 'not_checked';   // what an empty domain means; default 'not_checked'
   uses?: string[];                 // derivations this claim relies on, pinned as id@version
+  usable?: string;                 // CEL over one item, pair or event: unless true, the measurement can't be used
 
   all?: Claim[]; any?: Claim[];    // a combination; an empty list is rejected
 
@@ -214,7 +216,8 @@ spacing, implemented identically wherever claims are evaluated.
 ### The judge
 
 For a `set` claim the judge sorts every candidate item into one of four groups: it **holds**, it **fails**, it is
-**outside** the claim (`where` is false), or it is **uncertain** (`where` or `holds` gave an error). Then:
+**outside** the claim (`where` is false), or it is **uncertain** (`where` or `holds` gave an error, or the claim's
+`usable` rule isn't true of it). Then:
 
 | Quantifier | `fail` when | `pass` when | otherwise `not_checked` |
 |---|---|---|---|
@@ -226,6 +229,11 @@ For a `set` claim the judge sorts every candidate item into one of four groups: 
 Reading the table: a counterexample settles an `every` or a `none` claim at any coverage, and a witness settles a
 `some` claim at any coverage. Not finding one settles nothing until `covered` is true. An error is never read as true
 or false, in `where` as much as in `holds`, and an error in `covered` means not covered.
+
+A claim over measurements can say when one is **usable**. A replay as a second account shows nothing if that account's
+session had expired, so the claim names the checks that must have passed: the owner's own request returned the data,
+and the second account could make a request it is allowed. An item that isn't usable is uncertain. It can make
+neither a pass nor a fail.
 
 When no item is inside the claim, an `every` or `none` claim is **vacuous**. A vacuous claim is `not_checked`, with
 the reason "nothing to check", unless the claim says `vacuous: 'pass'`, which a claim may say only when its coverage
@@ -244,7 +252,7 @@ is the mirror.
 | Verdict | Meaning | Typical reasons |
 |---|---|---|
 | `blocked` | the person must supply something | an input, a secret, a flag, a tool that isn't installed, a step that was never bound |
-| `not_checked` | Miqyas didn't establish it | coverage short, a collector failed, dropped for time or money, an expression errored, nothing to check, too few samples |
+| `not_checked` | Miqyas didn't establish it | coverage short, a collector failed, dropped for time or money, an expression errored, a measurement couldn't be used, nothing to check, too few samples |
 | `unverified` | it looked like a pass, on a basis not yet accepted | a binding nobody reviewed that code couldn't show to be tied to the assertion and able to fail |
 
 Each carries a typed reason and, where it applies, what to add. That list is computed from the claim's unmet `needs`;
@@ -401,7 +409,7 @@ one gate (ADR 0008).
 | interact | use the product through its own interface the way a person's plan says, submissions included |
 | probe | send a request the interface didn't send, that only reads |
 | write | send a request that changes stored state or spends the target's money |
-| disrupt | break or degrade the target on purpose: faults, restarts, clock skew, a mutated build, load |
+| disrupt | break or degrade the target on purpose: faults, restarts, clock skew, a mutated build, load; capturing and restoring a sandbox's state |
 | execute | run the target's own code on this machine: its tests, its command-line program |
 
 An **environment class belongs to an origin**, not to a run. Every origin a run touches is classed by itself:
@@ -430,7 +438,8 @@ The table is a ceiling, and it tightens one thing: a host that is a test host on
 the ownership token before Miqyas writes to it or disrupts it, because a name proves nothing about who owns it. What
 Miqyas's own probes do stays as the threat model says, now as deny rules with a test each: inert markers only, the
 second account only reads, only ids the test accounts own with no enumeration, and anything a target stores is tagged
-with the run id and listed for clean-up.
+with the run id and listed for clean-up. These rules bind on every origin that isn't a sandbox. In a sandbox the
+engine started, an experiment may write as any identity it made and send what an interface forbids (ENGINE §3).
 
 ### How the gate decides
 
@@ -453,6 +462,12 @@ with the run id and listed for clean-up.
   becomes "leave the set of origins the run is about"; "run an active check on a host that isn't a test host or an
   owned host" becomes "probe, write to or disrupt an origin that isn't a sandbox, a test host, an owned host or the
   backend of one"; and "write to or disrupt a live physical process" is new.
+- **What was seen to change counts.** A route whose footprint in a sandbox wasn't empty is classed as a write from
+  then on, whatever its method. A footprint can raise a class and never lower one (ALGORITHMS B1, M4).
+- **Capsules are sandbox-only.** Capturing, restoring and forking are `disrupt` effects, and a deny rule refuses them
+  on any origin the engine didn't start, whatever was granted.
+- **Seeds go only into the corpus.** Planting a defect to measure the experiment engine is refused on any subject
+  that isn't a copy of an application from the public corpus (ADR 0018).
 - **Isolation for every session.** The in-process proxy that keeps a browser session to its origins (requests,
   WebSockets, workers and frames included, with no direct WebRTC) is a gate rule for every web session, not only for
   workers in their own process.
@@ -515,8 +530,9 @@ shaped by more than one:
 - **web**: Playwright Chromium. Actions: navigate, click, fill, select, press, scroll, wait. Facts: `ui.snapshot`,
   `ui.event`, `ui.control`, `http.exchange`, `asset`, `code.coverage`, `a11y.violation`. The crawl is a collector
   built on it.
-- **api**: an HTTP client with named identities (anonymous, account A, account B). One action, `request`. Facts:
-  `http.exchange`. The backend, access and parameter probes behind checks 8 to 12 become collectors on it.
+- **api**: an HTTP client with named identities (nobody, and each account the run was given, with its role). One
+  action, `request`. Facts: `http.exchange`. The backend, access and parameter probes behind checks 8 to 12 become
+  collectors on it.
 
 Next comes the **engine** worker, also for the server surface: a schedule fixed by a recorded random number, a fault
 plan, a recorded history of operations (invoked, ok, failed, and unknown for a call that timed out), and checkers
@@ -624,24 +640,30 @@ starts, and decided there.
 |---|---|---|---|---|
 | 1 | crawl; errors attributed to screens | set: every screen has no page error, uncaught console error or same-origin 5xx that a page caused | at least one screen, and the crawl wasn't stopped early | derived |
 | 2 | crawl | set: every control tried changed something, by a recorded measure | at least one control tried; those not tried are listed | facts |
-| 3 | plan runner; API worker | pair: after the log-in steps, a request that was refused anonymously succeeds; after sign-up, the new account can log in | both flows ran to the end | facts |
+| 3 | plan runner; API worker | pair: after the log-in steps, a request returns what it didn't return with no session; after sign-up, the new account can log in | both flows ran to the end | facts |
 | 4 | crawl, axe adapter | set: no violation is critical or serious | axe finished on every screen reached | facts |
 | 5 | crawl, gitleaks adapter | set: no match is a known key format | every asset recorded was handed over, and the tool finished | derived |
 | 6 | repository reader, gitleaks adapter | set: no match is a known key format | working tree and history both scanned | measured |
 | 7 | migrations reader | set: every public table has row-level security on | every migration file parsed, and at least one table found | derived |
 | 8 | backend detection, API probe | set: no table read with the public key returns rows | every backend detected was probed | facts |
 | 9 | API probe as the second account | pair: no record the first account read is readable by the second | every record chosen was replayed | derived |
-| 10 | API probe with no session | pair: every route seen behind log-in refuses the same request with no session | every such route replayed | derived |
+| 10 | API probe with no session | pair: no route seen behind log-in gives a request with no session what it gave the session | every such route replayed | derived |
 | 11 | API parameter probe | set: no parameter reflects the marker unescaped or redirects to it | at least one parameter probed | derived |
-| 12 | API probe with no session | pair: every route recorded as spending money refuses with no session | every such route replayed | derived |
+| 12 | API probe with no session | pair: no route recorded as spending money gives a request with no session what it gave the session | every such route replayed | derived |
 | 13 | lockfile reader, osv adapter | set: no advisory is critical, high or malicious | every lockfile found was scanned against a present database | derived |
 
-Three things in this table are deliberate changes. Check 3 stops being a model's judgement: "log-in works" is what the
+Four things in this table are deliberate changes. Check 3 stops being a model's judgement: "log-in works" is what the
 server does with the session afterwards, and only finding the form fields needs binding, once per app, kept in the
 project's bindings and not in a file Miqyas ships. Until that binding exists the check is `blocked`, saying to bind
 once; twelve of the thirteen checks still need no model at all. Checks 9 to 12
 keep enough of each exchange (status, shape, keyed digests, the text around Miqyas's own marker) for a derivation to
 reach the same answer again. Check 6 is `measured` because a repository's history isn't copied into a bundle.
+
+Checks 9, 10 and 12 are the `who` axis of the experiment engine, run on a host that can't be restored, and they are
+decided as that law is (ALGORITHMS L3): on what each response carries, never on its status. Each names what makes a
+replay usable: the session's own request returned the data, and the other identity is live. On such a host a response
+is all there is to read, so check 12 shows that nothing came back to a request with no session, not that nothing was
+spent. The law for writes, judged on what is read back, runs in a sandbox (MAP §6, step 6).
 
 The drop order under a time limit is no longer a list in code: each claim has a priority, and §10 uses it.
 
@@ -754,7 +776,9 @@ of, as [OPEN_MODEL.md](OPEN_MODEL.md) sets them.
 ## 15. Migration
 
 The new foundation is built beside the old code and takes over one piece at a time. The bundle format is version 0,
-and may change, until the gate and both workers write to it; it becomes version 1 at the first release.
+and may change, until the gate and both workers write to it; it becomes version 1 at the first release. The order of
+building is [MAP §6](MAP.md), which places the experiment engine's steps among these. This section says only what the
+old code hands over.
 
 1. **Kernel first**, with one check end to end through the new path behind a flag: facts, a claim with its failing
    example, a view, the judge, the ledger, `verify`.
@@ -767,9 +791,10 @@ and may change, until the gate and both workers write to it; it becomes version 
 6. **Reports** rendered from the bundle.
 7. **Delete** the old orchestrator, `readiness.ts`, `miqyas-worker/1`, and `report.json` as the source of truth.
 
-Then, each on this foundation: the target model and the explorers, the assurance record, sandbox mutation, diagnosis,
-the SARIF, JUnit and prover adapters, attestation and `gate`, the engine-scenario surface, workers in their own
-process, MCP, the wider agent team.
+In MAP §6 these are steps 1 to 4, 7 and 10; a capsule and the `who` axis come between the checks and the plans.
+Everything else is placed there too: the other axes, the target model and the explorers, the assurance record,
+sandbox mutation, diagnosis, the SARIF, JUnit and prover adapters, attestation and `gate`, the engine-scenario
+surface, workers in their own process, MCP, the wider agent team.
 
 ## 16. Tests
 

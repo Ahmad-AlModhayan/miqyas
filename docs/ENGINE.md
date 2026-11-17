@@ -77,13 +77,16 @@ Four things make these laws usable without knowing intent.
   the supporting record. What a server keeps for itself (a log line, a revision, a counter) may differ between two
   runs without any law being broken; the protocol says as much.
 
-Each law is a claim Miqyas ships: a `pair` claim over the two runs (FOUNDATION §4), with examples that must fail, like
-any other. The ones in a profile gate a release. A broken law that isn't in a profile is a finding with its two runs.
+Each law is a claim Miqyas ships, judged by the one judge like any other, with examples that must fail (FOUNDATION
+§4). Most are `pair` claims: items from the reference run on one side, items from the test run on the other, joined
+on a key. What a rule can't state on two items (a footprint, the states two orders can reach) a derivation computes
+first from the recorded runs, and the claim reads that. A broken law is a `fail` wherever it is judged. It counts
+toward "ready" only when the profile names it.
 
 ## 4. The matrix
 
 An **operation** is one thing a target lets someone do: a route with a method, a control with its action. Operations
-and axes form a matrix, and each cell has a state: doesn't apply, not yet tested, held, broken, or can't tell, with
+and axes form a matrix, and each cell has a state: doesn't apply, not tested, held, broken, or can't tell, with
 why.
 
 ```
@@ -109,15 +112,28 @@ expired session or a rate limit. So every experiment carries its own checks, in 
   exists and the instrument works.
 - **The other identity is live.** A request it is allowed to make succeeds. That shows a refusal isn't an expired
   session.
-- **What varies by itself is known.** The same request is run twice from the same state first; whatever differs
-  between two identical runs (ids, times, tokens) is left out of every comparison.
+- **What varies by itself is known.** The same request, and the same sequence of reads, is run twice from the same
+  state first; whatever differs between two identical runs (ids, times, tokens) is left out of every comparison.
 - **It is repeated.** A law is recorded as held only after two runs that agree. One odd run decides nothing.
 - **Nothing is overwritten.** What an experiment shows is recorded beside what the code says and what a page did. When
   they disagree, the disagreement is reported.
 
-Outcomes are three, like everything else in Miqyas: **broken** (the content shows it, with the controls passing),
-**held**, or **can't tell** (a control failed, the state wasn't the same, the gate didn't allow it), and "can't tell"
-is never read as held.
+An experiment records its runs and the result of each check, and nothing more. It is a collector's work, and
+collectors don't judge (FOUNDATION rule 2). The law's claim is judged over that record, and what the judge says about
+one operation is that operation's cell:
+
+| Cell | In the judge (FOUNDATION §4) |
+|---|---|
+| doesn't apply | the operation is outside the law: the claim's `where` is false |
+| held | the item holds |
+| broken | the item fails: the content shows it, and every check passed |
+| can't tell | the item is uncertain, by the claim's `usable` rule: a check failed, the state didn't come back the same, two test runs disagreed, or the gate refused a run |
+| not tested | no experiment was recorded for an operation the law applies to; it counts against coverage |
+
+The law's verdict for an axis follows from its cells as any verdict follows from its items: `fail` when a cell is
+broken; `pass` when every cell that applies held and coverage is met; `not_checked` otherwise. Before anything runs,
+a law that needs something a person must add (a sandbox, a recipe, a grant) is `blocked`. "Can't tell" is never read
+as held.
 
 ## 6. The same state: capsules
 
@@ -137,29 +153,32 @@ experiments in its own way:
 | other services | the gate blocks them, and the application takes its error path |
 | time | tokens and windows expire between capture and restore |
 
-So a recipe **declares what it captures**, and the engine doesn't take its word. Before any experiment it runs a
-**fidelity check**: capture, restore, replay a recorded sequence of reads, compare what comes back. If the restored
-target doesn't answer as the original did, every experiment on it is "can't tell", and the report says which part of
-the state moved. Forks run side by side only where the recipe says every shared service is separate; otherwise one at
-a time.
+So a recipe **declares what it does with each store of state**: captured, reset to a fixed start, or outside its
+reach. The engine doesn't take its word. Before any experiment it runs a **fidelity check**: capture, restore, replay
+a recorded sequence of reads, compare what comes back; then the same on a fork. If the restored or forked target
+doesn't answer as the original did, every experiment on it is "can't tell", and the report says which reads moved.
+Forks run side by side only where the recipe gives each fork its own copy of every store; otherwise one at a time.
 
 Other services are replaced by recordings of their answers where the target allows it. Where it doesn't, the cells
 that depend on them are "can't tell".
 
 Capsules hold sandbox data only, never a copy of a production database. They live in a store beside the run, are
-named in the ledger by digest, and are deleted when the run ends unless a person keeps them.
+named in the ledger by the digest of their manifest (ALGORITHMS M1), and are deleted when the run ends unless a
+person keeps them. Capturing, restoring and forking are `disrupt` effects, and a deny rule of the gate confines them
+to a sandbox whatever was granted.
 
 Recipes come in levels behind one interface (`capture`, `restore`, `fork`). The first captures a database, the
 browser's storage and what the recipe lists besides, on any machine with containers. Later levels capture a process
 tree, then a whole virtual machine, and need Linux. A target whose backend is a hosted service is run against that
 service's local stack, where one exists; where none does, only the cells the gate allows on a live host can be tested
-(§10). The two hosted backends small applications use most both publish a local stack with sign-in, storage and their
+(§10). Two hosted backends were checked, and each publishes a local stack with sign-in, storage and its
 access rules. An application that isn't pointed at its local stack would reach the hosted one, so a sandbox's only
 way out is the gate.
 
 **What an action did.** With the state before and after in hand, the difference is the action's **footprint**: rows
 added, changed and removed, by table and column, aligned by their natural keys and with generated values (ids, times)
-left out; requests sent; what the page shows. Footprints are how `again`, `together`, `failure` and `door` are judged.
+left out; requests sent; what the page shows. `door`, `together` and `failure` are judged on footprints; for
+`again` a footprint is the supporting record (§3).
 A footprint records what the recipe could see, and says so: a write to a queue or to another service is outside it.
 For that reason a footprint may raise the class the gate gives a request and never lower it, and "no change observed"
 is never evidence that a request is a read.
@@ -197,7 +216,7 @@ narrower:
   with a reason, and recorded. On a small target that list is short, and it is the list a security review starts by
   writing by hand.
 - **An order of testing.** The entity that differs from its peers is tested first. If the experiment shows a law
-  broken, that is a finding; if not, nothing was reported.
+  broken, that law fails; if not, nothing is reported.
 
 Its limits are stated with it: it needs a protective direction (lacking a guard matters; having a comment doesn't);
 near-copies count once; with no prior knowledge it takes about thirty clean peers before "they all do this" means
@@ -208,12 +227,13 @@ much, which a small application doesn't have; and it can't see a protection that
 A project keeps a **book**, written by a command a person runs and reviewed like any other change:
 
 - **Exceptions**, each with what it is, why, and who said so: "`/health` answers without a session: readiness probe".
-- **Baselines** for the `build` axis: what each operation did last time.
+- **The last accepted build**, for the `build` axis: the commit to compare this one against. Both builds are run in
+  the same run, because digests made in different runs can't be compared (ALGORITHMS L2).
 - **Local laws a person chose to adopt**: "every route under `/invoices` requires the tenant filter". From then on it
   is an ordinary claim.
 
 A change is checked by testing the cells of the operations it touches, in a sandbox. Where a property can't be read
-or an operation can't be reached, the answer is `not_checked`, said out loud, never silence. A change to shared
+or an operation can't be reached, the cell is "can't tell", said out loud, never silence. A change to shared
 configuration, such as a guard applied by path, touches every operation it covers. When a law is shown broken, the
 report gives both runs and the first point where they part, and says that the difference may be deliberate and that a
 person decides.
@@ -226,11 +246,12 @@ the engine does less:
 | Where | What runs |
 |---|---|
 | a sandbox | every axis |
-| a test host, or an owned host, with `--active` | `who` for reads, `after`, `view`, `presentation`, `build`: requests that only read |
-| the same, with `--allow-writes` and what the gate requires | `door`, `again` and `round trip`, tagged for clean-up |
+| a test host, or an owned host, with `--active` | `who` for reads, `view`, `presentation`, `build`: requests that only read |
+| the same, with `--allow-writes` and what the gate requires | `door`, `again` and `round trip`, with the inert values of ALGORITHMS D4, tagged for clean-up; `after` for a test account's own log-out |
 | any other host | `presentation` and what a visitor sees |
 
-`together` and `failure` are sandbox-only. Cells that can't run are "can't tell: needs a sandbox".
+`together`, `failure`, `who` for writes, and `after` for a deletion or a revocation are sandbox-only. Elsewhere their
+cells read "can't tell: needs a sandbox", and a law that can't run at all is `blocked`.
 
 ## 11. Measuring the engine
 
@@ -255,7 +276,7 @@ This is a design, and this is the evidence for and against it as of the date abo
 
 | Axis | What has been shown | Where the false alarms came from |
 |---|---|---|
-| who | A black-box tester that replays requests as another account, and reads the effect back from another page, found 89 vulnerabilities in 20 applications, 54 of them new. On changes to another user's data it raised no false alarm in 53 findings, where comparison by status and length managed 62% precision. An older study worked out what each role can reach and tried the rest by direct request, which is the "interface as intent" idea used here. | data meant to be public; pages with nothing sensitive; a fixed similarity threshold on pages that vary; an expired session |
+| who | A black-box tester that replays requests as another account, and reads the effect back from another page, found 89 vulnerabilities in 20 applications, 54 of them new. On changes to another user's data it raised no false alarm in 53 findings, where a widely used replay tool managed 62% precision. On reads, which it compares by similarity, 8 of its 44 reports were false alarms. An older study worked out what each role can reach and tried the rest by direct request, which is the "interface as intent" idea used here. | data meant to be public; pages with nothing sensitive; a fixed similarity threshold on pages that vary; an expired session |
 | together | Reading the database traces of 12 shop applications turned up 22 exploitable races in 11 of them (stock, vouchers, carts). A person had to name each invariant and trigger each race by hand, about two hours apiece. A newer technique releases requests within a millisecond of each other. | races that a lock or a re-check prevents; timing |
 | door | Limits a form enforces and the server doesn't were found in every one of six applications by one tool, and 47 across nine applications by its predecessor. | a refusal page that resembles success; limits the product doesn't really need |
 | failure | In large data stores, 92% of catastrophic failures came from mishandling errors the software itself had signalled, and simple tests of the error paths would have caught 58%. Nothing comparable was found for web applications. | faults at points that can't fail; effects that rightly stay, such as a sent email |
@@ -285,6 +306,7 @@ time, 261 times, in the same two codebases, and each time the method was asked w
 | a session required on an API route | 18 of 19 |
 | queries scoped to the caller | 12 of 16 |
 | the owner column on a table | 30 of 30 |
+| the other protections on tables | 85 of 87 |
 | input schema, rate limit, response model, commit | 0 of 14 |
 | every guard in the tool's own source (7 kinds) | 0 of 95 |
 | all | 145 of 261 (56%) |
@@ -313,16 +335,17 @@ deliberate.
 
 ## 13. Where it stands on the foundation
 
-- A law is a shipped `pair` claim with failing examples (rules 5 and 7). Its two runs are recorded before it is
-  judged, and the judge reads only them (rule 3).
+- A law is a shipped claim with failing examples (rule 5). Its runs are recorded before it is judged, and the judge
+  reads only them and what derivations compute from them (rules 1 and 3). An experiment records no result of its own.
 - An experiment is a collector's work: it passes the gate, request by request, and can never do on a live host what
   the table of effects forbids.
 - Deriving footprints, digests and the order of testing is done by derivations, in integers, so that it gives the
   same result when re-run from a bundle.
-- A broken law in a profile is a `fail`. Anything else is a finding. The fold and "ready" don't change.
+- A broken law is a `fail` in the run that judged it, and counts toward "ready" only when the profile names it. The
+  fold doesn't change.
 - Entities and properties read from a repository are never sent to a model (ADR 0003). An agent proposing a path
   sees what a page shows, not the code.
-- The adversary plants seeds only in the public corpus, by a rule of the gate.
+- The adversary plants seeds only in copies of the public corpus, by a deny rule of the gate (FOUNDATION §6).
 
 ## 14. What it doesn't do
 

@@ -113,7 +113,8 @@ were broken. The run engine is a different thing: it carries out one run.
 **Operation**: one thing a target lets someone do: a route with a method, a control with its action.
 
 **Experiment**: two runs from the same capsule that differ in exactly one thing, with checks in the same experiment
-that the instrument worked. Its outcome is broken, held, or can't tell. _Avoid_: probe (a request), test.
+that the instrument worked. It records the runs and the checks and no result; whether the law held, was broken or
+can't be told is the judge's answer on that record. _Avoid_: probe (a request), test.
 
 **Axis**: the one thing in which the two runs of an experiment differ: who asks, through which door, how often, in
 what order, under what failure, and the rest of the list in the engine's design.
@@ -140,8 +141,8 @@ it is the risk), hazardous (having it is the risk) or descriptive. Not known is 
 
 **Extractor**: a derivation that reads one kind of property from facts.
 
-**Book**: the file in a project that keeps its accepted exceptions with their reasons, the last build's behaviour, and
-the local laws a person adopted.
+**Book**: the file in a project that keeps its accepted exceptions with their reasons, which build was last accepted,
+and the local laws a person adopted.
 
 **Adversary**: the part of Miqyas that plants seeds in the public corpus to measure the experiment engine. It uses no
 customer's code.

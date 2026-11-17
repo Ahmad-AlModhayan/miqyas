@@ -42,32 +42,36 @@ judgeSet(claim, V):
     w = eval(claim.where, x)                      # no `where` means true
     if w is false:  outside += 1;   continue
     if w is error:  uncertain += 1; continue
+    if eval(claim.usable, x) is not true:         # no `usable` means true
+      uncertain += 1; continue                    # the measurement can't be used
     if claim.quantifier == count:  yes += 1; continue
     h = eval(claim.holds, x)
     if h is true: yes += 1   elif h is false: no += 1   else: uncertain += 1
   covered = (eval(claim.covered, ctx(V)) is true)          # an error is not covered
 
   every:  no > 0        -> F
-          uncertain > 0 -> U(expression errored)
+          uncertain > 0 -> U(uncertain items)
           not covered   -> U(coverage not met)
           yes == 0      -> empty(claim)
           else          -> T
   some:   yes > 0       -> T
-          uncertain > 0 -> U(expression errored)
+          uncertain > 0 -> U(uncertain items)
           not covered   -> U(coverage not met)
           else          -> F
   none:   yes > 0       -> F
-          uncertain > 0 -> U(expression errored)
+          uncertain > 0 -> U(uncertain items)
           not covered   -> U(coverage not met)
           no == 0       -> empty(claim)
           else          -> T
   count:  not covered   -> U(coverage not met)
           R = { eval(claim.count, n) : yes <= n <= yes + uncertain }
-          R == {true} -> T;  R == {false} -> F;  else -> U(expression errored)
+          R == {true} -> T;  R == {false} -> F;  else -> U(uncertain items)
 
 empty(claim) = T marked vacuous   if claim.vacuous == 'pass'
                U(nothing to check) otherwise
 ```
+
+`U(uncertain items)` carries which it was: an expression gave an error, or `usable` said a measurement can't be used.
 
 **Guarantees**: A6. **Cost**: one pass over the items, O(|V|).
 
@@ -83,7 +87,8 @@ judgePair(claim, V):
   for a in L:
     P = index[keyLeft(a)]
     if P is empty: unmatched += 1; continue
-    for b in P: classify eval(claim.holds, a, b) as yes / no / uncertain
+    for b in P: uncertain if eval(claim.usable, a, b) is not true;
+                else classify eval(claim.holds, a, b) as yes / no / uncertain
   then the table of A1 over the pairs, where
     claim.unmatched == 'uncovered' -> covered also needs unmatched == 0     (the default)
     claim.unmatched == 'fail'      -> each unmatched a counts as a counterexample
@@ -174,7 +179,8 @@ These hold for every claim and every view, and are tested with generated claims 
    are added to the view. One counterexample or one witness is enough for ever.
 4. **No uncovered absence.** A pass of an `every`, `none` or `count` claim, and a fail of a `some` claim, imply
    `covered` was true.
-5. **Errors never help.** Turning any item's result into an error never produces a pass or a fail that wasn't there.
+5. **Errors never help.** Turning any item's result into an error, or marking it unusable, never produces a pass or
+   a fail that wasn't there.
 6. **Monotone fold.** Raising one verdict in the order `F < U < T` never lowers the result.
 7. **Seen to fail.** Every claim that gives a pass has a recorded input on which it gives a fail (A7).
 
@@ -222,15 +228,18 @@ classOf(req, session):
   else:                                                 c = probe          # sent by a collector itself
   if not safeMethod(req) and not knownRead(req):        c = max(c, write)
   if route(req) in spendingRoutes:                      c = max(c, write)
+  if route(req) in seenToChange:                        c = max(c, write)
   return max(c, req.declared)
 
-safeMethod = GET, HEAD, OPTIONS
-knownRead  = a GraphQL document whose operation is a query; an endpoint a probe's definition lists as a read
+safeMethod   = GET, HEAD, OPTIONS
+knownRead    = a GraphQL document whose operation is a query; an endpoint a probe's definition lists as a read
+seenToChange = routes whose footprint (M4) was seen not to be empty, in this run or in the target model (C)
 ```
 
 A request the page sends because of a person's plan step stays `interact`, whatever its method: it is the person using
 the product. Under an `observe` permit, a page request that comes out as `write` is refused before it leaves, and the
-control that caused it is recorded as "would write, not tried".
+control that caused it is recorded as "would write, not tried". A footprint can only add a route to `seenToChange`:
+an empty one never takes a route out, and never makes a request a read.
 
 ### B2. Classing an origin
 
@@ -255,7 +264,15 @@ decide(effect):
   in every case: append an `effect` record with the request, the class found, the rule and the answer
 ```
 
-`ceiling` is the table in ADR 0008.
+`ceiling` is the table in ADR 0008. Three deny rules come with the experiment engine:
+
+- Capturing, restoring and forking (M1) are `disrupt` effects, refused on any origin that isn't a sandbox, whatever
+  was granted.
+- The rules on Miqyas's own probes (inert markers only; the second account only reads; only ids the test accounts
+  own) bind on every origin that isn't a sandbox. In a sandbox an experiment may write as any identity the engine
+  made there.
+- Planting a seed to measure the engine (N3) is refused on any subject that isn't a copy of an application from the
+  public corpus.
 
 ### B4. Rate and stop
 
@@ -376,6 +393,9 @@ random ones:
 | choice | each allowed value; one that isn't allowed |
 | file | empty; one byte; the size limit and one byte over; a name with path separators |
 
+For a declared pattern, also a value of the right length that doesn't match it; for a declared type, a value of
+another type. Every value in the table is inert: none is markup that runs or the syntax of a query.
+
 Then generated values from a schema, with a recorded random seed and shrinking (D6). Outside a sandbox, inputs go only
 where a plan or a probe's definition already sends them.
 
@@ -408,16 +428,17 @@ finds becomes a regression plan.
 The authorisation matrix has a cell for every role (including nobody) and every route.
 
 ```
-expected(role, route) = allow, if that role's own pages were observed calling the route
-                        deny,  otherwise
-refused(response)     = status 401, 403 or 404; or a redirect to a log-in page;
-                        or a body that shares neither shape nor any keyed digest with the owner's response
-violation(role, route) = expected is deny, and the replayed request was not refused
+expected(role, route)  = allow, if that role's own pages were observed calling the route
+                         deny,  otherwise
+violation(role, route) = expected is deny, and the replayed request leaks (L3): the role receives something of
+                         the owner's that its own interface doesn't offer it
 coverage = cells replayed / (roles × routes)
 ```
 
-This is the general form of the "one account can't read another's records" and "routes behind log-in refuse a request
-with no session" checks, and both are `pair` claims over it.
+A status code is recorded and never decides (L2): an application can refuse with a 401, a 404, a redirect, or a page
+that says so with a 200. This is the general form of the "one account can't read another's records" and "routes
+behind log-in give nothing to a request with no session" checks. Both are the `who` law of L3, and their port uses
+that rule from the start.
 
 ### D8. Faults and interleavings
 
@@ -533,11 +554,11 @@ these is a `pair` claim; the left side is a first run, the right side a second r
 | direction flipped to right-to-left | each node's box is mirrored: `x' = W − x − w`, within a tolerance |
 | viewport, zoom or theme changed | the same controls are there, by role and name; none is clipped away |
 | language changed | the same structure; no text left in the first language where a translation exists |
-| the same safe request sent twice | the same status and the same shape |
+| the same safe request sent twice | nothing the application shows has changed (L5) |
 | a filter added to a search | the results are a subset of the results without it |
 | a list paged | the pages don't overlap and together equal the whole list |
 | a list sorted | the same items, in order |
-| a write repeated that is meant to be idempotent | the second changes nothing |
+| a write repeated that is meant to be idempotent | the second changes nothing more in what the application shows (L5) |
 
 ### F2. Two versions, two implementations
 
@@ -787,37 +808,56 @@ any. It is rewritten at intervals and after the seal.
 
 ## L. Experiments
 
-Parts L to N specify the [experiment engine](ENGINE.md). Every law below is a `pair` claim (A2) over recorded runs.
+Parts L to N specify the [experiment engine](ENGINE.md). Every law below is a shipped claim, judged by A1 or A2 over
+recorded runs. An experiment records no result of its own.
 
 ### L1. An experiment
 
 ```
-experiment(capsule S, axis, operation):
+experiment(capsule S, axis, operation):       # a collector's work: it records, and doesn't judge
   calibrate:  run the reference request twice from S; fields that differ between the two are volatile (L2)
   reference:  fork S; run the operation as its owner, undisturbed; record
-  test:       fork S; run it again, changed along the axis only; record
-  controls:   the reference run returned the data and left its expected footprint
-              the test identity is live: a request it is allowed to make succeeds in the same fork
-  repeat:     a result of "held" needs two test runs that agree
-  outcome:
-    broken       the law's relation fails on content, and both controls passed
-    held         the relation holds in two agreeing runs, and both controls passed
-    can't tell   a control failed, the fidelity check (M2) failed, the gate refused, or the runs disagree
+  test:       fork S; run it again, changed along the axis only; record; then once more from a new fork
+  checks:     reference_ok    the reference run returned the data and left its expected footprint
+              identity_live   a request the test identity is allowed to make succeeded in the same fork
+              same_state      the fidelity check (M2) passed for this recipe in this run
+              agree           the two test runs compare the same
+              allowed         the gate refused none of the runs
+  record:     one `experiment` fact
+
+experiment fact body:
+  { axis, operation,                            // the operation as a method and route template, or a control
+    capsule,                                    // its digest (M1)
+    runs: [{ role: calibrate | reference | test, facts: [positions] }],
+    checks: { reference_ok, identity_live, same_state, agree, allowed } }     // each true or false
+
+the law, a shipped claim (A1 or A2):
+  where    the rule that says the law applies to this operation (L9)
+  usable   every check of the experiment is true, and none of the law's own "can't tell" conditions holds (L3 to L8)
+  holds    the relation of L3 to L8, on what the runs recorded and what derivations computed from it
+
+cell(operation, axis), read off how the judge sorted that item:
+  doesn't apply   outside              held         holds
+  broken          fails                can't tell   uncertain
+  not tested      no experiment was recorded for an operation the law applies to
 ```
 
-An outcome is recorded beside whatever else is known about the operation and never replaces it.
+A cell is recorded beside whatever else is known about the operation and never replaces it.
 
 ### L2. Comparing by content
 
 ```
 volatile(operation)  = the fields that differed between two identical runs from the same capsule
+volatile(R)          = for a sequence of reads R, the fields that differed between two replays of R from the same
+                       capsule with nothing done in between
 tokens(response)     = the keyed digests of every distinctive leaf value in the response, volatile fields left out
                        distinctive: text of 8 characters or more, a number of 6 digits or more, an id
 digest(value)        = HMAC-SHA-256(key of this run, normalise(value))
 ```
 
 The key is made per run and thrown away at its end. Two digests can be compared for equality, within a run and when
-re-judging its bundle, and nothing can be recovered from them. Status codes are recorded and never decide a law.
+re-judging its bundle, and nothing can be recovered from them. Digests from two runs can't be compared, which is why
+the `build` axis runs both builds in one run (L8). Status codes are recorded and never decide a law.
 
 ### L3. `who`
 
@@ -827,14 +867,16 @@ read:
   other   = tokens(test run)                           what the lesser identity receives for the same request
   offered = tokens the lesser identity received anywhere through its own interface in this run
   leak    = (own ∩ other) − offered
-  broken  when leak is not empty
-  held    when leak is empty, and the lesser identity's interface was explored to its coverage rule
-  can't tell otherwise
+  can't tell when own is empty: the reference run returned nothing distinctive to look for
+  held       when leak is empty; `offered` can only grow, so more exploring can't change this
+  broken     when leak is not empty, and the lesser identity's interface was explored to its coverage rule
+  can't tell when leak is not empty and the exploring fell short
 
-write:
-  touched = the rows the owner's reference run changed, and what the owner then reads back
+write, for an operation on an object the owner already has in S (a change, a deletion, an action on it):
+  touched = the owner's rows in S that the reference run changed, and what the owner then reads back of them
   broken  when the test run, sent as the lesser identity, changed any row in touched,
           or changed what the owner reads back
+  doesn't apply to an operation that creates something new: it addresses nothing of the owner's
   doesn't apply when the lesser identity's own interface offers that action on that object
 ```
 
@@ -854,14 +896,14 @@ for each constraint c the interface or the schema declares on a field of the ope
   held   when nothing was stored, or what was stored satisfies c
 
 for each field g that the object carries and the interface never sends in this operation:
-  send the operation directly with g set to a different value
-  broken when the stored g changed
+  send the operation directly with g set to a value w that the undisturbed run doesn't store
+  broken when the stored g equals w                the server took a field the interface never sends
 ```
 
 ### L5. `again`
 
 ```
-shown(S) = for each identity, the tokens (L2) of a fixed sequence of reads replayed on S
+shown(S) = for each identity, the tokens (L2) of a fixed sequence of reads R replayed on S, volatile(R) left out
 
 safe (GET, HEAD, OPTIONS):      broken when shown(after the request) differs from shown(before)
 repeatable (PUT, DELETE, or a request carrying the same idempotency key):
@@ -893,8 +935,10 @@ probability `(1 − p)^N`; to be 95% sure of seeing one that shows in a tenth of
 points = each statement and outgoing call seen in the undisturbed run, in order
 for each point i and each mode (fail, time out):
   run with that one fault
-  broken when footprint_i is neither empty nor the whole undisturbed footprint       a partial change
-  broken when footprint_i is empty and the response reports success                  a swallowed error
+  f_i = footprint_i, leaving out rows in stores the recipe or the book marks as logs or audit trails,
+        which rightly stay
+  broken when f_i is neither empty nor the whole undisturbed footprint               a partial change
+  broken when f_i is empty and the response compares the same as the undisturbed one (L2)     a swallowed error
 ```
 
 ### L8. The other axes
@@ -903,11 +947,11 @@ for each point i and each mode (fail, time out):
 round trip     write v, read it back; broken when what is read differs from v after the declared normalisation;
                v ranges over the boundary values the declaration allows (D4)
 after          end the session, delete the account or revoke the token; send the reference request with the old
-               credential; broken when own tokens (L3) come back
+               credential; broken when it leaks (L3, with nobody as the lesser identity)
 view           for two views of one quantity in one state (a count and its rows, a total and its lines):
                broken when they differ
-build          the same experiment on the previous build and this one; broken when an operation the change
-               did not touch behaves differently
+build          the same experiment on the previous build and this one, both in this run; broken when an
+               operation the change did not touch behaves differently
 presentation   the relations of F1
 ```
 
@@ -929,46 +973,81 @@ one number for the whole.
 ### M1. A capsule and its recipe
 
 ```
-capture(sandbox) -> id        restore(sandbox, id)        fork(id) -> sandbox
+capture(sandbox) -> capsule        restore(sandbox, capsule)        fork(capsule) -> sandbox
 
-recipe(stack) = how to start it; each store of state it has (database, sessions, cache, queue, files, clock);
-                for each store: captured | reset | shared | outside
+recipe(stack) = a declaration, which the engine reads, and those three procedures
+  { id, version,
+    start:  the containers to run, and how to tell they are up,
+    stores: [{ name, kind: database | sessions | cache | queue | files | clock | service,
+               mode: captured | reset | outside, perFork: own | shared }] }
+
+  captured   capture saves its content; restore and fork put that content back
+  reset      nothing is saved; restore and fork return it to one fixed start the recipe names:
+             an empty cache, counters at zero, the clock at the time of the capture
+  outside    the recipe can neither save it nor reset it; the cells that depend on it are "can't tell",
+             unless its answers are replaced by recordings
+  shared     one instance serves every fork, so forks run one at a time
+
+capsule = SHA-256 of its manifest: the recipe as id@version and, for each store, its mode and the digest of what
+          was saved
+
+capsule fact body:
+  { capsule, recipe, stores: [{ name, kind, mode, perFork, digest? }],
+    state,                                      // the digest of M3 over the captured databases
+    parent? }                                   // the capsule it was restored or forked from
 ```
 
-A capsule records which recipe made it and what that recipe captured. Forks run side by side only when no store is
-`shared`. A store marked `outside` makes the cells that depend on it "can't tell".
+The `capsule` fact holds the manifest, so the record still says what a capsule was after the capsule is deleted.
+Capture, restore and fork are `disrupt` effects that a deny rule confines to a sandbox (B3). Forks run side by side
+only when every store is `own`.
 
 ### M2. The fidelity check
 
 ```
-fidelity(sandbox):
-  record a sequence of reads R as each identity
-  c = capture(sandbox); restore(sandbox, c); replay R
-  same = every response has the tokens (L2) it had before
+fidelity(sandbox, recipe):
+  R = for each identity of the run, the reads recorded while the state was reached, in the order recorded,
+      up to 50; with no read recorded the check can't run
+  replay R twice with nothing in between; what differs is volatile(R) (L2)
+  c = capture(sandbox); restore(sandbox, c); replay R                 # restored
+  f = fork(c); replay R on f                                          # forked
+  same = in each replay, every response has the tokens (L2) it had before, volatile(R) left out
+
+fidelity fact body:
+  { recipe, capsule, reads,                     // how many reads were replayed
+    restored: { same, moved: [positions] }, forked: { same, moved: [positions] } }
 ```
 
-Run once per capsule recipe per run, before any experiment. If it fails, every experiment on that recipe is "can't
-tell", and the report names the reads whose answers moved.
+Run once per capsule recipe per run, before any experiment. If it fails or can't run, every experiment on that recipe
+is "can't tell", and the report names the reads whose answers moved.
 
 ### M3. The digest of a state
 
 ```
-state(sandbox) = SHA-256 over, for each table in name order:
-                   its rows in order of their natural key,
-                   each row as its columns in name order, rendered in one fixed way,
-                   leaving out generated columns and volatile columns (L2)
+listing(sandbox) = for each table in name order: its rows in order of their natural key;
+                   each row as its columns in name order, each value as its keyed digest (L2);
+                   a column that refers to another row given as that row's natural key;
+                   generated columns and volatile columns (L2) left out
+state(sandbox)   = SHA-256 over listing(sandbox)
 ```
 
 A natural key is a unique key that doesn't depend on the order of insertion; where a table has none, its rows are
 compared as a multiset. Two paths that reach the same logical state have the same digest even though the ids and
-times they generated differ.
+times they generated differ, which is why a reference to another row is given by key and not by id. The listing is
+recorded as a blob; `state` and footprints (M4) are derivations over listings, so both can be re-run from a bundle.
 
 ### M4. A footprint
 
 ```
-footprint(action, S) = rows added, changed and removed between state(S) and state(S after action),
-                       by table and column, matched by natural key, generated and volatile columns left out;
+footprint(action, S) = rows added, changed and removed between listing(S) and listing(S after action),
+                       by table and column, matched by natural key;
                        plus the requests the action sent, and what the page shows
+
+footprint fact body:
+  { action,                                     // the position of the action's record
+    before, after,                              // the two state digests (M3)
+    rows: [{ table, key, change: added | changed | removed, columns: [names] }],
+    requests: [positions],
+    stores: [names] }                           // the stores the recipe captures: all that a footprint covers
 ```
 
 A footprint covers the stores its recipe captures and says which those are. It may raise the class the gate gives a
@@ -1007,8 +1086,8 @@ Reported with every broken law, as the place to start reading.
 ```
 1. operations a change touches, found from the files each was read from
 2. writes before reads; money, access and deletion first
-3. entities that lack a protection most of their peers have (N2)
-4. pairs of writes with overlapping footprints, for `together`
+3. pairs of writes with overlapping footprints, for `together`
+4. entities that lack a protection most of their peers have (N2)
 5. cheapest first within each group
 ```
 

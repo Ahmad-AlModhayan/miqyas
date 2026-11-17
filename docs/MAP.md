@@ -86,11 +86,12 @@ Read it as three questions asked of a target, and one record that answers for al
 7. Later, anyone runs `miqyas verify` on the bundle and gets the same verdicts, with no target, no model and no
    network.
 
-## 4. What makes this the strongest design
+## 4. What this design is built to be strongest at
 
 A verifier is only as strong as the weakest of five abilities: what it can state, what it can reach, how well it
-searches, whether its verdicts can be trusted, and whether its silence means anything. This design is built so that
-none of the five is the weak one, and so that what follows is enforced by code and not by care.
+searches, whether its verdicts can be trusted, and whether its silence means anything. This design aims to leave none
+of the five as the weak one, and to have what follows enforced by code and not by care. These are properties of a
+design; §5 says what has and hasn't been shown.
 
 **1. It finds what is wrong with nothing written in advance.**
 One account receiving another's records, a server storing what its own form forbids, two requests at once leaving a
@@ -131,9 +132,9 @@ No model judges at run time. A model binds a plain-language step once, or propos
 it proposed. A page has no judge to talk to.
 
 **9. It is safe to point at anything.**
-One gate classes each request from the request and each origin by what was established about it. The crawl can't
-change a target even by accident. Experiments that change state run only in a sandbox Miqyas started. The bundle
-shows everything that was done, refused requests included.
+One gate classes each request from the request and each origin by what was established about it. The crawl sends
+nothing the gate classes as a write, so it can change a target only where a plain read does. Experiments that change
+state run only in a sandbox Miqyas started. The bundle shows everything that was done, refused requests included.
 
 **10. It uses the world's tools and is honest about what each proves.**
 Scanners, runners, model checkers and provers come in as collectors. Their word is never taken for what they covered,
@@ -143,10 +144,11 @@ and each verdict is labelled tested, checked to a bound, or proved. There is no 
 A surface is a vocabulary of facts. A browser, an API, a command-line program, a sync engine under faults and a
 factory controller differ in what they record; the claims, the judge, the gate and the record are the same.
 
-**12. It is measured on real defects, and says what failed.**
-The engine is scored on defects that really happened, at the commit before each fix, then on seeds; per axis, never
-blended; with "no experiment exists for this" as its own count. The first idea for this core was put to that kind of
-test before it was written into the design, and was dropped when it failed (§5).
+**12. It is to be measured on real defects, and says what failed.**
+The engine is to be scored on defects that really happened, at the commit before each fix, then on seeds; per axis,
+never blended; with "no experiment exists for this" as its own count. The first idea for this core was tried on real
+code before it was written into the design, by reading its reports by hand and then by planting omissions, and was
+dropped when it failed (§5).
 
 In one sentence: **Miqyas shows a defect as two recorded runs that differ in one thing and break a law nobody had to
 write, and every pass it gives is a computation over recorded evidence that anyone can repeat.**
@@ -173,14 +175,18 @@ Each step needs the ones before it. Nothing here is a date.
 1. **The kernel**: ledger, the judge for `set` and `pair` claims, the fold, `verify`; one check end to end.
 2. **The gate**: wire rules, origin classes, permits; every collector behind it.
 3. **Two workers**: web and API, recording facts on the new contract.
-4. **The thirteen checks as claims.** Checks 9 and 10 are the `who` axis already, by hand.
+4. **The thirteen checks as claims.** Checks 9, 10 and 12 are the `who` axis already, by hand, and are decided by
+   content from the start (ALGORITHMS L3).
 5. **A capsule for one stack**, with the fidelity check. The first measurement: what moves on a restore.
 6. **The `who` axis in full**, judged by content, and measured on real access-control defects at the commits before
-   their fixes. This is the first test of the engine's premise, and comes before the other axes are built.
+   their fixes. This is the first measurement of the engine as built, and comes before the other axes are built. A
+   cheaper trial by script can come sooner (ENGINE §12).
 7. **Plans**: `trace` claims over windows, bindings, bound replay, the binder; reaching states.
-8. **`door`, `again`, `round trip`, `after`, `view`**: the axes that need one identity and a footprint.
+8. **`door`, `again`, `round trip`, `after`, `view`**: the axes that need one identity and a footprint. And
+   **`presentation`**, which needs only the web worker.
 9. **`together` and `failure`**: the axes that need control of timing and of faults.
-10. **Reports as the matrix**; the old path deleted; the book.
+10. **Reports as the matrix**; the old path deleted; the book, and the `build` axis, which reads the last accepted
+    build from it.
 11. **`sample` claims**, the target model, diagnosis.
 12. **More surfaces**: the engine worker, then desktop, mobile, command-line.
 13. **Outward**: adapters for more tools, provers included; attestation and `gate`; workers in their own process; MCP.

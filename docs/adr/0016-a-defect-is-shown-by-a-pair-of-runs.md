@@ -28,8 +28,10 @@ by any tool that looks at one run at a time, and a broken law comes with both ru
 
 - The application's own interface stands in for intent: what an identity can reach through its own pages is what the
   application says it may do. A product with no interface needs a declared schema or a role table instead.
-- The laws are shipped claims with failing examples (ADR 0014). The ones in a profile gate a release; a broken law
-  outside a profile is a finding.
+- The laws are shipped claims with failing examples (ADR 0014), judged by the one judge. A broken law is a `fail`
+  wherever it is judged, and gates a release only when the profile names it.
+- An experiment records its runs and its checks and no result of its own. A measurement whose checks failed is
+  uncertain: it can make neither a pass nor a fail.
 - The report is a matrix of operations against axes, and coverage is cells tested over cells that apply. Some laws
   can only be shown to hold in a number of tries, and are reported as that.
 - Most axes change state, so they run in a sandbox (ADR 0017). On a live host only what the gate allows is tested, and
