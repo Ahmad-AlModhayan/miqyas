@@ -86,7 +86,7 @@ export const probeSent = (
   method: string,
   url: string,
   permit: 'probe' | 'write' | 'disrupt',
-  probe: Partial<ProbeFacts> | undefined = {},
+  probe: Partial<ProbeFacts> | null = {},
   extra: Partial<WireRequest> = {},
 ): Effect =>
-  request({ method, url, cause: 'collector', ...extra }, permit, probe === undefined ? {} : { probe: { ...inertProbe, ...probe } });
+  request({ method, url, cause: 'collector', ...extra }, permit, probe === null ? {} : { probe: { ...inertProbe, ...probe } });

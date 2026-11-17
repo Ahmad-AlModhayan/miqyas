@@ -5,3 +5,6 @@ export * from './classes.js';
 export * from './grants.js';
 export * from './origin.js';
 export * from './wire.js';
+export * from './effects.js';
+export { DENY_RULES, type DenyRule } from './deny.js';
+export * from './decide.js';
