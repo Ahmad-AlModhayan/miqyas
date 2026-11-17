@@ -30,7 +30,7 @@ export interface ProbeFacts {
 export interface LoginAttempt {
   /** The secret is one a step names, not one the gate or a collector made up or took from a list. */
   readonly secret: 'named-by-step' | 'not-named';
-  /** How many different secrets have been tried on this account, this one included. */
+  /** How many different secrets have been tried on this account, this one included. Only 1 keeps the limit. */
   readonly distinctSecretsTriedOnAccount: number;
 }
 
@@ -48,7 +48,11 @@ export type Effect =
       readonly session: { readonly permit: EffectClass };
       /** Present on what a collector sends itself. A request without it is not known to keep the limits and is refused off a sandbox. */
       readonly probe?: ProbeFacts;
-      readonly loginAttempt?: LoginAttempt;
+      /**
+       * A login attempt, or `'not-a-login'` when the request is not one. On what a collector sends itself, a request
+       * that says neither is not known to keep the limit and is refused off a sandbox.
+       */
+      readonly loginAttempt?: LoginAttempt | 'not-a-login';
     }
   | { readonly kind: 'capsule'; readonly operation: 'capture' | 'restore' | 'fork'; readonly origin: string }
   | { readonly kind: 'plant-seed'; readonly subject: 'public-corpus-copy' | 'other'; readonly origin: string }

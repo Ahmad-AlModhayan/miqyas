@@ -81,7 +81,7 @@ export const request = (r: WireRequest, permit: 'observe' | 'interact' | 'probe'
 export const pageGet = (url: string, permit: 'observe' | 'interact' = 'observe'): Effect =>
   request({ method: 'GET', url, cause: 'page' }, permit);
 
-/** A request a collector sent itself, with probe facts that keep every limit. */
+/** A request a collector sent itself, that is not a login attempt, with probe facts that keep every limit. */
 export const probeSent = (
   method: string,
   url: string,
@@ -89,4 +89,8 @@ export const probeSent = (
   probe: Partial<ProbeFacts> | null = {},
   extra: Partial<WireRequest> = {},
 ): Effect =>
-  request({ method, url, cause: 'collector', ...extra }, permit, probe === null ? {} : { probe: { ...inertProbe, ...probe } });
+  request(
+    { method, url, cause: 'collector', ...extra },
+    permit,
+    probe === null ? { loginAttempt: 'not-a-login' } : { probe: { ...inertProbe, ...probe }, loginAttempt: 'not-a-login' },
+  );

@@ -3,7 +3,7 @@
 // rule is checked before the ceiling and no grant overrides it. Each has a stable id.
 
 import { atLeast, type EffectClass } from './classes.js';
-import type { Effect, RunFacts } from './effects.js';
+import type { Effect, LoginAttempt, RunFacts } from './effects.js';
 import { originOf, originsOfTheRun, type OriginClassification } from './origin.js';
 
 /** What a rule is judged on. */
@@ -76,8 +76,14 @@ export const DENY_RULES: readonly DenyRule[] = [
     id: 'deny.brute-force-login',
     source: 'never brute-force a login',
     matches: (c) => {
-      const a = c.effect.kind === 'request' ? c.effect.loginAttempt : undefined;
-      return a !== undefined && (a.secret !== 'named-by-step' || !(a.distinctSecretsTriedOnAccount <= 1));
+      if (c.effect.kind !== 'request') return false;
+      const a: unknown = c.effect.loginAttempt;
+      if (a === 'not-a-login') return false;
+      // Saying nothing is not known to keep the limit: refused on Miqyas's own probes off a sandbox.
+      if (a === undefined) return ownProbe(c) !== null;
+      if (typeof a !== 'object' || a === null) return true;
+      const attempt = a as Partial<LoginAttempt>;
+      return attempt.secret !== 'named-by-step' || attempt.distinctSecretsTriedOnAccount !== 1;
     },
   },
   {

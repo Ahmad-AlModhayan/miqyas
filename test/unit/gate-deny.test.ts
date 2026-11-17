@@ -118,6 +118,26 @@ describe('never brute-force a login', () => {
       allowed(login('named-by-step', 1, k));
     }
   });
+
+  it('refuses a count of secrets tried that is not the number 1', () => {
+    for (const tried of [0, -1, null, '1', true, Number.NaN]) {
+      refusedBy(login('named-by-step', tried as never, 'local'), 'deny.brute-force-login');
+    }
+  });
+
+  it('refuses what a collector sends itself off a sandbox when it does not say whether it is a login attempt', () => {
+    const unsaid = (k: keyof typeof O) => request({ method: 'GET', url: `${O[k]}/x`, cause: 'collector' }, 'probe', { probe: inertProbe });
+    for (const k of ['local', 'named', 'owned', 'backendOfSandbox'] as const) refusedBy(unsaid(k), 'deny.brute-force-login');
+    allowed(unsaid('sandbox'));
+    allowed(request({ method: 'GET', url: `${O.local}/x`, cause: 'collector' }, 'probe', { probe: inertProbe, loginAttempt: 'not-a-login' }));
+    allowed(pageGet(`${O.local}/login`));
+  });
+
+  it('refuses a value for the login attempt that is neither an attempt nor the word that it is not one', () => {
+    for (const odd of ['no', null, 1]) {
+      refusedBy(request({ method: 'GET', url: `${O.local}/x`, cause: 'collector' }, 'probe', { probe: inertProbe, loginAttempt: odd }), 'deny.brute-force-login');
+    }
+  });
 });
 
 describe('never get past a CAPTCHA or a WAF', () => {
