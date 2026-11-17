@@ -2,7 +2,7 @@
 // The static checks on a CEL expression's text, made when it is loaded and before any CEL library sees it: its
 // length, how deeply it nests, the largest list or map literal in it, and whether it stays inside the documented
 // subset (docs/cel-subset.md). It reads tokens itself, so what it accepts does not depend on the library in use.
-// Pure functions of the text: no clock and no Node API.
+// The bound on the work an expression can do is in cel-cost.ts. Pure functions of the text: no clock and no Node API.
 
 export interface CelLimits {
   /** Characters in the expression. */
@@ -11,8 +11,14 @@ export interface CelLimits {
   readonly maxDepth: number;
   /** Comprehensions (`all`, `exists`, `exists_one`, `map`, `filter`) inside one another. */
   readonly maxComprehensionDepth: number;
-  /** Elements in a list or map literal; also the most a list or map may hold when the expression is evaluated. */
+  /** Elements in a list or map literal; also the most a list or map in the variables may hold. */
   readonly maxListLength: number;
+  /** Characters (UTF-16 code units) in one text in the variables. */
+  readonly maxStringLength: number;
+  /** The size of all the variables together: 1 for each value, plus the length of each text. */
+  readonly maxInputSize: number;
+  /** The most work the expression may do, in steps, over the largest variables the limits above allow. */
+  readonly maxCost: number;
 }
 
 export const DEFAULT_LIMITS: CelLimits = Object.freeze({
@@ -20,6 +26,9 @@ export const DEFAULT_LIMITS: CelLimits = Object.freeze({
   maxDepth: 16,
   maxComprehensionDepth: 2,
   maxListLength: 1000,
+  maxStringLength: 1000,
+  maxInputSize: 10_000,
+  maxCost: 40_000_000,
 });
 
 export type StaticRejection =
@@ -49,30 +58,40 @@ const outside = (what: string): StaticRejection => ({
   message: `${what} is outside the allowed CEL subset (see docs/cel-subset.md)`,
 });
 const syntax = (what: string): StaticRejection => ({ reason: 'syntax', message: `syntax error: ${what}` });
+const overLimit = (limit: keyof CelLimits, what: string, limits: CelLimits): StaticRejection => ({
+  reason: 'limit',
+  limit,
+  message: `${what}, over the limit ${limit} of ${limits[limit]}`,
+});
+const frame = (kind: Frame['kind'], name = '', macro = false): Frame => ({
+  kind,
+  name,
+  macro,
+  commas: 0,
+  hasContent: false,
+  trailingComma: false,
+});
 
 /** The first reason the text cannot be loaded, or undefined when it passes every static check. */
 export function checkStatic(source: string, limits: CelLimits): StaticRejection | undefined {
   if (source.length > limits.maxLength) {
-    return {
-      reason: 'limit',
-      limit: 'maxLength',
-      message: `the expression is ${source.length} characters, over the limit maxLength of ${limits.maxLength}`,
-    };
+    return overLimit('maxLength', `the expression is ${source.length} characters`, limits);
   }
 
   const stack: Frame[] = [];
   let macros = 0;
   // The previous token: its kind, and its text for an identifier.
   let prev: { kind: 'start' | 'ident' | 'value' | 'close' | 'dot' | 'open' | 'other'; text: string } = { kind: 'start', text: '' };
-  let beforePrev = '';
+  // The token before the previous one, so that `.name(` is read as a method and `name(` as a function.
+  let tokenBeforePrev = '';
   const top = () => stack[stack.length - 1];
   const push = (kind: 'ident' | 'value' | 'close' | 'dot' | 'open' | 'other', text: string) => {
-    beforePrev = prev.kind === 'dot' ? '.' : prev.text;
+    tokenBeforePrev = prev.kind === 'dot' ? '.' : prev.text;
     prev = { kind, text };
-    const frame = top();
-    if (frame !== undefined && text !== ',') {
-      frame.hasContent = true;
-      frame.trailingComma = false;
+    const current = top();
+    if (current !== undefined && text !== ',') {
+      current.hasContent = true;
+      current.trailingComma = false;
     }
   };
 
@@ -163,13 +182,12 @@ export function checkStatic(source: string, limits: CelLimits): StaticRejection 
     }
 
     i += 1;
-    let opened: Frame | undefined;
+    let openedFrame: Frame | undefined;
     switch (c) {
       case '(': {
         const call = prev.kind === 'ident' && !WORDS.has(prev.text);
-        let frame: Frame;
         if (call) {
-          const method = beforePrev === '.';
+          const method = tokenBeforePrev === '.';
           const name = prev.text;
           const known = method ? METHODS.has(name) || MACROS.has(name) : GLOBAL_FUNCTIONS.has(name);
           if (!known) return outside(`the ${method ? 'method' : 'function'} ${name}()`);
@@ -177,57 +195,48 @@ export function checkStatic(source: string, limits: CelLimits): StaticRejection 
           if (macro) {
             macros += 1;
             if (macros > limits.maxComprehensionDepth) {
-              return {
-                reason: 'limit',
-                limit: 'maxComprehensionDepth',
-                message: `comprehensions nest ${macros} deep, over the limit maxComprehensionDepth of ${limits.maxComprehensionDepth}`,
-              };
+              return overLimit('maxComprehensionDepth', `comprehensions nest ${macros} deep`, limits);
             }
           }
-          frame = { kind: 'call', name: method ? `.${name}` : name, macro, commas: 0, hasContent: false, trailingComma: false };
+          openedFrame = frame('call', method ? `.${name}` : name, macro);
         } else {
-          frame = { kind: 'group', name: '', macro: false, commas: 0, hasContent: false, trailingComma: false };
+          openedFrame = frame('group');
         }
-        opened = frame;
         break;
       }
       case '[': {
         if (source[i] === '?') return outside('an optional index');
         const index = prev.kind === 'value' || prev.kind === 'close' || (prev.kind === 'ident' && prev.text !== 'in');
-        opened = { kind: index ? 'index' : 'list', name: '', macro: false, commas: 0, hasContent: false, trailingComma: false };
+        openedFrame = frame(index ? 'index' : 'list');
         break;
       }
       case '{':
         if (prev.kind === 'ident' && !WORDS.has(prev.text)) return outside('constructing a message');
-        opened = { kind: 'map', name: '', macro: false, commas: 0, hasContent: false, trailingComma: false };
+        openedFrame = frame('map');
         break;
       case ')':
       case ']':
       case '}': {
-        const frame = stack.pop();
-        const want = frame?.kind === 'call' || frame?.kind === 'group' ? ')' : frame?.kind === 'map' ? '}' : ']';
-        if (frame === undefined || want !== c) return syntax(`unexpected ${c}`);
-        if (frame.macro) macros -= 1;
-        const count = frame.hasContent ? frame.commas + 1 - (frame.trailingComma ? 1 : 0) : 0;
-        if ((frame.kind === 'list' || frame.kind === 'map') && count > limits.maxListLength) {
-          return {
-            reason: 'limit',
-            limit: 'maxListLength',
-            message: `a ${frame.kind === 'list' ? 'list' : 'map'} literal has ${count} elements, over the limit maxListLength of ${limits.maxListLength}`,
-          };
+        const closed = stack.pop();
+        const want = closed?.kind === 'call' || closed?.kind === 'group' ? ')' : closed?.kind === 'map' ? '}' : ']';
+        if (closed === undefined || want !== c) return syntax(`unexpected ${c}`);
+        if (closed.macro) macros -= 1;
+        const count = closed.hasContent ? closed.commas + 1 - (closed.trailingComma ? 1 : 0) : 0;
+        if ((closed.kind === 'list' || closed.kind === 'map') && count > limits.maxListLength) {
+          return overLimit('maxListLength', `a ${closed.kind} literal has ${count} elements`, limits);
         }
-        if (frame.kind === 'call') {
-          const bad = checkArity(frame, count);
+        if (closed.kind === 'call') {
+          const bad = checkArity(closed, count);
           if (bad !== undefined) return bad;
         }
         push('close', ')');
         continue;
       }
       case ',': {
-        const frame = top();
-        if (frame !== undefined) {
-          frame.commas += 1;
-          frame.trailingComma = true;
+        const current = top();
+        if (current !== undefined) {
+          current.commas += 1;
+          current.trailingComma = true;
         }
         push('other', ',');
         continue;
@@ -245,15 +254,9 @@ export function checkStatic(source: string, limits: CelLimits): StaticRejection 
     }
 
     push('open', c);
-    if (opened === undefined) continue;
-    stack.push(opened);
-    if (stack.length > limits.maxDepth) {
-      return {
-        reason: 'limit',
-        limit: 'maxDepth',
-        message: `the expression nests ${stack.length} deep, over the limit maxDepth of ${limits.maxDepth}`,
-      };
-    }
+    if (openedFrame === undefined) continue;
+    stack.push(openedFrame);
+    if (stack.length > limits.maxDepth) return overLimit('maxDepth', `the expression nests ${stack.length} deep`, limits);
   }
 
   if (stack.length > 0) return syntax('a bracket is not closed');

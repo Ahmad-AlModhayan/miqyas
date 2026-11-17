@@ -57,8 +57,16 @@ function asResult(value: SuiteValue): CelValue {
 }
 
 // The suite's tests of parsing deep and long expressions are about the library; the kernel's own limits have their
-// own tests, so they are raised here to let those expressions through.
-const WIDE = { maxLength: 100_000, maxDepth: 1_000, maxComprehensionDepth: 100, maxListLength: 100_000 };
+// own tests, so they are raised here (the cost bound too) to let those expressions through.
+const RAISED_LIMITS = {
+  maxLength: 100_000,
+  maxDepth: 1_000,
+  maxComprehensionDepth: 100,
+  maxListLength: 100_000,
+  maxStringLength: 100_000,
+  maxInputSize: 1_000_000,
+  maxCost: Number.MAX_SAFE_INTEGER,
+};
 
 describe('the CEL conformance suite, the subset Miqyas allows, against the chosen library', () => {
   it('records which library and version it ran against', () => {
@@ -79,7 +87,7 @@ describe('the CEL conformance suite, the subset Miqyas allows, against the chose
   for (const test of suite.tests) {
     it(`${test.section}: ${test.name}`, () => {
       const variables = Object.fromEntries(Object.entries(test.bindings ?? {}).map(([name, value]) => [name, asVariable(value)]));
-      const outcome = evaluateValue(compile(test.expr, WIDE), variables);
+      const outcome = evaluateValue(compile(test.expr, RAISED_LIMITS), variables);
       if (test.error === true) {
         expect(outcome.ok).toBe(false);
       } else {

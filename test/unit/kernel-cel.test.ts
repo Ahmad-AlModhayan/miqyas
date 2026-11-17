@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { compile, evaluate } from '../../src/kernel/cel.js';
+import { type Truth, compile, evaluate } from '../../src/kernel/cel.js';
 
 describe('evaluating a compiled expression', () => {
   it('gives true when the rule holds for the item', () => {
@@ -49,6 +49,42 @@ describe('an evaluation error is never true or false', () => {
     expect(evaluate(compile('item.missing == 1 || true'), { item: {} })).toBe('true');
   });
 
+  it('keeps CEL equality across types: == is false, != is true, and in is a yes or no, never an error', () => {
+    expect(evaluate(compile("'a' == 1"), {})).toBe('false');
+    expect(evaluate(compile("'a' != 1"), {})).toBe('true');
+    expect(evaluate(compile("1 in ['a']"), {})).toBe('false');
+    expect(evaluate(compile("'a' in [1, 'a']"), {})).toBe('true');
+    expect(evaluate(compile('item.n == null'), { item: { n: 1 } })).toBe('false');
+    // Ordering across types is still an error.
+    expect(evaluate(compile("'a' < 1"), {})).toBe('error');
+  });
+
+  it('gives the usable example false, not error, when a status arrives as text', () => {
+    const usable = compile('item.owner_status == 200 && item.other_status != 401');
+    expect(evaluate(usable, { item: { owner_status: '200', other_status: 403 } })).toBe('false');
+    expect(evaluate(usable, { item: { owner_status: 200, other_status: '401' } })).toBe('true');
+  });
+
+  it('lets exists be true when one element is true and another is an error', () => {
+    expect(evaluate(compile("['a', 1].exists(a, a > 0)"), {})).toBe('true');
+    expect(evaluate(compile("['a', 0].exists(a, a > 0)"), {})).toBe('error');
+  });
+
+  it('lets all be false when one element is false and another is an error', () => {
+    expect(evaluate(compile("['a', 0].all(a, a > 0)"), {})).toBe('false');
+    expect(evaluate(compile("['a', 1].all(a, a > 0)"), {})).toBe('error');
+  });
+
+  it('gives exists_one error when any element is an error', () => {
+    expect(evaluate(compile("['a', 1].exists_one(a, a > 0)"), {})).toBe('error');
+    expect(evaluate(compile("['a', 1, 2].exists_one(a, a > 0)"), {})).toBe('error');
+  });
+
+  it('gives map and filter error when any element is an error', () => {
+    expect(evaluate(compile("['a', 1].filter(a, a > 0).size() == 1"), {})).toBe('error');
+    expect(evaluate(compile("['a', 1].map(a, a + 1).size() == 2"), {})).toBe('error');
+  });
+
   it('gives error for a variable that cannot be read as a CEL value', () => {
     const bad: unknown[] = [
       0.5,
@@ -69,17 +105,17 @@ describe('an evaluation error is never true or false', () => {
 
 describe('the examples in docs/cel-subset.md', () => {
   const doc = readFileSync(new URL('../../docs/cel-subset.md', import.meta.url), 'utf8');
-  const examples: Array<[string, string, Record<string, unknown>, 'true' | 'false']> = [
+  const examples: Array<[string, string, Record<string, unknown>, Truth]> = [
     ['where', 'item.role == "button" && !item.hidden', { item: { role: 'button', hidden: false } }, 'true'],
     ['holds', 'item.name.size() > 0 && !normalize(item.name).contains("click here")', { item: { name: ' Save ' } }, 'true'],
     ['usable', 'item.owner_status == 200 && item.other_status != 401', { item: { owner_status: 200, other_status: 401 } }, 'false'],
     ['count', 'n >= 1 && n <= 3', { n: 2 }, 'true'],
     ['covered', 'ctx.pages.size() > 0 && ctx.inputs.accounts.size() >= 2', { ctx: { pages: ['/'], inputs: { accounts: ['a', 'b'] } } }, 'true'],
   ];
-  for (const [place, expression, variables, verdict] of examples) {
-    it(`${place}: appears in the document and gives ${verdict}`, () => {
+  for (const [place, expression, variables, truth] of examples) {
+    it(`${place}: appears in the document and gives ${truth}`, () => {
       expect(doc).toContain('```cel\n' + expression + '\n```');
-      expect(evaluate(compile(expression), variables)).toBe(verdict);
+      expect(evaluate(compile(expression), variables)).toBe(truth);
     });
   }
 });

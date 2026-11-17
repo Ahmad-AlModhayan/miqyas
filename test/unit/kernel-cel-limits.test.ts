@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CelRejection, DEFAULT_LIMITS, compile, evaluate } from '../../src/kernel/cel.js';
 
@@ -105,6 +106,116 @@ describe('static limits, checked when an expression is loaded', () => {
     }
   });
 });
+
+describe('the default limits', () => {
+  const pinned: Array<[string, number]> = [
+    ['maxLength', 1024],
+    ['maxDepth', 16],
+    ['maxComprehensionDepth', 2],
+    ['maxListLength', 1000],
+    ['maxStringLength', 1000],
+    ['maxInputSize', 10000],
+    ['maxCost', 40000000],
+  ];
+
+  it('are these numbers, and no others', () => {
+    expect(DEFAULT_LIMITS).toEqual(Object.fromEntries(pinned));
+  });
+
+  it('match the table in docs/cel-subset.md', () => {
+    const doc = readFileSync(new URL('../../docs/cel-subset.md', import.meta.url), 'utf8');
+    for (const [name, value] of pinned) expect(doc, name).toContain(`| \`${name}\` | ${value} |`);
+  });
+});
+
+describe('the cost bound, checked when an expression is loaded', () => {
+  const overCost = [
+    ['in, walking a variable inside two comprehensions', 'x.all(a, x.all(b, b in x))'],
+    ['equality of a whole variable inside two comprehensions', 'x.all(a, x.all(b, x == x))'],
+    ['a text search inside two comprehensions', 'x.all(a, x.all(b, a.contains(b)))'],
+    ['normalize() inside two comprehensions', 'x.all(a, x.all(b, normalize(a) == "c"))'],
+    ['size() of a text inside two comprehensions', 'x.all(a, x.all(b, b.size() > 0 && a.size() > 0 && x.size() > 0))'],
+    ['a pattern inside two comprehensions', "x.all(a, x.all(b, a.matches('^(a|b)+$')))"],
+    ['comparing lists built by map inside a comprehension', 'x.all(a, x.map(b, x) == x.map(c, x))'],
+    ['walking a list joined from variables inside two comprehensions', 'x.all(a, x.all(b, b in x + x))'],
+  ];
+  for (const [name, source] of overCost) {
+    it(`rejects ${name}, and names maxCost`, () => {
+      const error = rejection(source as string);
+      expect(error.reason).toBe('limit');
+      expect(error.limit).toBe('maxCost');
+      expect(error.message).toContain('maxCost');
+    });
+  }
+
+  it('loads a two-level rule that compares scalars', () => {
+    expect(() => compile('expected.all(e, observed.exists(o, o.id == e.id))')).not.toThrow();
+    expect(() => compile('expected.all(e, observed.exists(o, o.id == e.id && o.kind == e.kind))')).not.toThrow();
+  });
+
+  it('takes maxCost from the caller', () => {
+    expect(() => compile('item.n == 1', { maxCost: 100 })).not.toThrow();
+    expect(rejection('item.n == 1', { maxCost: 3 }).limit).toBe('maxCost');
+    expect(rejection('x.all(a, a > 0)', { maxCost: 1000, maxListLength: 1000 }).limit).toBe('maxCost');
+    expect(() => compile('x.all(a, a > 0)', { maxCost: 1000, maxListLength: 10 })).not.toThrow();
+  });
+
+  it('rejects a pattern that is not a literal text, because its work cannot be known when it is loaded', () => {
+    const error = rejection('item.s.matches(item.pattern)');
+    expect(error.reason).toBe('subset');
+    expect(error.message).toContain('literal');
+    expect(rejection('matches(item.s, item.pattern)').reason).toBe('subset');
+  });
+});
+
+describe('the input limits, checked when the variables are handed in', () => {
+  it('gives error for a text longer than maxStringLength', () => {
+    const rule = compile('item.s.size() > 0', { maxStringLength: 3 });
+    expect(evaluate(rule, { item: { s: 'abc' } })).toBe('true');
+    expect(evaluate(rule, { item: { s: 'abcd' } })).toBe('error');
+    expect(evaluate(rule, { item: { rows: ['abcd'], s: 'a' } })).toBe('error');
+  });
+
+  it('gives error for map keys longer than maxStringLength', () => {
+    const rule = compile('true', { maxStringLength: 3 });
+    expect(evaluate(rule, { item: { abc: 1 } })).toBe('true');
+    expect(evaluate(rule, { item: { abcd: 1 } })).toBe('error');
+  });
+
+  it('gives error when all the variables together are larger than maxInputSize', () => {
+    const rule = compile('true', { maxInputSize: 5 });
+    // A list counts 1 and each integer 1: 4.
+    expect(evaluate(rule, { item: [1, 2, 3] })).toBe('true');
+    // Then another list of one: 6.
+    expect(evaluate(rule, { item: [1, 2, 3], other: [1] })).toBe('error');
+    // A text counts 1 plus its length.
+    expect(evaluate(rule, { item: 'abcd' })).toBe('true');
+    expect(evaluate(rule, { item: 'abcde' })).toBe('error');
+    // A map counts 1, and each key and value: 1 + 2 + 1 = 4.
+    expect(evaluate(rule, { item: { a: 1 } })).toBe('true');
+    expect(evaluate(rule, { item: { a: 1, b: 2 } })).toBe('error');
+  });
+});
+
+describe('the worst case the default limits allow', () => {
+  // The costliest two-level rule found when the defaults were set (docs/cel-subset.md, "The cost bound"): every pair
+  // is compared, and each comparison walks two lists that differ only in the last element. A slow library or a change
+  // that loosens the bound shows as this test running past its timeout; it does not read a clock.
+  it('evaluates the costliest allowed rule over variables at the largest the limits allow', () => {
+    const rule = compile(WORST_RULE);
+    const variables = worstVariables();
+    expect(evaluate(rule, variables)).toBe('false');
+  });
+});
+
+const WORST_RULE = 'expected.exists(e, observed.exists(o, o == e || e == o))';
+
+/** Two lists of 1000 elements, each a list of three integers, together within maxInputSize. */
+function worstVariables(): Record<string, unknown> {
+  const expected = Array.from({ length: 1000 }, () => [1, 2, 3]);
+  const observed = Array.from({ length: 1000 }, () => [1, 2, 4]);
+  return { expected, observed };
+}
 
 describe('the allowed subset, checked when an expression is loaded', () => {
   const outside: Array<[string, string]> = [
