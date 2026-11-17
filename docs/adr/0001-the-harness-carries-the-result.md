@@ -13,3 +13,6 @@ checked and its cost grows with every step.
   makes a check pass.
 - Every model-calling run starts with a free quote, and the amount a person types at a terminal is the run's hard cap.
   With no terminal there is no live run, and no flag overrides that.
+
+Later decisions: ADR 0009 removes the run-time judge and has the model bind each step once. ADR 0008 amends this in
+one place: in a sandbox, a model may propose an action that code didn't list.

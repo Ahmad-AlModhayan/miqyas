@@ -11,3 +11,6 @@ ledger, as before.
 
 - Readiness as a list of findings, the way scanners report: rejected, because "nothing found" would then prove
   nothing, which is exactly the incumbent's gap.
+
+Later decisions: ADR 0006 makes a readiness check a claim, of which a plan's assertion is another kind, and records
+findings in the ledger as facts that never carry a verdict. The coverage rule here is restated there.

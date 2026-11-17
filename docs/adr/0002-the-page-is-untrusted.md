@@ -16,3 +16,6 @@ never-do list and the evidence rules.
 - Trust Kahf's own apps: rejected, since the corpus has to prove the boundary holds against hostile pages.
 - `--allow-host` alone as consent on a live host: rejected for active checks, because it would let Miqyas probe apps
   the person doesn't own.
+
+Later decisions: ADR 0008 puts these limits behind one gate, adds the sandbox and three stated changes. ADR 0009
+replaces the cite-matched pass with bindings that code has tied to the assertion and seen fail.
