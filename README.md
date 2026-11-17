@@ -8,8 +8,9 @@ Miqyas brings three parts together so every check leaves proof:
 - **Proof core**: every check, from any source, ends in one verdict in the ledger with evidence and coverage.
 - **Agent team**: agents that understand the software, author plans, explore states, run active checks, and inject
   faults on any surface.
-- **Existing tools as adapters**: the runners, drivers and scanners you already trust (Playwright, axe-core, gitleaks,
-  osv-scanner, and more) plugged behind adapters rather than rebuilt.
+- **Outside tools as adapters**: the runners and scanners you already trust (axe-core, gitleaks, osv-scanner, and
+  more) plug in behind adapters and add facts. Judging is Miqyas's own code, and so, by design, is finding a defect
+  by experiment ([docs/MAP.md](docs/MAP.md)).
 
 Four ways in: one CLI command for a solo developer, a CI gate blocking release before `ready`, an MCP interface for a
 coding agent to verify what it built, and self-hosted runs where source code and data never leave your network.

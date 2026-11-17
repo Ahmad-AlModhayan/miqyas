@@ -5,10 +5,10 @@ run leaves, the one place every action passes, and the contracts for surfaces, p
 
 | | |
 |---|---|
-| Status | Proposed, 2026-11-16. Becomes the contract when ADRs 0006 to 0018 merge. |
+| Status | Proposed, 2026-11-16. Becomes the contract when ADRs 0006 to 0019 merge. |
 | Read with | [MAP.md](MAP.md): the whole system on one page and why it is built this way. [ENGINE.md](ENGINE.md): the experiment engine, which finds what nobody asked to be checked. [ALGORITHMS.md](ALGORITHMS.md): every function and formula named here, numbered. |
 | Replaces | The Architecture section of the [charter](CHARTER.md), and §5.2 (worker protocol), §6 (data model) and §7 (architecture) of the [SRS](SRS.md). It changes three lines of the [threat model](threat-model.md), listed there. Where an older document disagrees with this page, this page wins. |
-| Reasons | [ADRs 0006 to 0018](adr/). This page says what and how; each ADR says why, once. |
+| Reasons | [ADRs 0006 to 0019](adr/). This page says what and how; each ADR says why, once. |
 | Words | [CONTEXT.md](../CONTEXT.md). |
 
 ## 1. Why a new foundation
@@ -49,7 +49,7 @@ The picture of how the parts fit is in [MAP.md](MAP.md).
 ## 3. Facts and collectors
 
 A **fact** is one typed measurement. A **collector** is anything that records facts: a surface worker holding a live
-session, an adapter running an existing tool, a reader parsing files, a probe sending requests. A collector never
+session, an adapter running an outside tool, a reader parsing files, a probe sending requests. A collector never
 writes a verdict, a severity decision or the word "pass" (ADR 0006).
 
 ```ts
@@ -348,7 +348,7 @@ Each line is `{"seq": n, "t": type, "at": time, "body": {…}}`. The record type
 
 | Type | Body |
 |---|---|
-| `run.open` | format version; engine, collector, derivation and CEL library versions; the subjects with their digests; the inputs given; the grants; the class of each origin; the budgets; the quote and the cap |
+| `run.open` | format version; engine, collector, derivation and CEL library versions, and the versions of the other substrate that can change what is recorded (the browser, its driver, the SQL parser); the subjects with their digests; the inputs given; the grants; the class of each origin; the budgets; the quote and the cap |
 | `claim` | one claim file, verbatim, recorded once and referred to by the SHA-256 of its bytes |
 | `effect` | one decision of the gate: the request, who asked, the class the gate gave it, the rule, allowed or refused |
 | `fact` | one fact (§3) |
@@ -540,10 +540,36 @@ over that history. It is the worker least like a browser, and it is where `disru
 test runs in a sandbox. A worker for a control system must record a `target.class` fact (simulator, twin, live) before
 anything else, and anything that isn't a simulator the engine started is treated as live.
 
-**Adapters** stay as ADR 0005 defines them, and become collectors: each records a `tool.run` fact and the tool's
-results as facts. Two shared readers serve many adapters (ADR 0012): one for SARIF 2.1.0, into `finding` and
+**Adapters** run outside tools as ADR 0005 describes, and become collectors: each records a `tool.run` fact and the
+tool's results as facts. Two shared readers serve many adapters (ADR 0012): one for SARIF 2.1.0, into `finding` and
 `tool.run`, and one for JUnit XML, into `test.case`. Model checkers and provers come in as adapters too, and are what
 give a verdict the assurance `bounded` or `proved`.
+
+**What is Miqyas's own, and what is borrowed** (ADR 0019). Judging and finding by experiment are Miqyas's own code:
+the kernel, the gate, the run engine, the experiment engine, capsules, explorers, oracles and diagnosis, with the
+workers, proxies and probes that carry them out. What is borrowed is one of two things. **Substrate** carries out or
+reads what Miqyas decided; it is kept behind one interface, and its version is recorded in the bundle wherever it can
+change what is recorded or a verdict. A sandboxed stack's database is pinned by its recipe, which the capsule's
+manifest names as id@version (ALGORITHMS M1). An **outside tool** runs behind an adapter on what Miqyas handed it,
+and adds facts.
+
+| Borrowed | As | Why |
+|---|---|---|
+| Chromium, driven through Playwright | substrate | a web target runs in a real browser; a lint keeps the driver inside the surface code |
+| Node.js, the operating system and a container runtime | substrate | Miqyas and a sandboxed target run on them; a recipe starts containers (ENGINE §6) |
+| the database of a sandboxed target | substrate | a target keeps its state in a real database |
+| `libpg-query`, to read SQL | substrate | it is built from PostgreSQL's own parser, so SQL is read as the database reads it |
+| SHA-256, and HMAC-SHA-256 for keyed digests, from the platform | substrate | published standards, which a second verifier already has |
+| a CEL library | substrate | the language is specified apart from any implementation (ADR 0011) |
+| SARIF 2.1.0, JUnit XML, in-toto and DSSE, RFC 9162 | substrate (formats) | published formats; Miqyas reads and writes them with code of its own, so the borrowed part is the specification (ADRs 0007 and 0012) |
+| a PNG decoder, and a model provider's client library | substrate | one decodes an image and the other carries a request; code decides what is sent and what an answer means |
+| axe-core | outside tool | a catalogue of accessibility rules (check 4); bundled, and injected into the page by the web worker |
+| gitleaks | outside tool | a catalogue of key formats (checks 5 and 6); the web worker also carries a short list of patterns derived from it |
+| osv-scanner | outside tool | a catalogue of advisories (check 13) |
+| a project's own test runner, model checkers, provers | outside tools | their results are the project's or the tool's own, and say what kind of evidence they give (ADR 0015) |
+
+A language model is neither: it proposes, and code tests what it proposed (ADR 0009). Miqyas's own code takes the
+place of something borrowed only when a measurement named beforehand shows it does better (ADR 0019).
 
 ## 8. Plans and bindings
 
