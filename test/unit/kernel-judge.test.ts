@@ -6,7 +6,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ClaimRejection, loadClaim } from '../../src/kernel/claim.js';
 import type { Fact, PlacedFact } from '../../src/kernel/fact.js';
-import { fold, judgeSet } from '../../src/kernel/judge.js';
+import { fold, judgeSet, sealResult } from '../../src/kernel/judge.js';
 import { sha256 } from '../kernel-helpers.js';
 
 const CLAIM_FILE = path.resolve(import.meta.dirname, '../../src/claims/readiness-13-dependencies.json');
@@ -78,7 +78,7 @@ describe("check 13's claim", () => {
     expect(coveredElsewhere.read).toEqual([]);
     expect(coveredElsewhere.coverage.saw).toEqual({ collections: {}, inputs: {} });
 
-    const failsElsewhere = placed(reader(1), of('other', advisory('GHSA-crit-0001', 'critical')), of('other', advisory('GHSA-med-0002', 'medium')), osv(1));
+    const failsElsewhere = placed(reader(1), of('elsewhere', advisory('GHSA-crit-0001', 'critical')), of('other', advisory('GHSA-med-0002', 'medium')), osv(1));
     const verdict = judgeSet(loaded, { subject: 'repository', facts: failsElsewhere });
     expect(verdict.verdict).toBe('pass');
     expect(verdict.items).toEqual({ held: 0, failed: 0, outside: 0, uncertain: 0 });
@@ -133,6 +133,12 @@ const complete = () => fact('collection', 'c@1', { status: 'complete' });
 const item = (score: unknown, more: Partial<Fact> = {}): Fact => ({ ...fact('t.item', 'c@1', { score } as Fact['body']), ...more });
 
 describe('the judge', () => {
+  it('names in failed_on the example that gave fail, wherever it stands in the file', async () => {
+    const loaded = await loadClaim(encode(scoreClaim([passingExample, unknownExample, failingExample])), sha256);
+    expect(loaded.failedOn).toBe('nine fails');
+    expect(judgeSet(loaded, { subject: 'repository', facts: placed(complete()) }).failed_on).toBe('nine fails');
+  });
+
   it('reads a rule that gives an error as uncertain, never as a pass', async () => {
     const loaded = await loadClaim(encode(scoreClaim()), sha256);
     const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(item('high'), complete()) });
@@ -182,11 +188,33 @@ describe('the judge', () => {
     expect(depthOf(item(1), complete(), fact('t.other', 'c@1', { score: 1 }), { ...fact('t.other', 'c@1', {}), withheld: ['score'] })).toBe('facts');
   });
 
+  it('reads its view in ledger order, and takes the last run of each collection, in collector order', async () => {
+    const loaded = await loadClaim(encode(scoreClaim()), sha256);
+    const facts: PlacedFact[] = [
+      { seq: 9, fact: fact('collection', 'c@1', { status: 'complete' }) },
+      { seq: 4, fact: item(9) },
+      { seq: 7, fact: { ...fact('collection', 'c@1', { status: 'failed' }), run: 2 } },
+      { seq: 10, fact: fact('collection', 'b@1', { status: 'complete' }) },
+      { seq: 11, fact: { ...item(1), run: 2 } }, // an item of the same collector and run is not its collection
+    ];
+    const verdict = judgeSet(loaded, { subject: 'repository', facts });
+    expect(verdict.read).toEqual([4, 7, 9, 10, 11]);
+    expect(Object.keys(verdict.coverage.saw as { collections: object }).length).toBe(2);
+    const saw = (verdict.coverage.saw as { collections: Record<string, unknown> }).collections;
+    expect(Object.keys(saw)).toEqual(['b@1', 'c@1']);
+    expect(saw['c@1']).toEqual({ status: 'failed' }); // run 2 wins, though run 1 comes later in the ledger
+    expect(verdict.coverage.met).toBe(false);
+
+    const sameRun = [{ seq: 1, fact: fact('collection', 'c@1', { status: 'failed' }) }, { seq: 2, fact: complete() }];
+    expect(judgeSet(loaded, { subject: 'repository', facts: sameRun }).coverage.met).toBe(true); // in one run, the later wins
+  });
+
   it('folds: any fail fails, anything not known is not known, an empty set never passes', () => {
     expect(fold([])).toBe('not_known');
     expect(fold(['pass'])).toBe('pass');
     expect(fold(['pass', 'not_checked'])).toBe('not_known');
     expect(fold(['blocked', 'fail', 'pass'])).toBe('fail');
+    expect(sealResult(['pass', 'not_checked'])).toEqual({ verdict: 'not_known', verdicts: 2 });
   });
 });
 
@@ -230,6 +258,41 @@ describe('a claim file that is refused', () => {
     await refused(scoreClaim(allThree, undefined, { vacous: 'pass' })).toThrow(/unknown key "vacous"/);
     await refused({ ...scoreClaim(), view: { kinds: ['t.item', 'collection'], subjects: ['x'] } }).toThrow(/unknown key "view.subjects"/);
     await refused(scoreClaim([{ ...failingExample, expected: 'fail' }, passingExample, unknownExample])).toThrow(/example 0 has an unknown key "expected"/);
+  });
+
+  it('is not UTF-8, not JSON, or not an object', async () => {
+    await expect(loadClaim(new Uint8Array([0xff, 0xfe]), sha256)).rejects.toThrow(/not UTF-8/);
+    await expect(loadClaim(new TextEncoder().encode('{'), sha256)).rejects.toThrow(/not JSON/);
+    await expect(loadClaim(encode([scoreClaim()]), sha256)).rejects.toThrow(/not a JSON object/);
+  });
+
+  it('lacks a field it needs, or gives one in the wrong form', async () => {
+    const cases: [Record<string, unknown>, RegExp][] = [
+      [{ id: '' }, /needs id as text/],
+      [{ version: 0 }, /needs version as a whole number/],
+      [{ version: 1.5 }, /needs version as a whole number/],
+      [{ title: 7 }, /needs title as text/],
+      [{ view: { kinds: 't.item' } }, /needs view.kinds/],
+      [{ view: { kinds: ['t.item', 'collection'], by: [''] } }, /needs view.kinds, and view.by if given/],
+      [{ from: 't.other' }, /reads items of kind t.other, which its view does not hold/],
+      [{ holds: undefined }, /needs holds as text/],
+      [{ covered: '' }, /needs covered as text/],
+      [{ each: 'item.list' }, /has "each": it is not judged yet/],
+      [{ examples: {} }, /needs examples as a list/],
+    ];
+    for (const [change, why] of cases) await refused({ ...scoreClaim(), ...change }).toThrow(why);
+  });
+
+  it('has an example in the wrong form', async () => {
+    const cases: [unknown, RegExp][] = [
+      ['nine', /example 0 is not an object/],
+      [{ ...failingExample, name: '' }, /example 0 needs a name/],
+      [{ ...failingExample, expect: 'maybe' }, /example 0 needs expect: pass, fail, not_checked, blocked, unverified/],
+      [{ ...failingExample, facts: {} }, /example 0 needs facts as a list/],
+      [{ ...failingExample, inputs: [] }, /example 0 has inputs that are not an object/],
+      [{ ...failingExample, facts: [{ kind: 't.item', body: {} }] }, /example 0 fact 0 needs kind, by and body/],
+    ];
+    for (const [example, why] of cases) await refused(scoreClaim([example, passingExample, unknownExample])).toThrow(why);
   });
 
   it('has a vacuous rule other than pass or not_checked', async () => {
