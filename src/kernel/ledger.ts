@@ -137,12 +137,13 @@ export class LedgerWriter {
   private serialize(seq: number, t: RecordType, body: Json, at: string): string {
     if (this.sealed) throw new LedgerError('the ledger is sealed: nothing may follow run.seal');
     if (this.broken !== undefined) throw new LedgerError('an earlier write failed; the ledger is closed');
-    const notAllowed = describeNonJson(body, 'body');
-    if (notAllowed !== undefined) throw new LedgerError(`${notAllowed}: a record holds only JSON, with integers`);
-    const badBlob = isPlainObject(body) && 'blobs' in body ? readBlobRefs(body.blobs).problems[0] : undefined;
-    if (badBlob !== undefined) throw new LedgerError(`${badBlob}: each is {digest, size, mediaType}`);
     if (typeof at !== 'string') throw new LedgerError('the record time must be a string');
-    return JSON.stringify({ seq, t, at, body });
+    checkBody(body);
+    const json = JSON.stringify({ seq, t, at, body });
+    // The line is made once, and what it holds is checked again as the reader will read it. A body that answers
+    // differently each time it is read cannot pass the check as one thing and be written as another.
+    checkBody((JSON.parse(json) as { body: unknown }).body);
+    return json;
   }
 
   private async checkpoint(): Promise<void> {
@@ -155,9 +156,20 @@ export class LedgerWriter {
  * The first place where a value isn't JSON that survives a round trip unchanged, and what is there ("body.size is
  * 1.5"), or undefined when there is none. Integers only, as facts hold no floating point.
  */
+/** Throws LedgerError for a body the verifier would fail: one that isn't plain JSON, or whose blobs aren't references. */
+function checkBody(body: unknown): void {
+  const notAllowed = describeNonJson(body, 'body');
+  if (notAllowed !== undefined) throw new LedgerError(`${notAllowed}: a record holds only JSON, with integers`);
+  const badBlob = isPlainObject(body) && 'blobs' in body ? readBlobRefs(body.blobs).problems[0] : undefined;
+  if (badBlob !== undefined) throw new LedgerError(`${badBlob}: each is {digest, size, mediaType}`);
+}
+
 function describeNonJson(value: unknown, where: string): string | undefined {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return undefined;
-  if (typeof value === 'number') return Number.isSafeInteger(value) ? undefined : `${where} is ${value}`;
+  if (typeof value === 'number') {
+    // JSON writes minus zero as 0, so it would not come back as it went in.
+    return Number.isSafeInteger(value) && !Object.is(value, -0) ? undefined : `${where} is ${Object.is(value, -0) ? '-0' : value}`;
+  }
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
       const notAllowed = describeNonJson(value[i], `${where}[${i}]`);
@@ -166,8 +178,14 @@ function describeNonJson(value: unknown, where: string): string | undefined {
     return undefined;
   }
   if (isPlainObject(value)) {
-    for (const [key, item] of Object.entries(value)) {
-      const notAllowed = describeNonJson(item, `${where}.${key}`);
+    // JSON drops a symbol key and a property that isn't enumerable, and a getter may answer differently each time.
+    if (Object.getOwnPropertySymbols(value).length > 0) return `${where} has a symbol key`;
+    for (const key of Object.getOwnPropertyNames(value)) {
+      const property = Object.getOwnPropertyDescriptor(value, key);
+      if (property === undefined || !property.enumerable || !('value' in property)) {
+        return `${where}.${key} is not a plain property`;
+      }
+      const notAllowed = describeNonJson(property.value, `${where}.${key}`);
       if (notAllowed !== undefined) return notAllowed;
     }
     return undefined;
