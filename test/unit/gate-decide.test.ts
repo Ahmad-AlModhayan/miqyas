@@ -176,6 +176,78 @@ describe('disrupt', () => {
   });
 });
 
+// A page cannot lend an origin a test host's terms by calling it: a name counts only for an origin of the run.
+describe('an origin a page calls', () => {
+  const shopCalls = () =>
+    world({
+      targets: ['https://shop.example.com'],
+      engineStarted: [],
+      livePhysical: [],
+      observedCalls: [
+        { from: 'https://shop.example.com', to: 'http://127.0.0.1:9000' },
+        { from: 'https://shop.example.com', to: 'https://api.staging.thirdparty.net' },
+      ],
+    });
+
+  it('is not written to as a local test host when the only target is another origin, with --active', () => {
+    expect(decide(probeSent('POST', 'http://127.0.0.1:9000/collect', 'write'), shopCalls(), grants('--active'))).toMatchObject({
+      answer: 'refuse',
+      rule: 'deny.foreign-origin-active',
+      environment: 'backend',
+      origin: 'http://127.0.0.1:9000',
+    });
+  });
+
+  it('is not probed as a named test host when the only target is another origin, with --active', () => {
+    expect(decide(probeSent('GET', 'https://api.staging.thirdparty.net/x', 'probe'), shopCalls(), grants('--active'))).toMatchObject({
+      answer: 'refuse',
+      rule: 'deny.foreign-origin-active',
+      environment: 'backend',
+    });
+    expect(decide(probeSent('GET', 'https://shop.example.com/x', 'probe'), shopCalls(), grants('--active'))).toMatchObject({
+      answer: 'refuse',
+      rule: 'deny.foreign-origin-active',
+      environment: 'other',
+    });
+  });
+
+  it('is a loopback backend of a local test host: probed with --active, and never disrupted though its caller may be', () => {
+    const w = world({ observedCalls: [{ from: O.local, to: 'http://127.0.0.1:9000' }] });
+    const probe = probeSent('GET', 'http://127.0.0.1:9000/x', 'probe');
+    expect(decide(probe, w, noGrants())).toMatchObject({ answer: 'refuse', rule: 'ceiling.probe.backend', missing: ['active'] });
+    expect(decide(probe, w, grants('--active'))).toMatchObject({ answer: 'allow', rule: 'ceiling.probe.backend', environment: 'backend' });
+    const declared = probeSent('GET', 'http://127.0.0.1:9000/x', 'disrupt', {}, { declared: 'disrupt' });
+    expect(decide(declared, w, grants('--allow-disrupt'))).toMatchObject({ answer: 'refuse', rule: 'ceiling.disrupt.backend' });
+    expect(decide(probeSent('GET', `${O.local}/x`, 'disrupt', {}, { declared: 'disrupt' }), w, grants('--allow-disrupt'))).toMatchObject({
+      answer: 'allow',
+    });
+  });
+
+  it('is a test-labelled backend of a named test host, held to that caller’s terms: its token before a write', () => {
+    const w = world({ observedCalls: [{ from: O.named, to: 'https://api.staging.thirdparty.net' }] });
+    const post = probeSent('POST', 'https://api.staging.thirdparty.net/items', 'write');
+    expect(decide(post, w, grants('--active', '--allow-writes'))).toMatchObject({
+      answer: 'refuse',
+      rule: 'ceiling.write.backend',
+      missing: ['token'],
+    });
+    const withToken = world({ ...w, ownershipTokenHosts: ['staging.example.com'] });
+    expect(decide(post, withToken, grants('--active', '--allow-writes'))).toMatchObject({ answer: 'allow', rule: 'ceiling.write.backend' });
+  });
+
+  it('keeps its class by name when the person gave it: a loopback target is a local test host, a test-labelled one a named test host', () => {
+    const w = world({ targets: ['http://127.0.0.1:9000', 'https://api.staging.thirdparty.net'], engineStarted: [], livePhysical: [], observedCalls: [] });
+    expect(decide(probeSent('POST', 'http://127.0.0.1:9000/collect', 'write'), w, grants('--active'))).toMatchObject({
+      answer: 'allow',
+      rule: 'ceiling.write.local-test-host',
+    });
+    expect(decide(probeSent('GET', 'https://api.staging.thirdparty.net/x', 'probe'), w, grants('--active'))).toMatchObject({
+      answer: 'allow',
+      rule: 'ceiling.probe.named-test-host',
+    });
+  });
+});
+
 describe('the permit', () => {
   it('refuses a request a page sends under an observe permit that comes out as a write, even in a sandbox', () => {
     const e = request({ method: 'POST', url: `${O.sandbox}/delete`, cause: 'page' }, 'observe');

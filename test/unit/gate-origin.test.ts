@@ -15,6 +15,9 @@ const run = (over: Partial<OriginFacts> = {}): OriginFacts => ({
 const envOf = (origin: string, facts: OriginFacts = run(), grants = noGrants()) =>
   classOfOrigin(origin, facts, grants).environment;
 
+/** A run whose only target is the one URL given on the command line. */
+const given = (url: string): OriginFacts => run({ targets: [url] });
+
 describe('a sandbox', () => {
   const started = (onlyRouteOutIsGate: boolean) =>
     run({ targets: ['http://127.0.0.1:4100'], engineStarted: [{ origin: 'http://127.0.0.1:4100', onlyRouteOutIsGate }] });
@@ -35,7 +38,8 @@ describe('a sandbox', () => {
   });
 
   it('is judged by origin, so another port of the same host is not one', () => {
-    expect(envOf('http://127.0.0.1:4101', started(true))).toBe('local-test-host');
+    const facts = { ...started(true), targets: ['http://127.0.0.1:4100', 'http://127.0.0.1:4101'] };
+    expect(envOf('http://127.0.0.1:4101', facts)).toBe('local-test-host');
   });
 
   it('wins over a test host by name: an origin that is both is a sandbox', () => {
@@ -133,21 +137,21 @@ describe('a host that is not in canonical form', () => {
   });
 
   it('gets the class of the same name without its one trailing dot', () => {
-    expect(envOf('https://staging.example.com.')).toBe('named-test-host');
-    expect(envOf('https://staging.example.com')).toBe('named-test-host');
-    expect(envOf('http://x.test.')).toBe('local-test-host');
-    expect(envOf('http://x.test')).toBe('local-test-host');
+    expect(envOf('https://staging.example.com.', given('https://staging.example.com.'))).toBe('named-test-host');
+    expect(envOf('https://staging.example.com', given('https://staging.example.com.'))).toBe('named-test-host');
+    expect(envOf('http://x.test.', given('http://x.test'))).toBe('local-test-host');
+    expect(envOf('http://x.test', given('http://x.test'))).toBe('local-test-host');
   });
 
   it('counts localhost. as localhost: the one rule strips a single trailing dot', () => {
-    expect(envOf('http://localhost.:3000')).toBe('local-test-host');
-    expect(envOf('http://127.0.0.1.:3000')).toBe('local-test-host');
+    expect(envOf('http://localhost.:3000', given('http://localhost:3000'))).toBe('local-test-host');
+    expect(envOf('http://127.0.0.1.:3000', given('http://127.0.0.1:3000'))).toBe('local-test-host');
   });
 
   it('is the same class in upper case, and an IPv6 literal in brackets is judged as a literal', () => {
-    expect(envOf('HTTPS://STAGING.Example.COM')).toBe('named-test-host');
-    expect(envOf('http://[::1]:3000')).toBe('local-test-host');
-    expect(envOf('http://[2001:db8::1]:3000')).toBe('other');
+    expect(envOf('HTTPS://STAGING.Example.COM', given('https://staging.example.com'))).toBe('named-test-host');
+    expect(envOf('http://[::1]:3000', given('http://[::1]:3000'))).toBe('local-test-host');
+    expect(envOf('http://[2001:db8::1]:3000', given('http://[2001:db8::1]:3000'))).toBe('other');
   });
 
   it('names the same host with and without the trailing dot for --allow-host and the token', () => {
@@ -159,6 +163,40 @@ describe('a host that is not in canonical form', () => {
   it('is the same origin as the name without the dot, so a sandbox started on one is a sandbox on the other', () => {
     const facts = run({ targets: ['http://localhost:4100'], engineStarted: [{ origin: 'http://localhost:4100', onlyRouteOutIsGate: true }] });
     expect(envOf('http://localhost.:4100/x', facts)).toBe('sandbox');
+  });
+});
+
+// A name makes a local or named test host only for an origin of the run (one the person named, or one the engine
+// started) or a host the person named with --allow-host. A page cannot make one by calling it.
+describe('a test host by name', () => {
+  it('is not a loopback origin that was not given: nobody named it and nobody called it', () => {
+    expect(classOfOrigin('http://127.0.0.1:9000', given('https://shop.example.com'), noGrants())).toMatchObject({
+      environment: 'other',
+      rule: 'origin.other',
+      callers: [],
+    });
+    expect(envOf('http://localhost:5173')).toBe('other');
+    expect(envOf('http://shop.test')).toBe('other');
+  });
+
+  it('is not a test-labelled host that was not given', () => {
+    expect(envOf('https://api.staging.thirdparty.net', given('https://shop.example.com'))).toBe('other');
+  });
+
+  it('is judged by origin for a target: another port of a loopback target was not given', () => {
+    expect(envOf('http://127.0.0.1:9000', given('http://127.0.0.1:3000'))).toBe('other');
+  });
+
+  it('is an origin the engine started, even when its only way out is not the gate', () => {
+    const facts = run({ engineStarted: [{ origin: 'http://127.0.0.1:4100', onlyRouteOutIsGate: false }] });
+    expect(envOf('http://127.0.0.1:4100', facts)).toBe('local-test-host');
+  });
+
+  it('is a host the person named with --allow-host, though it is not a target and no token was found', () => {
+    expect(envOf('http://127.0.0.1:9000', run(), grantsFromFlags(['--allow-host', '127.0.0.1']))).toBe('local-test-host');
+    expect(envOf('https://api.staging.thirdparty.net', run(), grantsFromFlags(['--allow-host', 'api.staging.thirdparty.net']))).toBe(
+      'named-test-host',
+    );
   });
 });
 
@@ -235,9 +273,35 @@ describe('a backend', () => {
     expect(envOf(api, facts)).toBe('sandbox');
   });
 
-  it('is judged by its own name first: a backend that is a local test host by name is one', () => {
+  it('is what a loopback origin a page of a local test host calls is, and it gets that caller’s terms and no more', () => {
     const local = 'http://127.0.0.1:9000';
-    expect(envOf(local, run({ targets: [target], observedCalls: [{ from: target, to: local }] }))).toBe('local-test-host');
+    const c = classOfOrigin(local, run({ targets: [target], observedCalls: [{ from: target, to: local }] }), noGrants());
+    expect(c).toMatchObject({ environment: 'backend', rule: 'origin.backend' });
+    expect(c.callers.map((x) => [x.origin, x.environment])).toEqual([['http://localhost:3000', 'local-test-host']]);
+  });
+
+  it('is what a test-labelled host a page of a named test host calls is, held to that caller', () => {
+    const named = 'https://staging.example.com';
+    const called = 'https://api.staging.thirdparty.net';
+    const c = classOfOrigin(called, run({ targets: [named], observedCalls: [{ from: named, to: called }] }), noGrants());
+    expect(c).toMatchObject({ environment: 'backend', rule: 'origin.backend' });
+    expect(c.callers.map((x) => [x.origin, x.environment])).toEqual([['https://staging.example.com', 'named-test-host']]);
+  });
+
+  it('gets no test-host terms from its name when the page that calls it is of another origin', () => {
+    const shop = 'https://shop.example.com';
+    const facts = run({
+      targets: [shop],
+      observedCalls: [
+        { from: shop, to: 'http://127.0.0.1:9000' },
+        { from: shop, to: 'https://api.staging.thirdparty.net' },
+      ],
+    });
+    for (const called of ['http://127.0.0.1:9000', 'https://api.staging.thirdparty.net']) {
+      const c = classOfOrigin(called, facts, noGrants());
+      expect(c).toMatchObject({ environment: 'backend', rule: 'origin.backend' });
+      expect(c.callers.map((x) => [x.origin, x.environment])).toEqual([['https://shop.example.com', 'other']]);
+    }
   });
 
   it('does not recurse when two origins of the run call each other', () => {
@@ -271,6 +335,8 @@ describe('any other origin', () => {
   it('takes the origin of a full URL, with its scheme, host and port compared exactly', () => {
     const facts = run({ targets: ['http://127.0.0.1:4100'], engineStarted: [{ origin: 'http://127.0.0.1:4100', onlyRouteOutIsGate: true }] });
     expect(envOf('HTTP://127.0.0.1:4100/some/path?x=1#y', facts)).toBe('sandbox');
-    expect(envOf('https://127.0.0.1:4100/', facts)).toBe('local-test-host');
+    expect(envOf('https://127.0.0.1:4100/', { ...facts, targets: ['http://127.0.0.1:4100', 'https://127.0.0.1:4100'] })).toBe(
+      'local-test-host',
+    );
   });
 });

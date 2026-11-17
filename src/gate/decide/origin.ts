@@ -111,10 +111,13 @@ function classify(
   if (allowHosts.includes(host) && facts.ownershipTokenHosts.some((h) => h.toLowerCase() === host)) {
     return make('owned-host', 'origin.owned-host');
   }
-  if (isLocalTestName(host)) return make('local-test-host', 'origin.local-test-host');
-  if (carriesTestLabel(host)) return make('named-test-host', 'origin.named-test-host');
+  // A name makes a test host only when the person gave the origin: one of the run, or a host named with --allow-host.
+  // An origin a page calls is not given by that: it is a backend, and never gets more than the origin that calls it.
+  const runOrigins = originsOfTheRun(facts);
+  const given = runOrigins.has(norm) || allowHosts.includes(host);
+  if (given && isLocalTestName(host)) return make('local-test-host', 'origin.local-test-host');
+  if (given && carriesTestLabel(host)) return make('named-test-host', 'origin.named-test-host');
   if (withBackend) {
-    const runOrigins = originsOfTheRun(facts);
     const callers = [
       ...new Set(
         facts.observedCalls
@@ -142,7 +145,8 @@ export function originsOfTheRun(facts: OriginFacts): ReadonlySet<string> {
 
 /**
  * Class an origin (B2), in this order: sandbox, owned host, local test host, named test host, backend, other.
- * A sandbox wins over a test host by name. Grants that no builder issued name no host.
+ * A sandbox wins over a test host by name. A name makes a local or named test host only for an origin of the run
+ * or a host named with --allow-host. Grants that no builder issued name no host.
  */
 export function classOfOrigin(origin: string, run: OriginFacts, grants: Grants): OriginClassification {
   const allowHosts = isIssuedGrants(grants) ? grants.allowHosts : [];
