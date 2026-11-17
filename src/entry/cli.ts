@@ -45,7 +45,7 @@ import { CorpusError, lintCorpus, loadCorpusFromPath, resolveContainedCorpusPath
 import { parseFailOn, type FailOnThreshold, type Finding } from '../proof-core/findings.js';
 import { isDryRunStatus, reportPath, type PlanResult } from '../proof-core/ledger.js';
 import { applyMutation, BuildChangedError, classify, parsePreset, summarize, type Mutation, type MutationPreset, type MutationResult } from '../proof-core/mutate.js';
-import { executePlans, runMutations, runVerification } from '../proof-core/orchestrator.js';
+import { executePlans, runMutations, runVerification, type RunResult } from '../proof-core/orchestrator.js';
 import { lintPlan, loadPlanFile, loadPlans, PlanError, resolvePlanFiles, serializePlan, type Plan } from '../proof-core/plan.js';
 import { parseReadinessProfile, type ReadinessProfile } from '../proof-core/readiness.js';
 import { renderHuman, type Method, type RunReport } from '../proof-core/report.js';
@@ -61,6 +61,8 @@ import {
   type BenchRegression,
 } from '../proof-core/scoring.js';
 import { NO_SCRUB, parseScrubRules, scrubDir, scrubText, type ScrubRules } from '../scrub/scrub.js';
+import { buildRunOpen, runWithProofBundle } from './proof-bundle.js';
+import { verifyBundle } from './verify.js';
 import { openWebSurfaceDriver } from '../surfaces/web/driver.js';
 import { DEFAULT_CRAWL_DEPTH, DEFAULT_CRAWL_MAX_SCREENS, DEFAULT_CRAWL_RPS } from '../surfaces/web/crawler.js';
 import { HostPolicyError, verifyHostOwnership, type HostOwnershipOptions } from '../surfaces/web/policy.js';
@@ -78,6 +80,7 @@ const HELP = `miqyas: AI testing that proves what it checked. Core engine: AGPL-
 
 Usage:
   miqyas run [plans...] --url <url> [options]      run plans, --crawl, or --profile grade-1 against a web app
+  miqyas verify <bundle>                           check a proof bundle offline: needs no target, model or network
   miqyas mutate <plans...> --build <dir> --preset <name|file> [options]
                                                    break copies of a build on purpose, report the detection rate
   miqyas quote <plans...> [--tier <level>] [--model <id>] [--no-model] [--preset <name|file>]
@@ -96,6 +99,7 @@ Usage:
 Options:
   --json                 print the JSON report instead of the summary
   --out <dir>            run folder (default .miqyas/runs/<id>)
+  --proof-bundle         also write a proof bundle into the run folder as the run goes, and print its head (run only)
   --retention-days <d>   prune expired .miqyas/runs older than <d> days (default ${DEFAULT_RUN_RETENTION_DAYS}; 0 = prune all prior runs)
   --dry-run              resolve plans, open pages and probe mutations; no model call
   --no-model             run code-judged checks without calling a model ($0, works in CI)
@@ -135,6 +139,7 @@ const OPTIONS = {
   url: { type: 'string' },
   json: { type: 'boolean', default: false },
   out: { type: 'string' },
+  'proof-bundle': { type: 'boolean', default: false },
   'retention-days': { type: 'string' },
   'dry-run': { type: 'boolean', default: false },
   'no-model': { type: 'boolean', default: false },
@@ -488,35 +493,67 @@ async function cmdRun(args: string[], o: Opts, inject: Injected, quiet = false):
   if (exec.noModel && exec.quote && !silent) process.stderr.write(formatQuote(exec.quote) + '\n');
   if (!silent) process.stderr.write(`miqyas: ${plans.length} plan(s)${scopeLabel} against ${o.url}${modeLabel}; run folder ${runDir}\n`);
 
-  const driver = await openWebSurfaceDriver({ headed: settings.headed, allowOtherOrigins: settings.allowOtherOrigins });
-  try {
-    const result = await runVerification({
-      runId: id,
-      url: o.url,
-      plans,
-      runDir,
-      ...(inject.runsDir !== undefined ? { runsDir: inject.runsDir } : {}),
-      ...(retentionDays !== undefined ? { retentionDays } : {}),
-      driver,
-      agent: exec.agent,
-      noModel: exec.noModel,
-      ...(exec.spendGuard ? { spendGuard: exec.spendGuard } : {}),
-      ...(exec.quote ? { quote: exec.quote } : {}),
-      scrub,
-      scrubMethod,
-      settings,
-      ...(repoPath ? { repoPath } : {}),
-      ...(inject.clock ? { clock: inject.clock } : {}),
-      ...(inject.hostPolicyDeps ? { hostPolicyDeps: inject.hostPolicyDeps } : {}),
-      onPlan: (r) => !silent && process.stderr.write(`  ${r.planId}: ${o['dry-run'] ? dryRunStatus(r.error, r.verdict) : r.verdict} (${(r.durationMs / 1000).toFixed(1)} s)\n`),
-    });
-    if (!quiet) {
-      process.stdout.write(o.json ? JSON.stringify(result.report, null, 2) + '\n' : renderHuman(result.report) + `\nReport: ${path.join(runDir, 'report.md')}\n`);
+  const execute = async (): Promise<RunResult> => {
+    const driver = await openWebSurfaceDriver({ headed: settings.headed, allowOtherOrigins: settings.allowOtherOrigins });
+    try {
+      return await runVerification({
+        runId: id,
+        url: o.url as string,
+        plans,
+        runDir,
+        ...(inject.runsDir !== undefined ? { runsDir: inject.runsDir } : {}),
+        ...(retentionDays !== undefined ? { retentionDays } : {}),
+        driver,
+        agent: exec.agent,
+        noModel: exec.noModel,
+        ...(exec.spendGuard ? { spendGuard: exec.spendGuard } : {}),
+        ...(exec.quote ? { quote: exec.quote } : {}),
+        scrub,
+        scrubMethod,
+        settings,
+        ...(repoPath ? { repoPath } : {}),
+        ...(inject.clock ? { clock: inject.clock } : {}),
+        ...(inject.hostPolicyDeps ? { hostPolicyDeps: inject.hostPolicyDeps } : {}),
+        onPlan: (r) => !silent && process.stderr.write(`  ${r.planId}: ${o['dry-run'] ? dryRunStatus(r.error, r.verdict) : r.verdict} (${(r.durationMs / 1000).toFixed(1)} s)\n`),
+      });
+    } finally {
+      await driver.close();
     }
-    return result.exitCode;
-  } finally {
-    await driver.close();
+  };
+
+  // --proof-bundle: the run also writes a proof bundle into its folder as it goes (docs/FOUNDATION.md §5). Without it
+  // the run is exactly what it was.
+  const headLines: string[] = [];
+  const result = o['proof-bundle']
+    ? await runWithProofBundle(
+        {
+          dir: runDir,
+          runId: id,
+          open: await buildRunOpen({ url: o.url, plans, settings, ...(exec.quote ? { quote: exec.quote } : {}) }),
+          now: inject.now ?? (() => new Date()),
+          print: (line) => headLines.push(line),
+        },
+        async () => {
+          const r = await execute();
+          return { result: r, fold: { verdict: r.report.verdict, exitCode: r.exitCode, plans: r.report.plans.map((p) => ({ id: p.planId, verdict: p.verdict })) } };
+        },
+      )
+    : await execute();
+  if (!quiet) {
+    process.stdout.write(o.json ? JSON.stringify(result.report, null, 2) + '\n' : renderHuman(result.report) + `\nReport: ${path.join(runDir, 'report.md')}\n`);
   }
+  for (const line of headLines) (o.json ? process.stderr : process.stdout).write(line + '\n');
+  return result.exitCode;
+}
+
+/** miqyas verify <bundle>: reads the folder it is given and nothing else. */
+async function cmdVerify(args: string[], o: Opts): Promise<number> {
+  if (args.length !== 1) throw new UsageError('verify needs one bundle folder: miqyas verify <bundle>');
+  const given = Object.entries(o).filter(([key, value]) => key !== 'help' && value !== undefined && value !== false);
+  if (given.length) throw new UsageError(`verify takes no options (got --${given[0]![0]}): it needs no target, model or network`);
+  const report = await verifyBundle(args[0] as string);
+  (report.exitCode === 2 ? process.stderr : process.stdout).write(report.lines.join('\n') + '\n');
+  return report.exitCode;
 }
 
 async function resolveCorpusPlansArg(baseDir: string, explicitArgs: string[]): Promise<string[]> {
@@ -1212,8 +1249,14 @@ export async function main(argv: string[], inject: Injected = {}): Promise<numbe
     process.stderr.write(`miqyas: --history is only supported on bench\n`);
     return 2;
   }
+  if (o['proof-bundle'] && cmd !== 'run') {
+    process.stderr.write(`miqyas: --proof-bundle is only supported on run\n`);
+    return 2;
+  }
   try {
     switch (cmd) {
+      case 'verify':
+        return await cmdVerify(args, o);
       case 'run':
         return await cmdRun(args, o, inject);
       case 'mutate':
