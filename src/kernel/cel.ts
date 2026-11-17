@@ -6,11 +6,14 @@
 // No clock takes part: the limits are on the text, checked when the expression is loaded, and on the size of the
 // lists it is given, so the same expression and the same variables always give the same answer.
 
-import { CelScalar, celEnv, celFunc, isCelError, parse, plan } from '@bufbuild/cel';
+import { CelScalar, celEnv, celFunc, isCelError, isCelList, isCelMap, parse, plan } from '@bufbuild/cel';
 import { type CelLimits, DEFAULT_LIMITS, checkStatic } from './cel-static.js';
 import { normalize } from './normalize.js';
 
 export { DEFAULT_LIMITS, type CelLimits };
+
+/** The CEL library behind this interface. Recorded in every bundle; swapping it must not change a verdict. */
+export const CEL_LIBRARY = Object.freeze({ name: '@bufbuild/cel', version: '0.6.2' });
 
 export type Verdict = 'true' | 'false' | 'error';
 
@@ -107,21 +110,53 @@ function toInput(value: unknown, limits: CelLimits, depth: number): unknown {
   }
 }
 
+/** What an expression can give: an integer, text, a boolean, null, a list, or a map. */
+export type CelValue = null | boolean | bigint | string | CelValue[] | Map<string | bigint | boolean, CelValue>;
+
+export type Outcome = { ok: true; value: CelValue } | { ok: false; reason: string };
+
+/** A result the kernel does not accept: a fraction, an unsigned integer, bytes, a time, an object. */
+const NOT_A_VALUE = 'the result is not an integer, text, a boolean, null, a list or a map';
+
+function fromResult(result: unknown): CelValue {
+  if (result === null || typeof result === 'boolean' || typeof result === 'bigint' || typeof result === 'string') return result;
+  if (isCelList(result)) return Array.from(result, fromResult);
+  if (isCelMap(result)) {
+    const entries: Array<[string | bigint | boolean, CelValue]> = [];
+    for (const [key, inner] of result.entries()) {
+      if (typeof key === 'object') throw new Unreadable(NOT_A_VALUE);
+      entries.push([key, fromResult(inner)]);
+    }
+    return new Map(entries);
+  }
+  throw new Unreadable(NOT_A_VALUE);
+}
+
+/**
+ * Evaluate to the value itself, for the rules that give an integer (`count`, `value`). It is `ok: false` for anything
+ * that goes wrong, with the reason; the reason is for people, and no verdict is ever made from it.
+ */
+export function evaluateValue(expression: CompiledExpression, variables: Record<string, unknown>): Outcome {
+  try {
+    const bindings: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(variables)) bindings[name] = toInput(value, expression.limits, 0);
+    const result = expression.run(bindings);
+    if (isCelError(result as never)) return { ok: false, reason: (result as Error).message };
+    return { ok: true, value: fromResult(result) };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : 'evaluation failed' };
+  }
+}
+
 /**
  * Evaluate to `true`, `false` or `error`. Anything that goes wrong (a missing field, a type mismatch, an overflow, a
  * variable that is not CEL data, an exception from the library) is `error`; nothing but a result that is exactly the
  * boolean `true` or `false` gives either of those.
  */
 export function evaluate(expression: CompiledExpression, variables: Record<string, unknown>): Verdict {
-  try {
-    const bindings: Record<string, unknown> = {};
-    for (const [name, value] of Object.entries(variables)) bindings[name] = toInput(value, expression.limits, 0);
-    const result = expression.run(bindings);
-    if (isCelError(result as never)) return 'error';
-    if (result === true) return 'true';
-    if (result === false) return 'false';
-    return 'error';
-  } catch {
-    return 'error';
-  }
+  const outcome = evaluateValue(expression, variables);
+  if (!outcome.ok) return 'error';
+  if (outcome.value === true) return 'true';
+  if (outcome.value === false) return 'false';
+  return 'error';
 }
