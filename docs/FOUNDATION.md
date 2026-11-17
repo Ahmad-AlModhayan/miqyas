@@ -5,7 +5,7 @@ run leaves, the one place every action passes, and the contracts for surfaces, p
 
 | | |
 |---|---|
-| Status | Proposed, 2026-11-16. Becomes the contract when ADRs 0006 to 0018 merge. |
+| Status | Proposed, 2026-11-16. Becomes the contract when ADRs 0006 to 0019 merge. |
 | Read with | [MAP.md](MAP.md): the whole system on one page and why it is built this way. [ENGINE.md](ENGINE.md): the experiment engine, which finds what nobody asked to be checked. [ALGORITHMS.md](ALGORITHMS.md): every function and formula named here, numbered. |
 | Replaces | The Architecture section of the [charter](CHARTER.md), and §5.2 (worker protocol), §6 (data model) and §7 (architecture) of the [SRS](SRS.md). It changes three lines of the [threat model](threat-model.md), listed there. Where an older document disagrees with this page, this page wins. |
 | Reasons | [ADRs 0006 to 0019](adr/). This page says what and how; each ADR says why, once. |
@@ -549,9 +549,9 @@ give a verdict the assurance `bounded` or `proved`.
 the kernel, the gate, the run engine, the experiment engine, capsules, explorers, oracles and diagnosis, with the
 workers, proxies and probes that carry them out. What is borrowed is one of two things. **Substrate** carries out or
 reads what Miqyas decided; it is kept behind one interface, and its version is recorded in the bundle wherever it can
-change what is recorded or a verdict. A sandboxed stack's database is named by its recipe, as id@version, in the
-capsule's manifest (ALGORITHMS M1). An **outside tool** runs behind an adapter on what Miqyas handed it, and adds
-facts.
+change what is recorded or a verdict. A sandboxed stack's database is pinned by its recipe, which the capsule's
+manifest names as id@version (ALGORITHMS M1). An **outside tool** runs behind an adapter on what Miqyas handed it,
+and adds facts.
 
 | Borrowed | As | Why |
 |---|---|---|
@@ -561,7 +561,7 @@ facts.
 | `libpg-query`, to read SQL | substrate | it is built from PostgreSQL's own parser, so SQL is read as the database reads it |
 | SHA-256, and HMAC-SHA-256 for keyed digests, from the platform | substrate | published standards, which a second verifier already has |
 | a CEL library | substrate | the language is specified apart from any implementation (ADR 0011) |
-| SARIF 2.1.0, JUnit XML, in-toto and DSSE, RFC 9162 | substrate (formats) | published formats; the readers and writers are Miqyas's own (ADRs 0007 and 0012) |
+| SARIF 2.1.0, JUnit XML, in-toto and DSSE, RFC 9162 | substrate (formats) | published formats; Miqyas reads and writes them with code of its own, so the borrowed part is the specification (ADRs 0007 and 0012) |
 | a PNG decoder, and a model provider's client library | substrate | one decodes an image and the other carries a request; code decides what is sent and what an answer means |
 | axe-core | outside tool | a catalogue of accessibility rules (check 4); bundled, and injected into the page by the web worker |
 | gitleaks | outside tool | a catalogue of key formats (checks 5 and 6); the web worker also carries a short list of patterns derived from it |

@@ -73,7 +73,8 @@ macOS, Linux or Windows with Node 20+; Playwright's Chromium; Android platform t
 ### 2.4 Constraints
 - Only model calls leave the machine during a run (ADR 0003); a named command (`miqyas update-db`) fetches the OSV database and logs what it sends. Source code is read only by code, never sent to a model, and never written. A call carries the step text and the scrubbed screenshot and DOM or accessibility excerpt of the current step; never source files or an architecture summary.
 - Keys come from the environment; Miqyas never writes, prints or asks for them.
-- Drivers are substrate (ADR 0019): Playwright, Playwright MCP, Midscene.js, Stagehand, WebdriverIO. One of Miqyas's
+- Drivers that carry out an action Miqyas chose are substrate (ADR 0019): Playwright and WebdriverIO. Playwright MCP,
+  Midscene.js and Stagehand, if used, only carry out what a plan or a bound step names (ADR 0009). One of Miqyas's
   own takes a driver's place only when measured to do better.
 - Runs never touch a user's real app or data (a developer's installed apps and data are never read or written). Mutations apply to a copy of a served build, never to the repository.
 - Lean builds; verification runs locally.
@@ -209,7 +210,7 @@ FR-S1–S4 below are superseded by FR-B9 and FR-K1–K13, which bring them into 
 | FR-Q1 | `miqyas run --profile grade-1 --url <url> [--repo <path>]`: runs the profile's readiness checks as assertions Miqyas writes, judged by code into the ledger with evidence and coverage (ADR 0004). | M | e2e on fixture apps |
 | FR-Q2 | A check passes only at its declared minimum coverage with nothing found; below it, or with an input missing, it is `not_checked` with the reason and what to add. "Ready" means every check has a recorded pass. | M | Unit tests on synthetic ledgers |
 | FR-Q3 | Report: the readiness summary first ("Grade 1: not ready (10 of 13 pass, 2 fail, 1 not checked)"), then per pillar each check with its verdict, coverage and evidence, "not a penetration test" on each security check, then what to add, then the ledger and the findings; `report.json` gains a `readiness` block in its schema. No score out of 100. | M | Report schema test |
-| FR-Q4 | Adapters (ADRs 0005 and 0019): each tool reports its version and coverage in the method block; gitleaks (run with `--redact`) and osv-scanner are user-installed binaries that `doctor` lists; migrations are parsed with libpg-query (MIT), which is substrate and not an adapter; a missing binary makes its checks `not_checked`. | M | Shim-on-path e2e; missing-binary test |
+| FR-Q4 | Adapters (ADRs 0005 and 0019): each tool reports its version and coverage in the method block; gitleaks (run with `--redact`) and osv-scanner are user-installed binaries that `doctor` lists; migrations are parsed with libpg-query (MIT), which is substrate and not an adapter; a missing binary makes its checks `not_checked`. ADRs 0006 and 0012 change two of these: a missing binary is `blocked`, and coverage comes from what Miqyas handed the tool. | M | Shim-on-path e2e; missing-binary test |
 | FR-Q5 | `--no-model` runs every check that needs no model (12 of 13) at $0, and the quote says so. | M | Network capture: no model endpoint |
 | FR-Q6 | `miqyas update-db` fetches the OSV database, prints what it sends and logs it; nothing but model calls leaves the machine during a run (ADR 0003). | M | Network capture during a run |
 | FR-Q7 | Row values a probe reaches are never written to disk or sent to a model; evidence is the status code, table and column names, and "at least one row returned". | M | Sentinel row value absent from the run folder and payloads |

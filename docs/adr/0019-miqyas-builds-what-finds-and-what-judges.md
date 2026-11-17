@@ -45,9 +45,9 @@ installed still gives the matrix.
 - When a new need appears, the first question is which kind of work it is. Finding and judging are built; nothing is
   wrapped to do them.
 - FOUNDATION §7 lists what is borrowed, as substrate or as an outside tool, with the reason.
-- Substrate is kept behind one interface: the worker contract for a browser and its driver, one module of the kernel
-  for a CEL library. Its version is recorded in the bundle wherever it can change what is recorded or a verdict, as
-  ADR 0011 already requires of the CEL library. Swapping one library for another that implements the same standard
+- Substrate is kept behind one interface each: the worker contract for a browser and its driver, one module of the
+  kernel for a CEL library, one reader for the SQL parser. Its version is recorded in the bundle wherever it can
+  change what is recorded or a verdict, as ADR 0011 already requires of the CEL library. Swapping one library for another that implements the same standard
   must not change a verdict. A change of browser or database is recorded, and can.
 - An outside tool adds facts and gives no verdict. Its coverage is taken from what Miqyas handed it (ADR 0012), a
   missing tool makes its checks `blocked` (ADR 0006), and a verdict that rests on one says what kind of evidence the
