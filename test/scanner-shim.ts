@@ -6,10 +6,10 @@
 // extensionless script or a .cmd file.
 
 import { execFileSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { afterAll } from 'vitest';
 
 /** A Windows launcher: starts `node` on the script named in the `.cmdline` file beside it, passes its own
  * arguments on unchanged, and exits with the script's exit code. Kept in a raw string; the C# escapes in it
@@ -48,36 +48,30 @@ static class Launcher {
 `;
 
 let launcherExe: string | undefined;
+let launcherDir: string | undefined;
 
-/** Compile the launcher once per machine with the C# compiler every Windows install carries (.NET Framework). */
+// vitest evaluates this module once per test file that imports it, so each file compiles into its own folder and
+// removes only that folder when its tests finish. (A worker is killed hard, so a process exit handler never runs.)
+if (process.platform === 'win32') {
+  afterAll(() => {
+    if (launcherDir) rmSync(launcherDir, { recursive: true, force: true });
+  });
+}
+
+/** Compile the launcher once per test file, into a private folder made for it and removed when its tests finish, with the C# compiler every Windows install carries (.NET Framework). */
 function windowsLauncher(): string {
   if (launcherExe) return launcherExe;
-  const dir = path.join(os.tmpdir(), `miqyas-test-launcher-${createHash('sha256').update(LAUNCHER_SOURCE).digest('hex').slice(0, 12)}`);
+  const root = process.env.SystemRoot;
+  const csc = root
+    ? ['Framework64', 'Framework'].map((f) => path.join(root, 'Microsoft.NET', f, 'v4.0.30319', 'csc.exe')).find((p) => existsSync(p))
+    : undefined;
+  if (!csc) throw new Error('The scanner shims need csc.exe from .NET Framework 4, which was not found on this Windows machine.');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'miqyas-launcher-'));
+  launcherDir = dir;
+  const source = path.join(dir, 'launcher.cs');
   const exe = path.join(dir, 'launcher.exe');
-  if (!existsSync(exe)) {
-    const root = process.env.SystemRoot;
-    const csc = root
-      ? ['Framework64', 'Framework'].map((f) => path.join(root, 'Microsoft.NET', f, 'v4.0.30319', 'csc.exe')).find((p) => existsSync(p))
-      : undefined;
-    if (!csc) throw new Error('The scanner shims need csc.exe from .NET Framework 4, which was not found on this Windows machine.');
-    mkdirSync(dir, { recursive: true });
-    const unique = `${process.pid}-${Date.now()}`;
-    const source = path.join(dir, `launcher-${unique}.cs`);
-    const built = path.join(dir, `launcher-${unique}.exe`);
-    writeFileSync(source, LAUNCHER_SOURCE, 'utf8');
-    try {
-      execFileSync(csc, ['/nologo', '/target:exe', '/optimize+', `/out:${built}`, source], { stdio: 'pipe' });
-      try {
-        renameSync(built, exe);
-      } catch (err) {
-        // Another test process published the same launcher first; use theirs.
-        if (!existsSync(exe)) throw err;
-      }
-    } finally {
-      rmSync(source, { force: true });
-      rmSync(built, { force: true });
-    }
-  }
+  writeFileSync(source, LAUNCHER_SOURCE, 'utf8');
+  execFileSync(csc, ['/nologo', '/target:exe', '/optimize+', `/out:${exe}`, source], { stdio: 'pipe' });
   launcherExe = exe;
   return exe;
 }
@@ -96,6 +90,7 @@ export function writeScannerShim(binDir: string, name: 'gitleaks' | 'osv-scanner
   const exePath = path.join(binDir, `${name}.exe`);
   writeFileSync(scriptPath, script, 'utf8');
   copyFileSync(windowsLauncher(), exePath);
+  // `.cmdline` format: line 1 is the full path of the program to start (node), line 2 the script it runs.
   writeFileSync(`${exePath}.cmdline`, `${process.execPath}\n${scriptPath}\n`, 'utf8');
 }
 
