@@ -4,10 +4,10 @@
 // are evaluated; the shared vectors are test/vectors/normalize.json.
 
 /** Format characters that carry no letter: zero-width and direction marks, the byte order mark, the soft hyphen. */
-const INVISIBLE = /[­؜​-‏‪-‮⁠-⁤⁦-⁩﻿]/gu;
+const INVISIBLE = /[\u00AD\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/gu;
 
 /** Arabic tatweel, the vowel and other marks (U+064B to U+065F), the superscript alef, and the Quranic annotation marks. */
-const ARABIC_MARKS = /[ـً-ٰٟۖ-ۜ۟-۪ۤۧۨ-ۭ]/gu;
+const ARABIC_MARKS = /[\u0640\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7\u06E8\u06EA-\u06ED]/gu;
 
 /** The letter variants folded to one letter each. Hamza on waw and on yeh, and the digits, are left as they are. */
 const LETTER_VARIANTS: Readonly<Record<string, string>> = {
@@ -20,7 +20,7 @@ const LETTER_VARIANTS: Readonly<Record<string, string>> = {
   'ة': 'ه', // teh marbuta -> heh
   'ک': 'ك', // Persian kaf -> kaf
 };
-const VARIANT = /[آأإٱىیةک]/gu;
+const VARIANT = /[\u0622\u0623\u0625\u0671\u0649\u06CC\u0629\u06A9]/gu;
 
 /** Unicode White_Space, which `\s` matches; the byte order mark that `\s` also matches is gone by then. */
 const SPACE_RUN = /\s+/gu;
