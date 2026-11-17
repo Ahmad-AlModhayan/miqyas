@@ -48,7 +48,7 @@ export async function verifyIntact(store: Store, sha256: Sha256): Promise<Intact
     }
   }
 
-  if (!ledger.sealed && n > 0) {
+  if (!ledger.sealed) {
     problems.push({
       path: LEDGER_PATH,
       record: n,

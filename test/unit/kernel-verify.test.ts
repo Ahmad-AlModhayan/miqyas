@@ -115,6 +115,60 @@ describe('verifying a proof bundle is intact', () => {
     ]);
   });
 
+  it('never passes a bundle with no seal, whatever its length, and says what is missing', async () => {
+    // SHA-256 of nothing, the root of the empty tree (RFC 9162 section 2.1.1).
+    const EMPTY_CHECKPOINT = 'run-1\n0\n47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=\n';
+    const noSeal = (record: number) => ({
+      path: 'ledger.jsonl',
+      record,
+      reason: 'there is no run.seal: the run did not finish, and a run with no seal never passes',
+    });
+    const noOpen = {
+      path: 'ledger.jsonl',
+      record: 0,
+      reason: 'the ledger holds no complete record: it does not start with run.open',
+    };
+
+    const empty = new MemoryStore();
+    empty.setText('ledger.jsonl', '');
+    empty.setText('checkpoint', EMPTY_CHECKPOINT);
+    const emptyResult = await verifyIntact(empty, sha256);
+    expect(emptyResult.ok).toBe(false);
+    expect(emptyResult.problems).toEqual([noOpen, noSeal(0)]);
+
+    const torn = new MemoryStore();
+    torn.setText('ledger.jsonl', '{"seq":0,"t":"run.op');
+    torn.setText('checkpoint', EMPTY_CHECKPOINT);
+    const tornResult = await verifyIntact(torn, sha256);
+    expect(tornResult.ok).toBe(false);
+    expect(tornResult.torn).toEqual({ record: 0, bytes: 20 });
+    expect(tornResult.problems).toEqual([noOpen, noSeal(0)]);
+
+    const missing = new MemoryStore();
+    missing.setText('checkpoint', EMPTY_CHECKPOINT);
+    const missingResult = await verifyIntact(missing, sha256);
+    expect(missingResult.ok).toBe(false);
+    expect(missingResult.problems).toEqual([{ path: 'ledger.jsonl', reason: 'there is no ledger' }, noSeal(0)]);
+  });
+
+  it('checks a run killed right after run.open against the checkpoint written at open, and fails it', async () => {
+    const store = new MemoryStore();
+    await LedgerWriter.open(store, sha256, { origin: 'run-1', at: AT, body: { format: 1 } });
+    // The run is killed here, before its first interval.
+
+    const result = await verifyIntact(store, sha256);
+    expect(result.ok).toBe(false);
+    expect(result.sealed).toBe(false);
+    expect(result.head?.size).toBe(1);
+    expect(result.problems).toEqual([
+      {
+        path: 'ledger.jsonl',
+        record: 1,
+        reason: 'there is no run.seal: the run did not finish, and a run with no seal never passes',
+      },
+    ]);
+  });
+
   it('fails when the checkpoint is missing or is not one it recognises', async () => {
     const missing = await bundle();
     missing.store.files.delete(`${missing.store.root}/checkpoint`);

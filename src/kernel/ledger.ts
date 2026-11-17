@@ -43,7 +43,7 @@ export interface OpenOptions {
   at: string;
   /** The run.open record's body. */
   body: Json;
-  /** The checkpoint is rewritten after this many records, and after the seal. */
+  /** The checkpoint is written at open, rewritten after every this many records, and after the seal. */
   checkpointEvery?: number;
 }
 
@@ -115,7 +115,9 @@ export class LedgerWriter {
       try {
         await this.store.append(LEDGER_PATH, utf8(`${json}\n`));
         this.leaves.push(await leafHash(utf8(json), this.sha256));
-        if (t === 'run.seal' || this.leaves.length % this.checkpointEvery === 0) await this.checkpoint();
+        // At open too, so a run killed before its first interval can still be checked up to here.
+        const due = t === 'run.open' || t === 'run.seal' || this.leaves.length % this.checkpointEvery === 0;
+        if (due) await this.checkpoint();
       } catch (error) {
         this.broken = error;
         throw error;
@@ -180,6 +182,13 @@ export async function readLedger(store: Store): Promise<LedgerRead> {
     }
   }
   if (start < bytes.length) read.torn = { record: read.lines.length, bytes: bytes.length - start };
+  if (read.lines.length === 0) {
+    read.problems.push({
+      path: LEDGER_PATH,
+      record: 0,
+      reason: 'the ledger holds no complete record: it does not start with run.open',
+    });
+  }
 
   read.lines.forEach((line, seq) => {
     const record = parseRecord(line, seq);
