@@ -6,8 +6,9 @@
 // No clock takes part: the limits are on the text, checked when the expression is loaded, and on the size of the
 // lists it is given, so the same expression and the same variables always give the same answer.
 
-import { celEnv, isCelError, parse, plan } from '@bufbuild/cel';
+import { CelScalar, celEnv, celFunc, isCelError, parse, plan } from '@bufbuild/cel';
 import { type CelLimits, DEFAULT_LIMITS, checkStatic } from './cel-static.js';
+import { normalize } from './normalize.js';
 
 export { DEFAULT_LIMITS, type CelLimits };
 
@@ -34,7 +35,7 @@ export interface CompiledExpression {
   readonly run: (bindings: Record<string, unknown>) => unknown;
 }
 
-const env = celEnv();
+const env = celEnv({ funcs: [celFunc('normalize', [CelScalar.STRING], CelScalar.STRING, normalize)] });
 
 /** The deepest a variable may nest. A guard on the stack, not a limit a claim sets. */
 const MAX_VALUE_DEPTH = 64;
