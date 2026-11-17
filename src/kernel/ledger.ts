@@ -85,6 +85,8 @@ export class LedgerWriter {
   private write(t: RecordType, body: Json, at: string): Promise<number> {
     if (this.sealed) return Promise.reject(new LedgerError('the ledger is sealed: nothing may follow run.seal'));
     if (this.broken !== undefined) return Promise.reject(new LedgerError('an earlier write failed; the ledger is closed'));
+    const wrong = notJson(body, 'body');
+    if (wrong !== undefined) return Promise.reject(new LedgerError(`${wrong}: a record holds only JSON, with integers`));
     if (t === 'run.seal') this.sealed = true;
     const seq = this.next++;
     const line = utf8(`${JSON.stringify({ seq, t, at, body })}\n`);
@@ -101,6 +103,27 @@ export class LedgerWriter {
     this.queue = done.catch(() => undefined);
     return done;
   }
+}
+
+/** Where a value isn't JSON that survives a round trip unchanged; integers only, as facts hold no floating point. */
+function notJson(value: unknown, where: string): string | undefined {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return undefined;
+  if (typeof value === 'number') return Number.isSafeInteger(value) ? undefined : `${where} is ${value}`;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const wrong = notJson(value[i], `${where}[${i}]`);
+      if (wrong !== undefined) return wrong;
+    }
+    return undefined;
+  }
+  if (typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    for (const [key, item] of Object.entries(value)) {
+      const wrong = notJson(item, `${where}.${key}`);
+      if (wrong !== undefined) return wrong;
+    }
+    return undefined;
+  }
+  return `${where} is ${typeof value}`;
 }
 
 export interface LedgerRead {

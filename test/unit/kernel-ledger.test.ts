@@ -84,6 +84,14 @@ describe('the ledger writer and reader', () => {
     ]);
   });
 
+  it('refuses a body that JSON would change: floating point, undefined, NaN', async () => {
+    const writer = await open(new MemoryStore());
+    await expect(writer.append('fact', { size: 1.5 }, AT)).rejects.toThrow(/body\.size/);
+    await expect(writer.append('fact', { list: [1, Number.NaN] }, AT)).rejects.toThrow(/body\.list\[1\]/);
+    await expect(writer.append('fact', { gone: undefined } as never, AT)).rejects.toThrow(/body\.gone/);
+    expect(await writer.append('fact', { size: 2, ok: true, none: null, name: 'x' }, AT)).toBe(1);
+  });
+
   it('names the record when a line cannot be read', async () => {
     const store = new MemoryStore();
     const writer = await open(store);
