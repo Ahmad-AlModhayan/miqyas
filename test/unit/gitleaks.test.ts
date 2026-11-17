@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { envWithBin, writeScannerShim } from '../scanner-shim.js';
 import {
   classifyGitleaksRule,
   decodeJwtRole,
@@ -107,7 +108,6 @@ describe('gitleaks adapter helpers', () => {
     fs.mkdirSync(binDir, { recursive: true });
     fs.mkdirSync(targetDir, { recursive: true });
 
-    const shimPath = path.join(binDir, 'gitleaks');
     const shimScript = `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
@@ -127,10 +127,9 @@ if (rp) {
 }
 process.exit(1);
 `;
-    writeFileSync(shimPath, shimScript, 'utf8');
-    chmodSync(shimPath, 0o755);
+    writeScannerShim(binDir, 'gitleaks', shimScript);
 
-    const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` };
+    const env = envWithBin(binDir);
     expect(await probeGitleaksVersion({ env })).toBe('8.30.1-shim');
 
     const dirRes = await runGitleaksDir(targetDir, { env });

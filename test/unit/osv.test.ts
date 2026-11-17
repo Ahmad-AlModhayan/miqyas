@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { envWithBin, writeScannerShim } from '../scanner-shim.js';
 import {
   findRepoLockfiles,
   hasPopulatedOsvCache,
@@ -82,9 +83,9 @@ describe('osv-scanner adapter and update-db (Check 13, #17)', () => {
     writeFileSync(path.join(repoDir, 'node_modules', 'ignored', 'package-lock.json'), '{}');
     expect(await findRepoLockfiles(repoDir)).toEqual(['package-lock.json']);
 
-    const shimPath = path.join(binDir, 'osv-scanner');
-    writeFileSync(
-      shimPath,
+    writeScannerShim(
+      binDir,
+      'osv-scanner',
       `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
@@ -118,11 +119,9 @@ const report = {
 process.stdout.write(JSON.stringify(report));
 process.exit(1);
 `,
-      'utf8',
     );
-    chmodSync(shimPath, 0o755);
 
-    const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` };
+    const env = envWithBin(binDir);
     expect(await probeOsvScannerVersion({ env })).toBe('2.7.0');
 
     const res = await runOsvScannerOffline(repoDir, { env, cacheDir });
@@ -167,9 +166,9 @@ process.exit(1);
 
     const dbMissingBin = path.join(dir, 'bin-dbmiss');
     mkdirSync(dbMissingBin, { recursive: true });
-    const shim = path.join(dbMissingBin, 'osv-scanner');
-    writeFileSync(
-      shim,
+    writeScannerShim(
+      dbMissingBin,
+      'osv-scanner',
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('2.7.0'); process.exit(0); }
@@ -177,10 +176,8 @@ process.stdout.write('{"results":null}');
 console.error('no offline version of the OSV database is available');
 process.exit(127);
 `,
-      'utf8',
     );
-    chmodSync(shim, 0o755);
-    const dbMissRes = await runOsvScannerOffline(repoWithLock, { env: { ...process.env, PATH: `${dbMissingBin}:${process.env.PATH ?? ''}` } });
+    const dbMissRes = await runOsvScannerOffline(repoWithLock, { env: envWithBin(dbMissingBin) });
     expect(dbMissRes.status).toBe('db_missing');
   });
 });
