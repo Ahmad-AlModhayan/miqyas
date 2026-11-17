@@ -117,22 +117,23 @@ function allOperationsAreQueries(doc: string): boolean {
   return depth === 0 && operations > 0 && !pendingHeader;
 }
 
+// The read is judged by the document, and only in a request that is GraphQL over HTTP: a POST (GET is a safe method
+// already, and no other method carries an operation) of a JSON object with a string `query`. A batch, a stored
+// query that has no `query`, a raw body and a body with no JSON content type are not known reads.
 function isGraphqlQuery(req: WireRequest): boolean {
+  if (typeof req.method !== 'string' || req.method.toUpperCase() !== 'POST') return false;
+  if (typeof req.contentType !== 'string' || !/^application\/json\s*(;|$)/i.test(req.contentType.trim())) return false;
   const body = req.body;
-  if (typeof body !== 'string' || body.trim() === '') return false;
-  let docs: unknown[];
+  if (typeof body !== 'string') return false;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(body);
-    const items = Array.isArray(parsed) ? parsed : [parsed];
-    if (items.length === 0) return false;
-    docs = items.map((item) =>
-      typeof item === 'object' && item !== null ? (item as { query?: unknown }).query : undefined,
-    );
+    parsed = JSON.parse(body);
   } catch {
-    if (!/application\/graphql/i.test(req.contentType ?? '')) return false;
-    docs = [body];
+    return false;
   }
-  return docs.every((d) => typeof d === 'string' && allOperationsAreQueries(d));
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+  const query = (parsed as { query?: unknown }).query;
+  return typeof query === 'string' && allOperationsAreQueries(query);
 }
 
 function isKnownRead(req: WireRequest, routes: RouteFacts): boolean {

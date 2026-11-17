@@ -93,58 +93,101 @@ describe('a method that is not safe', () => {
 });
 
 describe('a known read', () => {
-  it('is a GraphQL document whose every operation is a query: it is not made a write by its method', () => {
+  // B1: a GraphQL document whose operation is a query. The read is judged by the document, and only in a POST whose
+  // body is a JSON object with a string `query` (GraphQL over HTTP carries operations in GET and POST, and GET is safe).
+  const read = { effectClass: 'probe', reasons: ['wire.collector-probe', 'wire.known-read'] };
+
+  it('is a POST of a JSON object whose query holds only queries: the method does not make it a write', () => {
     const queries = [
       { query: 'query Me { me { id name } }' },
       { query: '{ me { id } }' },
       { query: 'query A { a } query B { b }', operationName: 'A' },
       { query: 'query Q($input: In = {a: 1}) { items(input: $input) { id } } fragment F on Item { id }' },
-      [{ query: '{ a }' }, { query: '{ b }' }],
-      { query: '# mutation in a comment\n query { a(arg: "mutation { x }") }' },
-      { query: 'query { a(arg: """mutation { x }""") }' },
+      { query: '{ mutation { id } subscription }' }, // field names are not operations
     ];
     for (const doc of queries) {
-      expect(classOfRequest(gql(doc), { permit: 'probe' }, noRoutes)).toEqual({
-        effectClass: 'probe',
-        reasons: ['wire.collector-probe', 'wire.known-read'],
-      });
+      expect(classOfRequest(gql(doc), { permit: 'probe' }, noRoutes)).toEqual(read);
     }
   });
 
-  it('is also a raw application/graphql body', () => {
-    expect(classOfRequest(gql('{ me { id } }', { contentType: 'application/graphql' }), { permit: 'probe' }, noRoutes).effectClass).toBe('probe');
+  it('keeps the class the cause gave it: observe for a page under an observe permit, probe for a collector', () => {
+    const body = JSON.stringify({ query: '{ me { id } }' });
+    const fromPage = { method: 'POST', url: 'https://app.test/graphql', cause: 'page' as const, body, contentType: 'application/json' };
+    expect(classOfRequest(fromPage, { permit: 'observe' }, noRoutes).effectClass).toBe('observe');
+    expect(classOfRequest(fromPage, { permit: 'interact' }, noRoutes).effectClass).toBe('interact');
   });
 
-  it('is not a mutation, a subscription, or a document that mixes a query with one', () => {
+  it('is still a read when the word mutation is only in a string argument, a block string or a comment', () => {
+    const queries = [
+      { query: '# mutation in a comment\n query { a(arg: "mutation { x }") }' },
+      { query: 'query { a(arg: """mutation { x }""") }' },
+      { query: 'query { a(arg: "say \\"mutation\\" twice") }' },
+    ];
+    for (const doc of queries) expect(classOfRequest(gql(doc), { permit: 'probe' }, noRoutes)).toEqual(read);
+  });
+
+  it('is judged on the method in any case, so a lower-case post is a POST', () => {
+    expect(classOfRequest(gql({ query: '{ a }' }, { method: 'post' }), { permit: 'probe' }, noRoutes)).toEqual(read);
+  });
+
+  it.each(['DELETE', 'PUT', 'PATCH', 'PURGE', 'POSTX', 'POST '])('is never a read when the method is %j, whatever the body says', (method) => {
+    expect(classOfRequest(gql({ query: '{ me { id } }' }, { method }), { permit: 'probe' }, noRoutes)).toEqual({
+      effectClass: 'write',
+      reasons: ['wire.collector-probe', 'wire.unsafe-method'],
+    });
+  });
+
+  it('is not a mutation, a subscription, or a document that holds one anywhere, even beside a query or named by operationName', () => {
     const notReads = [
       { query: 'mutation { deleteAll }' },
       { query: 'mutation Delete($id: ID!) { delete(id: $id) }' },
       { query: 'subscription { changed }' },
       { query: 'query A { a } mutation B { b }' },
-      [{ query: '{ a }' }, { query: 'mutation { b }' }],
+      { query: 'query A { a } mutation B { b }', operationName: 'A' },
+      { query: 'mutation B { b } query A { a }', operationName: 'A' },
+      { query: '{ a } subscription S { s }' },
+      { query: 'query mutation { a }' }, // it cannot tell an operation named so: not a read
     ];
     for (const doc of notReads) {
       expect(classOfRequest(gql(doc), { permit: 'probe' }, noRoutes).effectClass).toBe('write');
     }
   });
 
-  it('is not a document it cannot read, a request with no query in it, or one that only names a stored query', () => {
+  it('is not a batch: a JSON array is not a known read, even of queries', () => {
+    expect(classOfRequest(gql([{ query: '{ a }' }, { query: '{ b }' }]), { permit: 'probe' }, noRoutes).effectClass).toBe('write');
+    expect(classOfRequest(gql([{ query: '{ a }' }]), { permit: 'probe' }, noRoutes).effectClass).toBe('write');
+    expect(classOfRequest(gql([]), { permit: 'probe' }, noRoutes).effectClass).toBe('write');
+  });
+
+  it('is not a body it cannot read, one with no query in it, a stored query, or a query that is not a string', () => {
     const unknown = [
       '',
       'not json at all',
+      '{ me { id } }',
       { query: '{ a ' },
       { query: '{ a } }' },
       { query: 'type T { a: Int }' },
       { query: '' },
       { extensions: { persistedQuery: { sha256Hash: 'abc' } } },
+      { operationName: 'A' },
       { query: 42 },
-      [{ query: '{ a }' }, 'x'],
-      [],
+      { query: ['{ a }'] },
+      'null',
     ];
     for (const doc of unknown) {
       expect(classOfRequest(gql(doc), { permit: 'probe' }, noRoutes).effectClass).toBe('write');
     }
-    expect(classOfRequest(gql('{ me { id } }', { contentType: 'text/plain' }), { permit: 'probe' }, noRoutes).effectClass).toBe('write');
+  });
+
+  it('needs a JSON content type: raw GraphQL, plain text and no content type are not known reads', () => {
+    for (const contentType of ['application/graphql', 'text/plain', 'application/x-www-form-urlencoded', '', undefined]) {
+      expect(classOfRequest(gql({ query: '{ me { id } }' }, { contentType }), { permit: 'probe' }, noRoutes).effectClass).toBe('write');
+    }
+    expect(classOfRequest(gql('{ me { id } }', { contentType: 'application/graphql' }), { permit: 'probe' }, noRoutes).effectClass).toBe('write');
+    expect(classOfRequest(gql({ query: '{ me { id } }' }, { contentType: 'Application/JSON; charset=utf-8' }), { permit: 'probe' }, noRoutes)).toEqual(read);
+  });
+
+  it('is not there when the request has no body', () => {
     expect(classOfRequest({ ...gql('x'), body: undefined }, { permit: 'probe' }, noRoutes).effectClass).toBe('write');
   });
 
