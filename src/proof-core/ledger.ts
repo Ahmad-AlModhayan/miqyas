@@ -321,7 +321,10 @@ export function reportPath(file: string, baseDirs: string | readonly string[] = 
       const rel = path.win32.relative(base, trimmed);
       if (rel && !rel.startsWith('..') && !WIN_ABS_RE.test(rel)) return rel.split('\\').join('/');
     }
-    return path.win32.basename(trimmed);
+    // On Windows a drive-letter path is a native path, so it must also be compared the way every other native path is,
+    // through the real locations of the base and the file. Network (\\) paths keep the text comparison only, so
+    // a report never waits on a network lookup for a share that may not exist.
+    if (path.sep !== '\\' || trimmed.startsWith('\\\\')) return path.win32.basename(trimmed);
   }
 
   const bases = Array.isArray(baseDirs) ? baseDirs : [baseDirs];

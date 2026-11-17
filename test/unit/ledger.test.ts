@@ -267,7 +267,8 @@ describe('reportPath', () => {
       const realRepo = path.join(tmpRoot, 'real-repo');
       const linkRepo = path.join(tmpRoot, 'link-repo');
       await mkdir(path.join(realRepo, 'plans'), { recursive: true });
-      await symlink(realRepo, linkRepo);
+      // 'junction' is ignored off Windows; on Windows it links a directory without the symlink privilege.
+      await symlink(realRepo, linkRepo, 'junction');
 
       const bases = resolveReportBases(linkRepo, path.join(tmpRoot, 'work'));
       expect(reportPath(path.join(realRepo, 'plans', 'a.json'), bases)).toBe('plans/a.json');
