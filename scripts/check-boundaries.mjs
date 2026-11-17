@@ -6,8 +6,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// The folders of docs/FOUNDATION.md §14, in the order it lists them. A folder listed below the base four may
-// import the base four and every folder listed above it.
+// The folders of docs/FOUNDATION.md §14, in the order it lists them.
 const FOUNDATION_FOLDERS = [
   'kernel',
   'protocol',
@@ -29,16 +28,17 @@ const FOUNDATION_FOLDERS = [
   'entry',
 ];
 
-const BASE_FOUR = ['protocol', 'scrub', 'surfaces', 'kernel'];
-
-// What each of the base four may import, and the thin client (`src/cli.ts`, the layer `cli`).
-const FIXED_RULES = {
+// The rules §14 states one by one: what each of these may import besides itself. `cli` is `src/cli.ts`.
+const STATED_RULES = {
   protocol: [],
   scrub: [],
   surfaces: ['protocol', 'scrub'],
   kernel: ['protocol'],
   cli: ['protocol'],
 };
+
+// "Those four" of §14: what every folder without a stated rule may import, wherever it is in the order.
+const IMPORTABLE_BY_THE_REST = ['protocol', 'scrub', 'surfaces', 'kernel'];
 
 // The folders of the layout before the foundation, with the rules they had. These hold until the code in
 // them moves (FOUNDATION §15). `agents` and `entry` are in both layouts and take both sets of rules.
@@ -50,9 +50,11 @@ const EARLIER_RULES = {
 };
 
 function buildAllowedLayers() {
-  const imports = { ...FIXED_RULES };
+  const imports = { ...STATED_RULES };
   FOUNDATION_FOLDERS.forEach((folder, i) => {
-    imports[folder] ??= [...BASE_FOUR, ...FOUNDATION_FOLDERS.slice(0, i)];
+    if (Object.hasOwn(STATED_RULES, folder)) return;
+    // No stated rule: the folder may import those four and every folder §14 lists above it.
+    imports[folder] = [...IMPORTABLE_BY_THE_REST, ...FOUNDATION_FOLDERS.slice(0, i)];
   });
   for (const [folder, earlier] of Object.entries(EARLIER_RULES)) {
     imports[folder] = [...(imports[folder] ?? []), ...earlier];

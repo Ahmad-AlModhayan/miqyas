@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 const CODE_EXTENSIONS = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs']);
 const APACHE_PREFIXES = ['src/protocol/', 'src/scrub/', 'src/surfaces/', 'scripts/'];
-// The core. The first five entries are the layout before the foundation; the rest are the folders
-// that docs/FOUNDATION.md §14 adds. Each of those grows out of the core and may import the kernel, so
-// it takes the core's licence, as docs/OPEN_MODEL.md sets it.
+// The core, and the tests. `src/kernel/` and the folders after it are the ones docs/FOUNDATION.md §14
+// adds: each grows out of the core and may import the kernel, so it takes the core's licence, as
+// docs/OPEN_MODEL.md sets it.
 const AGPL_PREFIXES = [
   'src/adapters/',
   'src/agents/',

@@ -181,12 +181,13 @@ describe('import boundaries of the foundation folders (FOUNDATION §14)', () => 
   });
 
   it('refuses a file in a folder that §14 does not list, and names the folders it knows', () => {
-    expect(checkSourceImports('src/plugins/a.ts', '')).toEqual([
-      {
-        file: 'src/plugins/a.ts',
-        specifier: '',
-        reason: expect.stringMatching(/outside the declared layers \(.*\bkernel\b.*\bgate\b.*\bentry\b.*\)/),
-      },
-    ]);
+    const violations = checkSourceImports('src/plugins/a.ts', '');
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({ file: 'src/plugins/a.ts', specifier: '' });
+    expect(violations[0]?.reason).toContain('outside the declared layers');
+    for (const known of ['kernel', 'gate', 'bench', 'entry', 'adapters', 'proof-core', 'src/cli.ts']) {
+      expect(violations[0]?.reason).toContain(known);
+    }
+    expect(violations[0]?.reason).not.toContain('plugins');
   });
 });
