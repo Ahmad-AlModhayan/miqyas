@@ -148,6 +148,50 @@ describe('the cost bound, checked when an expression is loaded', () => {
     });
   }
 
+  // Each element read from a list built by map, filter or + walks its joins, so comparing one with a plain list costs
+  // the built list's elements times its joins, not the plain list's size. These loaded before and ran for seconds.
+  const builtComparisons = [
+    ['a list built by map compared with a variable', 'x.all(a, x.map(b, b) == x)'],
+    ['a variable compared with a list built by map', 'x.all(a, x == x.map(b, b))'],
+    ['a list built by filter compared with a variable', 'x.all(a, x.filter(b, true) == x)'],
+    ['a built list inside a list literal', 'x.all(a, [x.map(b, b)] == [x])'],
+    ['a built list inside a map literal', 'x.all(a, {"k": x.map(b, b)} == {"k": x})'],
+    ['a built list inside a list literal, mirrored', 'x.all(a, [x] == [x.map(b, b)])'],
+    ['a built list inside a map literal, mirrored', 'x.all(a, {"k": x} == {"k": x.map(b, b)})'],
+    ['a built list compared with !=', 'x.all(a, x.filter(b, true) != x)'],
+    ['a built list looked up with in', 'x.all(a, x.map(b, b) in [x])'],
+    ['a variable looked up in a list holding a built list', 'x.all(a, x in [x.map(b, b)])'],
+    ['a comprehension variable over a list of built lists', 'x.map(a, x.map(b, b)).exists(l, l == x)'],
+    ['a field of a map holding a built list', 'x.all(a, {"k": x.map(b, b)}.k == x)'],
+    ['a choice between a built list and a variable', 'x.all(a, (a > 0 ? x.map(b, b) : x) == x)'],
+  ];
+  for (const [name, source] of builtComparisons) {
+    it(`rejects ${name}, read inside a comprehension, and names maxCost`, () => {
+      const error = rejection(source as string);
+      expect(error.reason).toBe('limit');
+      expect(error.limit).toBe('maxCost');
+    });
+  }
+
+  // Each element map or filter adds allocates a join that stays alive until the list is dropped; a million of them
+  // took about a second, so building lists inside a comprehension over the largest lists does not load.
+  const builtNested = [
+    ['lists built by map inside map', 'x.map(a, x.map(b, 1)).size() > 0'],
+    ['lists built by filter inside map', 'x.map(a, x.filter(b, true)).size() > 0'],
+    ['a list built by map inside all', 'x.all(a, x.map(b, b).size() > 0)'],
+  ];
+  for (const [name, source] of builtNested) {
+    it(`rejects ${name} over the largest lists, and names maxCost`, () => {
+      expect(rejection(source as string).limit).toBe('maxCost');
+    });
+  }
+
+  it('loads small comparisons of built lists', () => {
+    expect(() => compile('[1,2,3].map(x, x * 2) == [2,4,6]')).not.toThrow();
+    expect(() => compile('[1,2,3].filter(x, x > 1) == [2,3] && [1] + [2] == [1, 2]')).not.toThrow();
+    expect(() => compile('x.map(b, b) == x')).not.toThrow();
+  });
+
   it('loads a two-level rule that compares scalars', () => {
     expect(() => compile('expected.all(e, observed.exists(o, o.id == e.id))')).not.toThrow();
     expect(() => compile('expected.all(e, observed.exists(o, o.id == e.id && o.kind == e.kind))')).not.toThrow();

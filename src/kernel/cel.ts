@@ -7,7 +7,7 @@
 // and on the size of the variables it is given, so the same expression and the same variables always give the same
 // answer, and the work is bounded (docs/cel-subset.md, "The cost bound").
 
-import { CelScalar, celEnv, celFunc, isCelError, isCelList, isCelMap, parse, plan } from '@bufbuild/cel';
+import { CelScalar, celEnv, celFunc, celList, celMap, isCelError, isCelList, isCelMap, parse, plan } from '@bufbuild/cel';
 import { OutsideCostModel, type ParsedSyntax, estimateCost } from './cel-cost.js';
 import { type CelLimits, DEFAULT_LIMITS, type StaticRejection, checkStatic } from './cel-static.js';
 import { normalize } from './normalize.js';
@@ -120,7 +120,8 @@ function text(value: string, limits: CelLimits, budget: Budget): string {
  * JSON-shaped values become CEL values. Whole numbers are integers (CEL `int`, held as bigint); fact schemas have no
  * fractions (ADR 0011), so a fraction, NaN, infinity or an integer that a JSON number cannot hold exactly is refused
  * and never guessed at. A list or map longer than maxListLength, a text longer than maxStringLength, and variables
- * larger than maxInputSize together are refused: the cost bound counts on them.
+ * larger than maxInputSize together are refused: the cost bound counts on them. Lists and maps are wrapped as CEL
+ * values once, here, so the library does not wrap a nested one again each time it is read.
  */
 function toInput(value: unknown, limits: CelLimits, depth: number, budget: Budget): unknown {
   if (depth > MAX_VALUE_DEPTH) throw new NotCelData('nested too deep');
@@ -143,7 +144,7 @@ function toInput(value: unknown, limits: CelLimits, depth: number, budget: Budge
       if (value === null) return null;
       if (Array.isArray(value)) {
         if (value.length > limits.maxListLength) throw new NotCelData('a list over maxListLength');
-        return value.map((inner) => toInput(inner, limits, depth + 1, budget));
+        return celList(value.map((inner) => toInput(inner, limits, depth + 1, budget)) as Parameters<typeof celList>[0]);
       }
       const proto: unknown = Object.getPrototypeOf(value);
       if (proto !== Object.prototype && proto !== null) throw new NotCelData('an object that is not plain data');
@@ -152,7 +153,7 @@ function toInput(value: unknown, limits: CelLimits, depth: number, budget: Budge
         if (entries.length >= limits.maxListLength) throw new NotCelData('a map over maxListLength');
         if (inner !== undefined) entries.push([text(key, limits, budget), toInput(inner, limits, depth + 1, budget)]);
       }
-      return new Map(entries);
+      return celMap(new Map(entries) as Parameters<typeof celMap>[0]);
     }
     default:
       throw new NotCelData(`a ${typeof value}`);

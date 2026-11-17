@@ -85,8 +85,8 @@ characters and a size of `maxInputSize`. The code is `src/kernel/cel-cost.ts`.
 | Operation | Work counted |
 |---|---|
 | `all`, `exists`, `exists_one`, `map`, `filter` | the body once for each element of the list or map, plus one step per element and per join |
-| `in` | the size of the list or map searched, and the length of the text looked up |
-| `==`, `!=`, `<`, `<=`, `>`, `>=` | the size of the smaller operand, times its joins (lists and maps compare element by element) |
+| `in` | the size of the list or map searched, times its joins, and the length of the text looked up; when the value looked up may hold a built list, also the size of the list searched times that value's joins |
+| `==`, `!=`, `<`, `<=`, `>`, `>=` | when both operands are plain, the size of the smaller one (lists and maps compare element by element); when either may hold a built list, the size of each operand times its joins, added |
 | `+` | the length of each text joined; joining integers or lists is one step |
 | `size`, `int`, `string` | the length of the text read |
 | `contains`, `startsWith`, `endsWith` | (length of the text + 1) times (length of the text searched for + 1) |
@@ -99,6 +99,14 @@ Every other node of the expression costs one step. A length is the smaller of th
 its size. The library joins lists lazily: a list built by `map` or `filter` holds one join per element, and one built
 by `+` one more than its parts, and reading an element walks those joins. The bound counts them.
 
+**Built lists.** A value may hold a built list (one made by `map`, `filter` or `+`) at any depth: inside a list or map
+literal, as a field of one, as a branch of `?:`, or as the variable of a comprehension over a list of built lists. The
+bound carries the joins along with the value. Wherever elements are read from such a value (a comparison, `in`,
+indexing, or the range of a macro), each element costs its joins. A comparison of two plain values stops at the
+shorter, so it is charged the smaller operand; when either operand may hold a built list it is charged both, because
+every element read from the built side walks its joins whatever the size of the other side. `size` and `+` read no
+elements (the library keeps the size of a joined list), so on a list they cost one step.
+
 **Over a comprehension.** The work of the body is added up over the elements it walks. The elements of a list
 together are no larger than the list, so a walk of the comprehension's own variable (comparing it, reading its length)
 adds up to the size of the list, not to the number of elements times the largest element. A walk of anything else is
@@ -107,14 +115,24 @@ counted again for each element.
 **The worst case.** With `L` = `maxListLength`, `S` = `maxStringLength`, `U` = `maxInputSize`, `n` the number of nodes
 in the expression (a few for each of its at most `maxLength` characters) and `d` how deep its comprehensions nest (at
 most `maxComprehensionDepth`), the work is at most about `n · L^d · W`, where `W` is the largest single walk: up to
-`U` for a comparison or `in` over the variables, `S · S` for a text search, and `325 · S` for `normalize`. A walk of a
+`U` for a comparison or `in` over the variables (`U · L` when an operand may hold a built list, whose joins number up
+to `L`), `S · S` for a text search, and `325 · S` for `normalize`. A walk of a
 comprehension's own variable adds up to `U` over its elements, which takes one `L` off for that walk. Whatever the
 expression, it loads only if the computed work is at most `maxCost`, so no expression that loads can take more than
 `maxCost` steps.
 
-At the defaults, the costliest rules found that still load took under 0.4 seconds on the machine the defaults were
-set on, over variables at the largest the input limits allow. The costliest compares every pair from two lists of
-1000 three-element lists, twice (34 million steps); `test/unit/kernel-cel-limits.test.ts` runs it at full size:
+**Building lists.** Each element `map` or `filter` adds to the list it builds is charged 40 steps more than the body:
+the library allocates a join for it and keeps every join alive until the list is dropped, and a million of them took
+about half a second to a second. So `x.map(a, x.map(b, 1))` over two lists of 1000 does not load (48 million steps).
+
+**Measured.** A search generated 12,000 expressions from a small grammar over the subset (the macros, `map`, `filter`,
+`+`, `in`, the comparisons, `size`, list and map literals and the string functions, nested two deep) and timed every one
+that loads, 9,034, over variables at the largest the input limits allow (a list of 1000 integers, of 1000 short lists,
+of 1000 one-entry maps, of 1000 short texts, of long texts, and equal but separate copies of each). Of those whose
+answer is `true` or `false`, the slowest took 0.44 seconds (`ts.exists_one(a, ts.all(b, [1, 2][0] in [1, 1]))`,
+23 million steps), and none took more than about 32 nanoseconds per step. The costliest rule found before the search
+compares every pair from two lists of 1000 three-element lists, twice (34 million steps, about 0.4 seconds);
+`test/unit/kernel-cel-limits.test.ts` runs it at full size:
 
 ```cel
 expected.exists(e, observed.exists(o, o == e || e == o))
@@ -122,7 +140,16 @@ expected.exists(e, observed.exists(o, o == e || e == o))
 
 A two-level rule that compares scalars, such as `expected.all(e, observed.exists(o, o.id == e.id))`, loads (22 million
 steps). A rule that walks a whole variable inside two comprehensions, as `x.all(a, x.all(b, b in x))` does, is refused
-when it is loaded (11 billion steps).
+when it is loaded (11 billion steps), and so is one that compares a built list inside a comprehension, as
+`x.all(a, x.map(b, b) == x)` does (11 billion steps; it loaded before the joins were counted on both sides and took
+about 3 seconds).
+
+**Not bounded yet: errors.** The bound counts steps, and an error costs the library far more than a step: each one is
+a JavaScript `Error` with a stack trace, about 17 to 27 microseconds. A rule whose body is an error for every pair
+does a million of them. `expected.all(e, observed.exists(o, o.id == e.id))` loads (22 million steps) and took 27
+seconds over two lists of 1000 maps without an `id`; the search found `([m.k] + xs).exists(a, ys.exists(b, b[0] < 1))`
+at 43 seconds. Until errors are bounded, the time limit of ADR 0011 holds only for rules whose evaluation makes few
+errors.
 
 ## Errors are never true or false
 

@@ -11,6 +11,12 @@ import type { CelLimits } from './cel-static.js';
 export const NORMALIZE_GROWTH = 18 * 18;
 /** The longest text `string()` makes from an integer: `-9223372036854775808`. */
 const INT_TEXT = 20;
+/**
+ * The steps charged for each element `map` or `filter` adds to the list it builds. The library joins a new list to
+ * the old one at every element and keeps every join alive until the list is dropped; that took about 40 times an
+ * ordinary step when measured, so a rule cannot load with more than about a million of them.
+ */
+const APPEND = 40;
 
 /** The parts of a cel.expr.Expr this pass reads. */
 export interface SyntaxNode {
@@ -112,6 +118,12 @@ const scalar = (cost: Linear): Estimate => ({ cost, size: fixed(1), items: 0, ch
 
 /** Reading every element of a value, as equality and `in` may: its size, times the joins on the way to each part. */
 const walk = (e: Estimate): Linear => times(e.size, Math.max(1, e.joins));
+
+/**
+ * The value may hold a list built by `map`, `filter` or `+`, at any depth: each element read from it walks its joins.
+ * A list or map literal, a field, a choice and a comprehension variable carry the joins of what they hold.
+ */
+const built = (e: Estimate): boolean => e.joins > 1;
 
 /** An upper bound on the program RE2 builds from a literal pattern: its length, times every counted repetition. */
 function patternWork(pattern: string): number {
@@ -217,7 +229,7 @@ export function estimateCost(parsed: ParsedSyntax, limits: CelLimits): number {
     const condition = estimate(parts.loopCondition, inner);
     const step = estimate(parts.loopStep, inner);
     const result = estimate(parts.result, inner);
-    const perIteration = plus(fixed(1), condition.cost, step.cost);
+    const perIteration = plus(fixed(growing ? 1 + APPEND : 1), condition.cost, step.cost);
     const cost = plus(
       fixed(1),
       range.cost,
@@ -248,15 +260,21 @@ export function estimateCost(parsed: ParsedSyntax, limits: CelLimits): number {
     // The length of a text is at most its longest text, and at most its size; the size adds up over a comprehension.
     const textLength = (e: Estimate): Linear => smaller(fixed(e.chars), e.size, typicalElement);
     if (CONSTANT_WORK.has(fn)) return scalar(own);
-    if (COMPARISONS.has(fn) && b !== undefined) return scalar(plus(own, smaller(walk(a), walk(b), typicalElement)));
+    if (COMPARISONS.has(fn) && b !== undefined) {
+      // Equality reads element i of both sides. Two plain values stop at the shorter, so either walk bounds it; on a
+      // built value each read walks its joins, so the cheaper side's walk does not cover the other: count both.
+      const work = built(a) || built(b) ? plus(walk(a), walk(b)) : smaller(walk(a), walk(b), typicalElement);
+      return scalar(plus(own, work));
+    }
     switch (fn) {
       case '_?_:_':
         if (b === undefined || c === undefined) break;
         return { cost: own, size: larger(b.size, c.size), items: Math.max(b.items, c.items), chars: Math.max(b.chars, c.chars), joins: Math.max(b.joins, c.joins) };
       case '@in':
         if (b === undefined) break;
-        // A list compares the value with each element; a map hashes it.
-        return scalar(plus(own, walk(b), textLength(a)));
+        // A list compares the value with each element; a map hashes it. Comparing a built value with an element reads
+        // as many of its elements as the element has, each through its joins.
+        return scalar(plus(own, walk(b), textLength(a), built(a) ? times(b.size, a.joins) : fixed(0)));
       case '_[_]':
         if (b === undefined) break;
         return { ...a, cost: plus(own, fixed(Math.max(1, a.joins)), textLength(b)) };
