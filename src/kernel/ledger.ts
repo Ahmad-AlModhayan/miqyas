@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The ledger of one run (docs/FOUNDATION.md §5, ADR 0007): ledger.jsonl, one JSON record per line, appended as the run
 // goes by one writer and never rewritten. A record is {"seq": n, "t": type, "at": time, "body": {…}}, where seq is the
-// record's position in the ledger, counted from 0, and so the index of its leaf in the tree.
+// record's position in the ledger, counted from 0, and so the index of its leaf in the tree. The line is
+// JSON.stringify of that object, in that key order; the reader refuses a line with any other bytes.
 import { type Head, formatCheckpoint } from './checkpoint.js';
-import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, fromUtf8, utf8 } from './store.js';
+import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, equalBytes, fromUtf8, utf8 } from './store.js';
 import { leafHash, rootOfLeaves } from './tree.js';
 
 export const RECORD_TYPES = [
@@ -104,8 +105,8 @@ export class LedgerWriter {
   private write(t: RecordType, body: Json, at: string): Promise<number> {
     if (this.sealed) return Promise.reject(new LedgerError('the ledger is sealed: nothing may follow run.seal'));
     if (this.broken !== undefined) return Promise.reject(new LedgerError('an earlier write failed; the ledger is closed'));
-    const wrong = notJson(body, 'body');
-    if (wrong !== undefined) return Promise.reject(new LedgerError(`${wrong}: a record holds only JSON, with integers`));
+    const notAllowed = describeNonJson(body, 'body');
+    if (notAllowed !== undefined) return Promise.reject(new LedgerError(`${notAllowed}: a record holds only JSON, with integers`));
     if (typeof at !== 'string') return Promise.reject(new LedgerError('the record time must be a string'));
     if (t === 'run.seal') this.sealed = true;
     const seq = this.next++;
@@ -134,21 +135,24 @@ export class LedgerWriter {
   }
 }
 
-/** Where a value isn't JSON that survives a round trip unchanged; integers only, as facts hold no floating point. */
-function notJson(value: unknown, where: string): string | undefined {
+/**
+ * The first place where a value isn't JSON that survives a round trip unchanged, and what is there ("body.size is
+ * 1.5"), or undefined when there is none. Integers only, as facts hold no floating point.
+ */
+function describeNonJson(value: unknown, where: string): string | undefined {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return undefined;
   if (typeof value === 'number') return Number.isSafeInteger(value) ? undefined : `${where} is ${value}`;
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      const wrong = notJson(value[i], `${where}[${i}]`);
-      if (wrong !== undefined) return wrong;
+      const notAllowed = describeNonJson(value[i], `${where}[${i}]`);
+      if (notAllowed !== undefined) return notAllowed;
     }
     return undefined;
   }
   if (typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
     for (const [key, item] of Object.entries(value)) {
-      const wrong = notJson(item, `${where}.${key}`);
-      if (wrong !== undefined) return wrong;
+      const notAllowed = describeNonJson(item, `${where}.${key}`);
+      if (notAllowed !== undefined) return notAllowed;
     }
     return undefined;
   }
@@ -237,5 +241,13 @@ function parseRecord(line: Uint8Array, seq: number): LedgerRecord | string {
   if (record.seq !== seq) return `the record says seq ${JSON.stringify(record.seq)} on line ${seq}`;
   if (!RECORD_TYPES.includes(record.t as RecordType)) return `the record type ${JSON.stringify(record.t)} is not known`;
   if (typeof record.at !== 'string') return 'the record time is not a string';
+  const notAllowed = describeNonJson(record.body, 'body');
+  if (notAllowed !== undefined) return `${notAllowed}: a record holds only JSON, with integers`;
+  // The line must be the bytes the writer writes for the record it parses to. That refuses a duplicate key, a
+  // byte-order mark, a CR, spaces and escapes the writer doesn't use: anything two parsers could read differently.
+  const { seq: s, t, at, body } = record;
+  if (!equalBytes(utf8(JSON.stringify({ seq: s, t, at, body })), line)) {
+    return 'the line is not the bytes the writer writes for its record, so two readers could read it apart';
+  }
   return record as unknown as LedgerRecord;
 }

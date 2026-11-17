@@ -4,7 +4,7 @@ import { BlobStore, blobPath } from '../../src/kernel/blobs.js';
 import { formatCheckpoint, parseCheckpoint } from '../../src/kernel/checkpoint.js';
 import { LedgerWriter } from '../../src/kernel/ledger.js';
 import { verifyIntact } from '../../src/kernel/verify.js';
-import { MemoryStore, sha256, utf8 } from '../kernel-helpers.js';
+import { MemoryStore, independentCheckpoint, sha256, utf8 } from '../kernel-helpers.js';
 
 const AT = '2026-11-17T10:00:00Z';
 
@@ -32,6 +32,7 @@ describe('verifying a proof bundle is intact', () => {
     expect(result.ok).toBe(true);
     expect(result.sealed).toBe(true);
     expect(result.head?.size).toBe(4);
+    expect(store.textOf('checkpoint')).toBe(independentCheckpoint('run-1', store.textOf('ledger.jsonl')));
   });
 
   it('fails when a ledger line is edited, naming the records the checkpoint covers', async () => {
@@ -168,6 +169,33 @@ describe('verifying a proof bundle is intact', () => {
         reason: 'there is no run.seal: the run did not finish, and a run with no seal never passes',
       },
     ]);
+  });
+
+  it('refuses a line whose bytes are not the ones the writer writes for its record, naming the record', async () => {
+    const NOT_WRITTEN = 'the line is not the bytes the writer writes for its record, so two readers could read it apart';
+    const cases: [string, number, (line: string) => string, string][] = [
+      ['a duplicate seq key', 1, (l) => l.replace('{"seq":1,', '{"seq":1,"seq":1,'), NOT_WRITTEN],
+      ['a byte-order mark', 0, (l) => `﻿${l}`, NOT_WRITTEN],
+      ['a CRLF ending', 1, (l) => `${l}\r`, NOT_WRITTEN],
+      ['a trailing space', 1, (l) => `${l} `, NOT_WRITTEN],
+      ['a \\u0041 escape for A', 1, (l) => l.replace('"A"', '"\\u0041"'), NOT_WRITTEN],
+      ['a number the writer refuses', 1, (l) => l.replace('"n":1', '"n":1.5'), 'body.n is 1.5: a record holds only JSON, with integers'],
+    ];
+    for (const [name, record, edit, reason] of cases) {
+      const store = new MemoryStore();
+      const writer = await LedgerWriter.open(store, sha256, { origin: 'run-1', at: AT, body: { format: 1 } });
+      await writer.append('fact', { name: 'A', n: 1 }, AT);
+      await writer.seal({}, AT);
+      const lines = store.textOf('ledger.jsonl').split('\n');
+      const before = lines[record];
+      lines[record] = edit(lines[record] as string);
+      expect(lines[record], name).not.toBe(before);
+      const ledger = lines.join('\n');
+      store.setText('ledger.jsonl', ledger);
+      store.setText('checkpoint', independentCheckpoint('run-1', ledger));
+
+      expect((await verifyIntact(store, sha256)).problems, name).toEqual([{ path: 'ledger.jsonl', record, reason }]);
+    }
   });
 
   it('fails a sealed ledger whose checkpoint covers fewer records than it holds', async () => {

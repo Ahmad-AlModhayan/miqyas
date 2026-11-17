@@ -8,6 +8,33 @@ export const sha256: Sha256 = async (bytes) => new Uint8Array(createHash('sha256
 export const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
 export const text = (bytes: Uint8Array | undefined): string => new TextDecoder().decode(bytes);
 
+/**
+ * The checkpoint text over a ledger's complete lines, computed here and not with the kernel: RFC 9162 section 2.1.1
+ * written directly (a leaf is SHA-256(0x00 ‖ line), a node SHA-256(0x01 ‖ left ‖ right), split at the largest power
+ * of two below the count, the empty tree SHA-256 of nothing). Tests use it to make a tampered ledger's checkpoint
+ * match, so that only the check under test can catch the tampering.
+ */
+export function independentCheckpoint(origin: string, ledger: string): string {
+  const bytes = Buffer.from(ledger, 'utf8');
+  const lines: Buffer[] = [];
+  let start = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] === 0x0a) {
+      lines.push(bytes.subarray(start, i));
+      start = i + 1;
+    }
+  }
+  const hash = (...parts: Buffer[]) => createHash('sha256').update(Buffer.concat(parts)).digest();
+  const root = (leaves: Buffer[]): Buffer => {
+    if (leaves.length === 0) return hash();
+    if (leaves.length === 1) return hash(Buffer.from([0x00]), leaves[0] as Buffer);
+    let k = 1;
+    while (k * 2 < leaves.length) k *= 2;
+    return hash(Buffer.from([0x01]), root(leaves.slice(0, k)), root(leaves.slice(k)));
+  };
+  return `${origin}\n${lines.length}\n${root(lines).toString('base64')}\n`;
+}
+
 /** A store held in memory. Every path is kept under `root`, as a folder on disk would keep it. */
 export class MemoryStore implements Store {
   readonly files = new Map<string, Uint8Array>();
