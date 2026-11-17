@@ -141,7 +141,7 @@ function decideReadable(effect: Effect, run: RunFacts, grantsIn: Grants): Decisi
   const refuse = (rule: string, missing: readonly Need[] = []): Decision => ({ answer: 'refuse', rule, missing, ...base });
   const allow = (rule: string): Decision => ({ answer: 'allow', rule, missing: [], ...base });
 
-  const ctx = { effect, effectClass, env, run };
+  const ctx = { effect, effectClass, env, run, reasons };
   for (const rule of DENY_RULES) if (rule.matches(ctx)) return refuse(rule.id);
 
   if (effect.kind === 'run-code') {
@@ -155,11 +155,9 @@ function decideReadable(effect: Effect, run: RunFacts, grantsIn: Grants): Decisi
   if (effectClass === null) return refuse('refuse.unknown-effect');
   if (env === null) return refuse('refuse.no-target');
 
-  if (effect.kind === 'request') {
-    const permit = permitOf(effect);
-    const byPerson = effect.request.cause === 'page' && permit === 'interact' && !atLeast(effectClass, 'disrupt');
-    if (!byPerson && !atLeast(permit, effectClass)) return refuse('permit.exceeded');
-  }
+  // A class above the permit is refused, with no exception: a form a plan step submits is classed interact (B1), so a
+  // request under an interact permit that comes out higher was raised by its route or its declared class.
+  if (effect.kind === 'request' && !atLeast(permitOf(effect), effectClass)) return refuse('permit.exceeded');
   if (effectClass === 'execute') return refuse('ceiling.execute.refused');
 
   const rule = `ceiling.${effectClass}.${env.environment}`;

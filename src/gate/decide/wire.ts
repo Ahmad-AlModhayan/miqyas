@@ -154,13 +154,14 @@ function isKnownRead(req: WireRequest, routes: RouteFacts): boolean {
 /**
  * Class a request (B1). `session.permit` is the permit the collector holds. Under an interact permit what a page
  * sends is interact; under any other permit it is observe; what a collector sends itself is a probe. A method that
- * is not safe makes a write unless the request is a known read; a spending route and a route seen to change state
- * make a write. A caller's declared class can only raise the result.
+ * is not safe makes a write unless the request is a known read or a page's request under an interact permit; a
+ * spending route and a route seen to change state make a write. A caller's declared class can only raise the result.
  */
 export function classOfRequest(req: WireRequest, session: { readonly permit: EffectClass }, routes: RouteFacts): WireClass {
   let c: EffectClass;
   const reasons: string[] = [];
-  if (req.cause === 'page' && session.permit === 'interact') {
+  const byPlanStep = req.cause === 'page' && session.permit === 'interact';
+  if (byPlanStep) {
     c = 'interact';
     reasons.push('wire.page-interact');
   } else if (req.cause === 'page') {
@@ -183,6 +184,9 @@ export function classOfRequest(req: WireRequest, session: { readonly permit: Eff
     const safe = typeof req.method === 'string' && SAFE_METHODS.has(req.method.toUpperCase());
     if (!safe) {
       if (isKnownRead(req, routes)) reasons.push('wire.known-read');
+      // The person using the product, submissions included (ADR 0008): the method does not raise it. The reason is
+      // kept, so a rule that must hold whatever the class (a live physical process) still sees what was sent.
+      else if (byPlanStep) reasons.push('wire.unsafe-method-plan-step');
       else raise('write', 'wire.unsafe-method');
     }
     if (routes.spendingRoutes.some((r) => routeMatches(r, req.url, true))) raise('write', 'wire.spending-route');
