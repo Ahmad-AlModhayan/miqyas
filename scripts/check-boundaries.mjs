@@ -6,16 +6,65 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ALLOWED_LAYERS = {
-  protocol: new Set(['protocol']),
-  scrub: new Set(['protocol', 'scrub']),
-  surfaces: new Set(['protocol', 'scrub', 'surfaces']),
-  adapters: new Set(['protocol', 'scrub', 'surfaces', 'adapters']),
-  agents: new Set(['protocol', 'scrub', 'surfaces', 'agents']),
-  'proof-core': new Set(['protocol', 'scrub', 'surfaces', 'adapters', 'agents', 'proof-core']),
-  entry: new Set(['protocol', 'scrub', 'surfaces', 'adapters', 'agents', 'proof-core', 'entry']),
-  cli: new Set(['protocol', 'cli']),
+// The folders of docs/FOUNDATION.md §14, in the order it lists them. A folder listed below the base four may
+// import the base four and every folder listed above it.
+const FOUNDATION_FOLDERS = [
+  'kernel',
+  'protocol',
+  'scrub',
+  'surfaces',
+  'gate',
+  'engine',
+  'model',
+  'experiment',
+  'capsule',
+  'measure',
+  'explore',
+  'assure',
+  'diagnose',
+  'collectors',
+  'claims',
+  'agents',
+  'bench',
+  'entry',
+];
+
+const BASE_FOUR = ['protocol', 'scrub', 'surfaces', 'kernel'];
+
+// What each of the base four may import, and the thin client (`src/cli.ts`, the layer `cli`).
+const FIXED_RULES = {
+  protocol: [],
+  scrub: [],
+  surfaces: ['protocol', 'scrub'],
+  kernel: ['protocol'],
+  cli: ['protocol'],
 };
+
+// The folders of the layout before the foundation, with the rules they had. These hold until the code in
+// them moves (FOUNDATION §15). `agents` and `entry` are in both layouts and take both sets of rules.
+const EARLIER_RULES = {
+  adapters: ['protocol', 'scrub', 'surfaces'],
+  agents: ['protocol', 'scrub', 'surfaces'],
+  'proof-core': ['protocol', 'scrub', 'surfaces', 'adapters', 'agents'],
+  entry: ['protocol', 'scrub', 'surfaces', 'adapters', 'agents', 'proof-core'],
+};
+
+function buildAllowedLayers() {
+  const imports = { ...FIXED_RULES };
+  FOUNDATION_FOLDERS.forEach((folder, i) => {
+    imports[folder] ??= [...BASE_FOUR, ...FOUNDATION_FOLDERS.slice(0, i)];
+  });
+  for (const [folder, earlier] of Object.entries(EARLIER_RULES)) {
+    imports[folder] = [...(imports[folder] ?? []), ...earlier];
+  }
+  return Object.fromEntries(Object.entries(imports).map(([layer, list]) => [layer, new Set([layer, ...list])]));
+}
+
+/** Layer name to the set of layers it may import, itself included. */
+const ALLOWED_LAYERS = buildAllowedLayers();
+
+/** Every folder under `src/` that the check knows, for its messages. */
+const DECLARED_FOLDERS = Object.keys(ALLOWED_LAYERS).filter((layer) => layer !== 'cli');
 
 const VENDOR_LAYER_ONLY = {
   playwright: 'surfaces',
@@ -174,7 +223,7 @@ export function checkSourceImports(filePath, source) {
     violations.push({
       file: rel,
       specifier: '',
-      reason: `file is outside allowed architectural layers (scrub, surfaces, adapters, agents, proof-core, entry)`,
+      reason: `file is outside the declared layers (${DECLARED_FOLDERS.join(', ')}, or src/cli.ts)`,
     });
     return violations;
   }
