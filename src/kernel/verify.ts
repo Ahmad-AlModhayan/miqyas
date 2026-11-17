@@ -15,8 +15,8 @@ export interface Intact {
   sealed: boolean;
   /** How many complete lines the ledger holds. */
   records: number;
-  /** The head the checkpoint gives, with the root in base64, or null when there is no checkpoint that can be read. */
-  head: { origin: string; size: number; root: string } | null;
+  /** What the checkpoint holds (its origin, size and root, the root in base64), or null when it cannot be read. */
+  checkpoint: { origin: string; size: number; root: string } | null;
   torn: { record: number; bytes: number } | null;
   problems: Problem[];
 }
@@ -63,7 +63,7 @@ export async function verifyIntact(store: Store, sha256: Sha256): Promise<Intact
     ok: problems.length === 0,
     sealed: ledger.sealed,
     records: n,
-    head:
+    checkpoint:
       checkpoint === undefined
         ? null
         : { origin: checkpoint.origin, size: checkpoint.size, root: toBase64(checkpoint.root) },

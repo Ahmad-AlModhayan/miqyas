@@ -8,7 +8,7 @@ import { readBlobRefs } from './blobs.js';
 import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, equalBytes, fromUtf8, isPlainObject, utf8 } from './store.js';
 import { leafHash, rootOfLeaves } from './tree.js';
 
-export const RECORD_TYPES = [
+const RECORD_TYPES = [
   'run.open',
   'claim',
   'effect',
@@ -49,7 +49,7 @@ export interface OpenOptions {
   checkpointEvery?: number;
 }
 
-export const CHECKPOINT_EVERY = 256;
+const CHECKPOINT_EVERY = 256;
 
 const NEWLINE = 0x0a;
 

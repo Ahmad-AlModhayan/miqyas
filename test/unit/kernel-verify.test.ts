@@ -31,7 +31,7 @@ describe('verifying a proof bundle is intact', () => {
     expect(result.problems).toEqual([]);
     expect(result.ok).toBe(true);
     expect(result.sealed).toBe(true);
-    expect(result.head?.size).toBe(4);
+    expect(result.checkpoint?.size).toBe(4);
     expect(store.textOf('checkpoint')).toBe(independentCheckpoint('run-1', store.textOf('ledger.jsonl')));
   });
 
@@ -107,7 +107,7 @@ describe('verifying a proof bundle is intact', () => {
     expect(result.ok).toBe(false);
     expect(result.sealed).toBe(false);
     expect(result.torn).toEqual({ record: 3, bytes: 16 });
-    expect(result.head?.size).toBe(2);
+    expect(result.checkpoint?.size).toBe(2);
     expect(result.problems).toEqual([
       {
         path: 'ledger.jsonl',
@@ -161,7 +161,7 @@ describe('verifying a proof bundle is intact', () => {
     const result = await verifyIntact(store, sha256);
     expect(result.ok).toBe(false);
     expect(result.sealed).toBe(false);
-    expect(result.head?.size).toBe(1);
+    expect(result.checkpoint?.size).toBe(1);
     expect(result.problems).toEqual([
       {
         path: 'ledger.jsonl',
@@ -273,7 +273,7 @@ describe('verifying a proof bundle is intact', () => {
     // straight from RFC 9162 section 2.1.1: a leaf is SHA-256(0x00 ‖ line) over each line above without its newline,
     // a node is SHA-256(0x01 ‖ left ‖ right), split at the largest power of two below the count. The blob digest is
     // SHA-256 of the 15 bytes {"packages":[]}, from the same script. None of this repository's code was used.
-    expect((await verifyIntact(copy, sha256)).head).toEqual({
+    expect((await verifyIntact(copy, sha256)).checkpoint).toEqual({
       origin: 'run-1',
       size: 4,
       root: '9YJF2iDT+xLSooiKK4rzb6bUGqdqHBvRllpNfmgBkAA=',
