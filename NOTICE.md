@@ -10,4 +10,8 @@ Dependencies keep their own licences (see `package-lock.json`). The names Kahf, 
 
 - **axe-core** (`axe-core`, version 4.14.0): Copyright Deque Systems, Inc. Licensed under the Mozilla Public License 2.0 (MPL-2.0), bundled and used unmodified. Source code: <https://github.com/dequelabs/axe-core>.
 - **libpg-query** (`libpg-query`, version 18.2.4): MIT License; wraps `libpg_query` (Copyright pganalyze, BSD-3-Clause License). Source code: <https://github.com/launchql/libpg-query-node>.
+- **@bufbuild/cel** (`@bufbuild/cel`, version 0.6.2): Copyright Buf Technologies, Inc. Apache License 2.0, used unmodified as the CEL engine of the kernel. Source code: <https://github.com/bufbuild/cel-es>.
+- **@bufbuild/cel-spec** (`@bufbuild/cel-spec`, version 0.6.2): Apache License 2.0; republishes the conformance tests of google/cel-spec (Copyright Google LLC, Apache License 2.0). Pulled in by `@bufbuild/cel`; its data is also copied, as a subset, to `test/conformance/cel/subset.json`. Source code: <https://github.com/bufbuild/cel-es>.
+- **@bufbuild/re2** (`@bufbuild/re2`, version 0.6.2): MIT License; a JavaScript port of RE2 (Copyright The Go Authors, BSD-3-Clause License), used by `@bufbuild/cel` for `matches`. Source code: <https://github.com/bufbuild/cel-es>.
+- **@bufbuild/protobuf** (`@bufbuild/protobuf`, version 2.17.0): Apache License 2.0 AND BSD-3-Clause License (the SPDX expression in its package metadata), used by `@bufbuild/cel`. Source code: <https://github.com/bufbuild/protobuf-es>.
 - Curated secret-detection regex patterns in `src/surfaces/web/detectors.ts` are derived from **gitleaks** (<https://github.com/gitleaks/gitleaks>), MIT License.
