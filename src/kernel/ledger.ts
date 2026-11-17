@@ -4,7 +4,8 @@
 // record's position in the ledger, counted from 0, and so the index of its leaf in the tree. The line is
 // JSON.stringify of that object, in that key order; the reader refuses a line with any other bytes.
 import { type Head, formatCheckpoint } from './checkpoint.js';
-import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, equalBytes, fromUtf8, utf8 } from './store.js';
+import { readBlobRefs } from './blobs.js';
+import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, equalBytes, fromUtf8, isPlainObject, utf8 } from './store.js';
 import { leafHash, rootOfLeaves } from './tree.js';
 
 export const RECORD_TYPES = [
@@ -107,6 +108,8 @@ export class LedgerWriter {
     if (this.broken !== undefined) return Promise.reject(new LedgerError('an earlier write failed; the ledger is closed'));
     const notAllowed = describeNonJson(body, 'body');
     if (notAllowed !== undefined) return Promise.reject(new LedgerError(`${notAllowed}: a record holds only JSON, with integers`));
+    const badBlob = isPlainObject(body) && 'blobs' in body ? readBlobRefs(body.blobs).problems[0] : undefined;
+    if (badBlob !== undefined) return Promise.reject(new LedgerError(`${badBlob}: each is {digest, size, mediaType}`));
     if (typeof at !== 'string') return Promise.reject(new LedgerError('the record time must be a string'));
     if (t === 'run.seal') this.sealed = true;
     const seq = this.next++;
@@ -149,7 +152,7 @@ function describeNonJson(value: unknown, where: string): string | undefined {
     }
     return undefined;
   }
-  if (typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+  if (isPlainObject(value)) {
     for (const [key, item] of Object.entries(value)) {
       const notAllowed = describeNonJson(item, `${where}.${key}`);
       if (notAllowed !== undefined) return notAllowed;
@@ -234,10 +237,10 @@ function parseRecord(line: Uint8Array, seq: number): LedgerRecord | string {
   } catch {
     return 'the line is not JSON';
   }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return 'the line is not a JSON object';
+  if (!isPlainObject(value)) return 'the line is not a JSON object';
   const keys = Object.keys(value).sort().join(',');
   if (keys !== 'at,body,seq,t') return `the record has the fields ${keys || '(none)'}, not seq, t, at and body`;
-  const record = value as Record<string, unknown>;
+  const record = value;
   if (record.seq !== seq) return `the record says seq ${JSON.stringify(record.seq)} on line ${seq}`;
   if (!RECORD_TYPES.includes(record.t as RecordType)) return `the record type ${JSON.stringify(record.t)} is not known`;
   if (typeof record.at !== 'string') return 'the record time is not a string';

@@ -3,10 +3,10 @@
 // matches the tree the checkpoint fixes, every blob matches the digest a record names for it, and the run was sealed.
 // It fails closed: whatever it can't read or doesn't recognise is a problem that names the file and the record. The
 // one exception is a torn last line of an unsealed ledger, which is what a crash leaves; it is reported in `torn`.
-import { BlobError, BlobStore, blobPath } from './blobs.js';
+import { BlobError, BlobStore, blobPath, readBlobRefs } from './blobs.js';
 import { type Checkpoint, parseCheckpoint, toBase64 } from './checkpoint.js';
 import { type LedgerRecord, type Problem, readLedger } from './ledger.js';
-import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, equalBytes, fromUtf8 } from './store.js';
+import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, equalBytes, fromUtf8, isPlainObject } from './store.js';
 import { treeRoot } from './tree.js';
 
 export interface Intact {
@@ -90,37 +90,20 @@ async function readCheckpoint(store: Store, problems: Problem[]): Promise<Checkp
 /** Each blob a record names must be in the bundle, with the bytes and size the record gives. */
 async function checkBlobs(record: LedgerRecord, blobs: BlobStore, problems: Problem[]): Promise<void> {
   const body = record.body;
-  if (typeof body !== 'object' || body === null || Array.isArray(body) || !('blobs' in body)) return;
-  const refs = body.blobs;
-  const wrong = (path: string, reason: string) => problems.push({ path, record: record.seq, reason });
-  if (typeof refs !== 'object' || refs === null || Array.isArray(refs)) {
-    wrong(LEDGER_PATH, 'the record names its blobs in a form that is not recognised');
-    return;
-  }
-  for (const [name, ref] of Object.entries(refs)) {
-    if (
-      typeof ref !== 'object' ||
-      ref === null ||
-      Array.isArray(ref) ||
-      Object.keys(ref).sort().join(',') !== 'digest,mediaType,size' ||
-      typeof ref.digest !== 'string' ||
-      typeof ref.mediaType !== 'string' ||
-      !Number.isSafeInteger(ref.size)
-    ) {
-      wrong(LEDGER_PATH, `the blob "${name}" is named in a form that is not recognised`);
-      continue;
-    }
-    const path = blobPath(ref.digest);
-    if (path === undefined) {
-      wrong(LEDGER_PATH, `the blob "${name}" has a digest that is not recognised: ${JSON.stringify(ref.digest)}`);
-      continue;
-    }
+  if (!isPlainObject(body) || !('blobs' in body)) return;
+  const addProblem = (path: string, reason: string) => problems.push({ path, record: record.seq, reason });
+  const { refs, problems: unrecognised } = readBlobRefs(body.blobs);
+  for (const reason of unrecognised) addProblem(LEDGER_PATH, reason);
+  for (const [name, ref] of refs) {
+    const path = blobPath(ref.digest) as string;
     try {
       const bytes = await blobs.get(ref.digest);
-      if (bytes.length !== ref.size) wrong(path, `the blob "${name}" holds ${bytes.length} bytes and the record says ${ref.size}`);
+      if (bytes.length !== ref.size) {
+        addProblem(path, `the blob "${name}" holds ${bytes.length} bytes and the record says ${ref.size}`);
+      }
     } catch (error) {
       if (!(error instanceof BlobError)) throw error;
-      wrong(path, `the blob "${name}": ${error.message}`);
+      addProblem(path, `the blob "${name}": ${error.message}`);
     }
   }
 }

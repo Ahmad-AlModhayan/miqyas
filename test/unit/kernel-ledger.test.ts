@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { LedgerWriter, readLedger } from '../../src/kernel/ledger.js';
+import { LedgerError, LedgerWriter, readLedger } from '../../src/kernel/ledger.js';
 import { MemoryStore, sha256, utf8 } from '../kernel-helpers.js';
 
 const AT = '2026-11-17T10:00:00Z';
@@ -112,6 +112,29 @@ describe('the ledger writer and reader', () => {
     await expect(writer.append('fact', { list: [1, Number.NaN] }, AT)).rejects.toThrow(/body\.list\[1\]/);
     await expect(writer.append('fact', { gone: undefined } as never, AT)).rejects.toThrow(/body\.gone/);
     expect(await writer.append('fact', { size: 2, ok: true, none: null, name: 'x' }, AT)).toBe(1);
+  });
+
+  it('refuses a record whose blobs are not exact {digest, size, mediaType} entries, and writes nothing', async () => {
+    const store = new MemoryStore();
+    const writer = await open(store);
+    const digest = `sha256:${'0'.repeat(64)}`;
+    const refused: [unknown, RegExp][] = [
+      ['sha256:00', /names its blobs in a form that is not recognised/],
+      [[{ digest, size: 1, mediaType: 'x' }], /names its blobs in a form that is not recognised/],
+      [{ a: 'sha256:00' }, /the blob "a" is named in a form that is not recognised/],
+      [{ a: { digest, size: 1 } }, /the blob "a" is named in a form/],
+      [{ a: { digest, size: 1, mediaType: 'x', extra: 1 } }, /the blob "a" is named in a form/],
+      [{ a: { digest, size: -1, mediaType: 'x' } }, /the blob "a" is named in a form/],
+      [{ a: { digest: 'md5:00', size: 1, mediaType: 'x' } }, /the blob "a" has a digest that is not recognised: "md5:00"/],
+      [{ a: { digest: digest.toUpperCase(), size: 1, mediaType: 'x' } }, /the blob "a" has a digest that is not recognised/],
+    ];
+    for (const [blobs, reason] of refused) {
+      const append = writer.append('fact', { blobs } as never, AT);
+      await expect(append).rejects.toBeInstanceOf(LedgerError);
+      await expect(append).rejects.toThrow(reason);
+    }
+    expect((await readLedger(store)).records).toHaveLength(1);
+    expect(await writer.append('fact', { blobs: { a: { digest, size: 1, mediaType: 'x' } } }, AT)).toBe(1);
   });
 
   it('names the record when a line cannot be read', async () => {

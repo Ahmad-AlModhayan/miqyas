@@ -2,7 +2,7 @@
 // Evidence too large for a record, stored beside the ledger under its SHA-256 (docs/FOUNDATION.md §5):
 // blobs/sha256/<first two hex digits>/<the other 62>. A digest is written "sha256:<64 lower-case hex digits>". The
 // blob store hashes every blob it is handed and every blob it gives back; one whose bytes don't match is refused.
-import { type Sha256, type Store, toHex } from './store.js';
+import { type Sha256, type Store, isPlainObject, toHex } from './store.js';
 
 /** How a fact names a blob (docs/FOUNDATION.md §3). */
 export interface BlobRef {
@@ -14,6 +14,34 @@ export interface BlobRef {
 export class BlobError extends Error {}
 
 const DIGEST = /^sha256:([0-9a-f]{64})$/;
+
+/**
+ * Reads how a record names its blobs: `blobs` is an object whose every entry is exactly a BlobRef with a sha256
+ * digest. Gives the entries that are, and a reason for each that is not. The writer refuses a record with any reason;
+ * the verifier reports each one.
+ */
+export function readBlobRefs(blobs: unknown): { refs: [name: string, ref: BlobRef][]; problems: string[] } {
+  if (!isPlainObject(blobs)) return { refs: [], problems: ['the record names its blobs in a form that is not recognised'] };
+  const refs: [string, BlobRef][] = [];
+  const problems: string[] = [];
+  for (const [name, ref] of Object.entries(blobs)) {
+    if (
+      !isPlainObject(ref) ||
+      Object.keys(ref).sort().join(',') !== 'digest,mediaType,size' ||
+      typeof ref.digest !== 'string' ||
+      typeof ref.mediaType !== 'string' ||
+      !Number.isSafeInteger(ref.size) ||
+      (ref.size as number) < 0
+    ) {
+      problems.push(`the blob "${name}" is named in a form that is not recognised`);
+    } else if (blobPath(ref.digest) === undefined) {
+      problems.push(`the blob "${name}" has a digest that is not recognised: ${JSON.stringify(ref.digest)}`);
+    } else {
+      refs.push([name, { digest: ref.digest, size: ref.size as number, mediaType: ref.mediaType }]);
+    }
+  }
+  return { refs, problems };
+}
 
 /** The blob's path in the bundle, or undefined for a digest that isn't one this store writes. */
 export function blobPath(digest: string): string | undefined {

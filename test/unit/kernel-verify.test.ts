@@ -232,11 +232,17 @@ describe('verifying a proof bundle is intact', () => {
   });
 
   it('fails when a record names a blob in a form it does not recognise', async () => {
+    // The writer refuses these, so the lines are written by hand, with a checkpoint that matches them.
     const store = new MemoryStore();
-    const writer = await LedgerWriter.open(store, sha256, { origin: 'run-1', at: AT, body: {} });
-    await writer.append('fact', { blobs: { a: { digest: 'md5:00', size: 1, mediaType: 'x' } } }, AT);
-    await writer.append('fact', { blobs: { b: 'sha256:00' } }, AT);
-    await writer.seal({}, AT);
+    const ledger = [
+      `{"seq":0,"t":"run.open","at":"${AT}","body":{}}`,
+      `{"seq":1,"t":"fact","at":"${AT}","body":{"blobs":{"a":{"digest":"md5:00","size":1,"mediaType":"x"}}}}`,
+      `{"seq":2,"t":"fact","at":"${AT}","body":{"blobs":{"b":"sha256:00"}}}`,
+      `{"seq":3,"t":"run.seal","at":"${AT}","body":{}}`,
+      '',
+    ].join('\n');
+    store.setText('ledger.jsonl', ledger);
+    store.setText('checkpoint', independentCheckpoint('run-1', ledger));
 
     expect((await verifyIntact(store, sha256)).problems).toEqual([
       { path: 'ledger.jsonl', record: 1, reason: 'the blob "a" has a digest that is not recognised: "md5:00"' },
