@@ -2,7 +2,9 @@
 // The ledger of one run (docs/FOUNDATION.md §5, ADR 0007): ledger.jsonl, one JSON record per line, appended as the run
 // goes by one writer and never rewritten. A record is {"seq": n, "t": type, "at": time, "body": {…}}, where seq is the
 // record's position in the ledger, counted from 0, and so the index of its leaf in the tree.
-import { LEDGER_PATH, type Sha256, type Store, fromUtf8, utf8 } from './store.js';
+import { type Head, formatCheckpoint } from './checkpoint.js';
+import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, fromUtf8, utf8 } from './store.js';
+import { leafHash, rootOfLeaves } from './tree.js';
 
 export const RECORD_TYPES = [
   'run.open',
@@ -41,7 +43,11 @@ export interface OpenOptions {
   at: string;
   /** The run.open record's body. */
   body: Json;
+  /** The checkpoint is rewritten after this many records, and after the seal. */
+  checkpointEvery?: number;
 }
+
+export const CHECKPOINT_EVERY = 256;
 
 const NEWLINE = 0x0a;
 
@@ -51,11 +57,13 @@ export class LedgerWriter {
   private sealed = false;
   private broken: unknown = undefined;
   private queue: Promise<unknown> = Promise.resolve();
+  private readonly leaves: Uint8Array[] = [];
 
   private constructor(
     private readonly store: Store,
     private readonly sha256: Sha256,
     private readonly origin: string,
+    private readonly checkpointEvery: number,
   ) {}
 
   /** Starts a ledger with its run.open record. Refuses a store that already holds a ledger. */
@@ -63,7 +71,12 @@ export class LedgerWriter {
     if ((await store.read(LEDGER_PATH)) !== undefined) {
       throw new LedgerError(`${LEDGER_PATH} already exists: a ledger is written once, by one writer`);
     }
-    const writer = new LedgerWriter(store, sha256, options.origin);
+    if (options.origin === '' || /[\r\n]/.test(options.origin)) {
+      throw new LedgerError('the origin must be one line that names the run');
+    }
+    const every = options.checkpointEvery ?? CHECKPOINT_EVERY;
+    if (!Number.isSafeInteger(every) || every < 1) throw new LedgerError('checkpointEvery must be a whole number above 0');
+    const writer = new LedgerWriter(store, sha256, options.origin, every);
     await writer.write('run.open', options.body, options.at);
     return writer;
   }
@@ -82,18 +95,27 @@ export class LedgerWriter {
     return seq;
   }
 
+  /** The size and root of the ledger as written so far: what is printed when a run ends. */
+  async head(): Promise<Head> {
+    await this.queue;
+    return { size: this.leaves.length, root: await rootOfLeaves(this.leaves, this.sha256) };
+  }
+
   private write(t: RecordType, body: Json, at: string): Promise<number> {
     if (this.sealed) return Promise.reject(new LedgerError('the ledger is sealed: nothing may follow run.seal'));
     if (this.broken !== undefined) return Promise.reject(new LedgerError('an earlier write failed; the ledger is closed'));
     const wrong = notJson(body, 'body');
     if (wrong !== undefined) return Promise.reject(new LedgerError(`${wrong}: a record holds only JSON, with integers`));
+    if (typeof at !== 'string') return Promise.reject(new LedgerError('the record time must be a string'));
     if (t === 'run.seal') this.sealed = true;
     const seq = this.next++;
-    const line = utf8(`${JSON.stringify({ seq, t, at, body })}\n`);
+    const json = JSON.stringify({ seq, t, at, body });
     const done = this.queue.then(async () => {
       if (this.broken !== undefined) throw new LedgerError('an earlier write failed; the ledger is closed');
       try {
-        await this.store.append(LEDGER_PATH, line);
+        await this.store.append(LEDGER_PATH, utf8(`${json}\n`));
+        this.leaves.push(await leafHash(utf8(json), this.sha256));
+        if (t === 'run.seal' || this.leaves.length % this.checkpointEvery === 0) await this.checkpoint();
       } catch (error) {
         this.broken = error;
         throw error;
@@ -102,6 +124,11 @@ export class LedgerWriter {
     });
     this.queue = done.catch(() => undefined);
     return done;
+  }
+
+  private async checkpoint(): Promise<void> {
+    const root = await rootOfLeaves(this.leaves, this.sha256);
+    await this.store.write(CHECKPOINT_PATH, utf8(formatCheckpoint({ origin: this.origin, size: this.leaves.length, root })));
   }
 }
 
