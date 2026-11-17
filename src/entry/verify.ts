@@ -6,7 +6,7 @@
 import { stat } from 'node:fs/promises';
 import type { Problem } from '../kernel/ledger.js';
 import type { Sha256, Store } from '../kernel/store.js';
-import { verifyIntact, verifyResult } from '../kernel/verify.js';
+import { type Follows, verifyIntact, verifyResult } from '../kernel/verify.js';
 import { FsStore, nodeSha256 } from './fs-store.js';
 
 export interface VerifyReport {
@@ -24,11 +24,13 @@ interface Question {
   title: string;
   /** Missing for a question this version does not answer yet. */
   answer?: (store: Store, sha256: Sha256) => Promise<Answer>;
+  /** Answered only over a bundle the first question found intact: a ledger it rejected can't answer anything. */
+  needsIntact?: boolean;
 }
 
 const QUESTIONS: Question[] = [
   { title: 'Intact?', answer: intact },
-  { title: 'Does the result follow?', answer: (store) => verifyResult(store) },
+  { title: 'Does the result follow?', answer: async (store) => follows(await verifyResult(store)), needsIntact: true },
   { title: 'Do the verdicts follow?' },
   { title: 'Do the derived facts follow?' },
 ];
@@ -51,12 +53,18 @@ export async function verifyBundle(bundle: string): Promise<VerifyReport> {
   const store = new FsStore(bundle);
   const lines = [`miqyas verify ${bundle}`];
   let failed = false;
+  let bundleIntact = true;
   for (const [i, question] of QUESTIONS.entries()) {
     if (question.answer === undefined) {
       lines.push(`${i + 1}. ${question.title} not checked yet`);
       continue;
     }
+    if (question.needsIntact && !bundleIntact) {
+      lines.push(`${i + 1}. ${question.title} not answered: the bundle is not intact, so its records can't answer it`);
+      continue;
+    }
     const answer = await question.answer(store, nodeSha256);
+    if (i === 0) bundleIntact = answer.ok;
     failed ||= !answer.ok;
     lines.push(`${i + 1}. ${question.title} ${answer.ok ? 'yes' : 'NO'}`, ...answer.lines.map((l) => `   ${l}`));
   }
@@ -82,4 +90,17 @@ async function intact(store: Store, sha256: Sha256): Promise<Answer> {
 
 function describe({ path, record, reason }: Problem): string {
   return `${path}${record === undefined ? '' : ` (record ${record})`}: ${reason}`;
+}
+
+/** Words what verifyResult found: the seal against the fold, then, when they disagree, each verdict record. */
+function follows(found: Follows): Answer {
+  if (found.seal === null) return { ok: false, lines: ["there is no seal: the run didn't finish, so no result follows"] };
+  const { seal, recomputed, records, agree } = found;
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const lines = [
+    `the seal (record ${seal.seq}) says ${seal.verdict ?? '(nothing)'} over ${seal.verdicts === null ? 'an unstated number of verdicts' : plural(seal.verdicts, 'verdict')}; ` +
+      `the fold of the ${plural(recomputed.verdicts, 'verdict record')} gives ${recomputed.verdict}`,
+  ];
+  if (!agree) for (const r of records) lines.push(`record ${r.seq}: ${r.claim ?? '(no claim named)'} ${r.verdict ?? '(no verdict)'}`);
+  return { ok: agree, lines };
 }

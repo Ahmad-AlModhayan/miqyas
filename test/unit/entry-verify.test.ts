@@ -117,12 +117,25 @@ describe('verify on an intact bundle whose seal does not follow from its verdict
     await rm(at, { recursive: true, force: true });
   });
 
-  it('answers no for a run with no seal, which never passes', async () => {
+  it('does not answer it for a bundle that is not intact, such as a run with no seal, which never passes', async () => {
     const lines = await readLines();
     await writeLines(lines.slice(0, -1));
     const r = await verifyBundle(dir);
-    expect(r.lines).toContain('2. Does the result follow? NO');
-    expect(r.lines).toContain("   there is no seal: the run didn't finish, so no result follows");
+    expect(r.exitCode).toBe(1);
+    expect(r.lines).toContain('1. Intact? NO');
+    expect(r.lines).toContain("2. Does the result follow? not answered: the bundle is not intact, so its records can't answer it");
+    expect(text(r.lines)).not.toContain('the seal (record');
+  });
+
+  it('does not answer it over a ledger the first question rejected, even when the seal agrees with the edited records', async () => {
+    const lines = await readLines();
+    lines[1] = lines[1]!.replace('alpha', 'omega');
+    await writeLines(lines);
+    const r = await verifyBundle(dir);
+    expect(r.exitCode).toBe(1);
+    expect(r.lines).toContain('1. Intact? NO');
+    expect(r.lines).toContain("2. Does the result follow? not answered: the bundle is not intact, so its records can't answer it");
+    expect(r.lines).not.toContain('2. Does the result follow? yes');
   });
 });
 

@@ -7,7 +7,7 @@ import { BlobError, BlobStore, blobPath, readBlobRefs } from './blobs.js';
 import { type Checkpoint, parseCheckpoint, toBase64 } from './checkpoint.js';
 import { type LedgerRecord, type Problem, readLedger } from './ledger.js';
 import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, equalBytes, fromUtf8, isPlainObject } from './store.js';
-import { sealResult } from './judge.js';
+import { type SealResult, sealResult } from './judge.js';
 import { treeRoot } from './tree.js';
 
 export interface Intact {
@@ -109,38 +109,45 @@ async function checkBlobs(record: LedgerRecord, blobs: BlobStore, problems: Prob
   }
 }
 
-/** The second question (docs/FOUNDATION.md §5): does the result follow? The fold of the verdict records is the seal's. */
-export interface Follows {
-  ok: boolean;
-  /** One line each: what the seal says and what the fold gives, then each verdict record, or why there is no answer. */
-  lines: string[];
-}
+/**
+ * The second question (docs/FOUNDATION.md §5): does the result follow? The fold of the verdict records must be what
+ * the seal says. This gives data only: what the seal holds, what was recomputed, and whether they agree; src/entry
+ * words it. `seal` is null for a run that was not sealed, from which no result follows.
+ */
+export type Follows =
+  | { seal: null }
+  | {
+      /** The seal's position, and the conclusion and count its result states, null where it states none. */
+      seal: { seq: number; verdict: string | null; verdicts: number | null };
+      /** The fold of the verdict records. */
+      recomputed: SealResult;
+      /** Each verdict record: its position, the claim and the verdict it names, null where it names none. */
+      records: { seq: number; claim: string | null; verdict: string | null }[];
+      agree: boolean;
+    };
 
 export async function verifyResult(store: Store): Promise<Follows> {
   const { records } = await readLedger(store);
   const seal = records.find((r) => r.t === 'run.seal');
-  if (seal === undefined) return { ok: false, lines: ["there is no seal: the run didn't finish, so no result follows"] };
+  if (seal === undefined) return { seal: null };
 
-  const verdicts: { seq: number; claim: string; verdict: string }[] = [];
+  const verdicts: { seq: number; claim: string | null; verdict: string | null }[] = [];
   for (const r of records) {
     if (r.t !== 'verdict') continue;
     const body = isPlainObject(r.body) ? r.body : {};
     verdicts.push({
       seq: r.seq,
-      claim: typeof body.claim === 'string' ? body.claim : '(no claim named)',
-      verdict: typeof body.verdict === 'string' ? body.verdict : '(no verdict)',
+      claim: typeof body.claim === 'string' ? body.claim : null,
+      verdict: typeof body.verdict === 'string' ? body.verdict : null,
     });
   }
-  const folded = sealResult(verdicts.map((v) => v.verdict));
+  // A record that names no verdict is not a pass, so the fold of it is never a pass.
+  const recomputed = sealResult(verdicts.map((v) => v.verdict ?? ''));
   const result = isPlainObject(seal.body) && isPlainObject(seal.body.result) ? seal.body.result : {};
-  const said = typeof result.verdict === 'string' ? result.verdict : '(nothing)';
-  const saidCount = typeof result.verdicts === 'number' ? result.verdicts : -1;
-  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-  const lines = [
-    `the seal (record ${seal.seq}) says ${said} over ${saidCount < 0 ? 'an unstated number of verdicts' : plural(saidCount, 'verdict')}; ` +
-      `the fold of the ${plural(folded.verdicts, 'verdict record')} gives ${folded.verdict}`,
-  ];
-  const ok = said === folded.verdict && saidCount === folded.verdicts;
-  if (!ok) for (const v of verdicts) lines.push(`record ${v.seq}: ${v.claim} ${v.verdict}`);
-  return { ok, lines };
+  const said = {
+    seq: seal.seq,
+    verdict: typeof result.verdict === 'string' ? result.verdict : null,
+    verdicts: typeof result.verdicts === 'number' ? result.verdicts : null,
+  };
+  return { seal: said, recomputed, records: verdicts, agree: said.verdict === recomputed.verdict && said.verdicts === recomputed.verdicts };
 }
