@@ -3,11 +3,20 @@
 // caller can record: the class found, the rule that decided, and the answer. Pure. The third step of B3, the stop and
 // the rate of an origin, needs a clock and is not here.
 
-import { CEILING, EFFECT_CLASSES, atLeast, type Cell, type EffectClass, type Need } from './classes.js';
+import {
+  CEILING,
+  EFFECT_CLASSES,
+  atLeast,
+  type CeilingEffect,
+  type Cell,
+  type EffectClass,
+  type EnvironmentClass,
+  type Need,
+} from './classes.js';
 import { DENY_RULES } from './deny.js';
 import { targetOf, type Effect, type RunFacts } from './effects.js';
 import { isIssuedGrants, noGrants, type Grants } from './grants.js';
-import { classOfOrigin, type OriginClassification } from './origin.js';
+import { classOfOrigin, hasOwnershipToken, type OriginClassification } from './origin.js';
 import { classOfRequest } from './wire.js';
 
 export interface Decision {
@@ -20,7 +29,7 @@ export interface Decision {
    * origin, handed in without one).
    */
   readonly rule: string;
-  readonly environment: string | null;
+  readonly environment: EnvironmentClass | null;
   readonly origin: string | null;
   /** What a refusal by the ceiling lacked. Empty when nothing could have been granted. */
   readonly missing: readonly Need[];
@@ -30,11 +39,15 @@ export interface Decision {
 
 const CAPSULE_OPERATIONS: readonly string[] = ['capture', 'restore', 'fork'];
 
+/** The permit a request's collector holds. One the gate does not know counts as the lowest, observe. */
+function permitOf(effect: Extract<Effect, { kind: 'request' }>): EffectClass {
+  return (EFFECT_CLASSES as readonly string[]).includes(effect.session?.permit) ? effect.session.permit : 'observe';
+}
+
 function classOfEffect(effect: Effect, run: RunFacts): { effectClass: EffectClass | null; reasons: readonly string[] } {
   switch (effect.kind) {
     case 'request': {
-      const permit = (EFFECT_CLASSES as readonly string[]).includes(effect.session?.permit) ? effect.session.permit : 'observe';
-      const c = classOfRequest(effect.request, { permit }, run);
+      const c = classOfRequest(effect.request, { permit: permitOf(effect) }, run);
       return { effectClass: c.effectClass, reasons: c.reasons };
     }
     case 'capsule':
@@ -54,7 +67,7 @@ function classOfEffect(effect: Effect, run: RunFacts): { effectClass: EffectClas
   }
 }
 
-/** What an origin's cell asks for that grants and findings don't give: null when it is met, otherwise what is missing. */
+/** What an origin's cell asks for that grants and findings don't give: `[]` when it is met, `'never'` when nothing could meet it. */
 function missingFor(cell: Cell, host: string, grants: Grants, run: RunFacts): readonly Need[] | 'never' {
   if (cell.kind === 'yes') return [];
   if (cell.kind !== 'needs') return 'never';
@@ -70,12 +83,12 @@ function holds(need: Need, host: string, grants: Grants, run: RunFacts): boolean
     case 'allow-disrupt':
       return grants.allowDisrupt;
     case 'token':
-      return run.ownershipTokenHosts.some((h) => h.toLowerCase() === host);
+      return hasOwnershipToken(host, run);
   }
 }
 
 function ceilingMissing(
-  c: Exclude<EffectClass, 'execute'>,
+  c: CeilingEffect,
   env: OriginClassification,
   cause: 'page' | 'other',
   grants: Grants,
@@ -127,7 +140,7 @@ export function decide(effect: Effect, run: RunFacts, grantsIn: Grants): Decisio
   if (env === null) return refuse('refuse.no-target');
 
   if (effect.kind === 'request') {
-    const permit = (EFFECT_CLASSES as readonly string[]).includes(effect.session?.permit) ? effect.session.permit : 'observe';
+    const permit = permitOf(effect);
     const byPerson = effect.request.cause === 'page' && permit === 'interact' && !atLeast(effectClass, 'disrupt');
     if (!byPerson && !atLeast(permit, effectClass)) return refuse('permit.exceeded');
   }

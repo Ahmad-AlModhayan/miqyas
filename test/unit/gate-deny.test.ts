@@ -15,25 +15,24 @@ const refusedBy = (effect: Effect, id: string) =>
 const allowed = (effect: Effect) => expect(decide(effect, strong(), everyGrant()).answer).toBe('allow');
 
 describe('the list of deny rules', () => {
-  it('has the stable ids, each with the line it comes from', () => {
-    expect(DENY_RULES.map((r) => r.id)).toEqual([
-      'deny.leave-the-run',
-      'deny.foreign-origin-active',
-      'deny.live-physical-process',
-      'deny.capsule-outside-sandbox',
-      'deny.seed-outside-public-corpus',
-      'deny.brute-force-login',
-      'deny.get-past-challenge',
-      'deny.upload-unnamed-file',
-      'deny.run-page-or-model-code',
-      'deny.send-page-data',
-      'deny.type-unnamed-secret',
-      'deny.probe-not-inert',
-      'deny.second-account-writes',
-      'deny.probe-foreign-ids',
-      'deny.probe-untagged',
+  it('has the stable ids, in the order they are checked, each with the line it comes from', () => {
+    expect(DENY_RULES.map((r) => [r.id, r.source])).toEqual([
+      ['deny.leave-the-run', 'never leave the set of origins the run is about: the target’s origin and the backends its own pages call'],
+      ['deny.foreign-origin-active', 'never probe, write to or disrupt an origin that isn’t a sandbox, a test host, an owned host or the backend of one'],
+      ['deny.live-physical-process', 'never write to or disrupt a live physical process, whatever the flags and whoever owns it'],
+      ['deny.capsule-outside-sandbox', 'capturing, restoring and forking are refused on any origin that isn’t a sandbox, whatever was granted'],
+      ['deny.seed-outside-public-corpus', 'seeds are planted only in copies of the public corpus'],
+      ['deny.brute-force-login', 'never brute-force a login'],
+      ['deny.get-past-challenge', 'never get past a CAPTCHA or WAF (it stops and reports instead)'],
+      ['deny.upload-unnamed-file', 'never upload a file no plan names'],
+      ['deny.run-page-or-model-code', 'never run page or model code in Node'],
+      ['deny.send-page-data', 'never send page data anywhere but the scrubbed model call'],
+      ['deny.type-unnamed-secret', 'never type a secret the step doesn’t name'],
+      ['deny.probe-not-inert', 'Miqyas’s own probes send inert markers only, on every origin that isn’t a sandbox'],
+      ['deny.second-account-writes', 'the second account only reads, on every origin that isn’t a sandbox'],
+      ['deny.probe-foreign-ids', 'a probe uses only ids the test accounts own, with no enumeration, on every origin that isn’t a sandbox'],
+      ['deny.probe-untagged', 'what a target stores is tagged miqyas-probe-<run id>, on every origin that isn’t a sandbox'],
     ]);
-    for (const r of DENY_RULES) expect(r.source.length).toBeGreaterThan(10);
   });
 });
 

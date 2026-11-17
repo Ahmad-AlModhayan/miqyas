@@ -238,14 +238,14 @@ export function checkSourceImports(filePath, source) {
   const fileDir = path.posix.dirname(rel);
   const allowed = ALLOWED_LAYERS[fromLayer];
 
-  const bareImportsRefused = NO_BARE_IMPORTS_UNDER.some((prefix) => rel.startsWith(prefix));
+  const bareImportsRefusedUnder = NO_BARE_IMPORTS_UNDER.find((prefix) => rel.startsWith(prefix));
 
   for (const spec of extractImports(source)) {
-    if (bareImportsRefused && !spec.startsWith('.')) {
+    if (bareImportsRefusedUnder !== undefined && !spec.startsWith('.')) {
       violations.push({
         file: rel,
         specifier: spec,
-        reason: `files under ${NO_BARE_IMPORTS_UNDER.find((p) => rel.startsWith(p))} may import no package and no built-in, only relative paths`,
+        reason: `files under ${bareImportsRefusedUnder} may import no package and no built-in, only relative paths`,
       });
     }
 

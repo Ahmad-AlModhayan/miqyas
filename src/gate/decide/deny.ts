@@ -114,24 +114,33 @@ export const DENY_RULES: readonly DenyRule[] = [
   {
     id: 'deny.probe-not-inert',
     source: 'Miqyas’s own probes send inert markers only, on every origin that isn’t a sandbox',
-    matches: (c) => ownProbe(c) !== null && ownProbe(c)?.probe?.inertMarkersOnly !== true,
+    matches: (c) => {
+      const own = ownProbe(c);
+      return own !== null && own.probe?.inertMarkersOnly !== true;
+    },
   },
   {
     id: 'deny.second-account-writes',
     source: 'the second account only reads, on every origin that isn’t a sandbox',
-    matches: (c) => ownProbe(c) !== null && writeOrMore(c) && ownProbe(c)?.probe?.identity !== 'first-account',
+    matches: (c) => {
+      const own = ownProbe(c);
+      return own !== null && writeOrMore(c) && own.probe?.identity !== 'first-account';
+    },
   },
   {
     id: 'deny.probe-foreign-ids',
     source: 'a probe uses only ids the test accounts own, with no enumeration, on every origin that isn’t a sandbox',
     matches: (c) => {
-      const p = ownProbe(c)?.probe;
-      return ownProbe(c) !== null && (p?.idsOwnedByTestAccounts !== true || p?.enumeratesIds !== false);
+      const own = ownProbe(c);
+      return own !== null && (own.probe?.idsOwnedByTestAccounts !== true || own.probe?.enumeratesIds !== false);
     },
   },
   {
     id: 'deny.probe-untagged',
     source: 'what a target stores is tagged miqyas-probe-<run id>, on every origin that isn’t a sandbox',
-    matches: (c) => ownProbe(c) !== null && writeOrMore(c) && ownProbe(c)?.probe?.taggedWithRunId !== true,
+    matches: (c) => {
+      const own = ownProbe(c);
+      return own !== null && writeOrMore(c) && own.probe?.taggedWithRunId !== true;
+    },
   },
 ];

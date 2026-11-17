@@ -53,6 +53,12 @@ function canonicalHost(hostname: string): string {
   return lower.endsWith('.') ? lower.slice(0, -1) : lower;
 }
 
+/** True when the owner's ownership token was found at this host. Both sides are compared in the canonical form. */
+export function hasOwnershipToken(host: string, facts: Pick<OriginFacts, 'ownershipTokenHosts'>): boolean {
+  const want = canonicalHost(host);
+  return facts.ownershipTokenHosts.some((h) => typeof h === 'string' && canonicalHost(h) === want);
+}
+
 function hasEmptyLabel(host: string): boolean {
   return !host.startsWith('[') && host.split('.').includes('');
 }
@@ -108,7 +114,7 @@ function classify(
   }
   // A name with an empty label is not in canonical form: it is never a test host, an owned host or a backend.
   if (hasEmptyLabel(host)) return make('other', 'origin.other');
-  if (allowHosts.includes(host) && facts.ownershipTokenHosts.some((h) => h.toLowerCase() === host)) {
+  if (allowHosts.includes(host) && hasOwnershipToken(host, facts)) {
     return make('owned-host', 'origin.owned-host');
   }
   // A name makes a test host only when the person gave the origin: one of the run, or a host named with --allow-host.

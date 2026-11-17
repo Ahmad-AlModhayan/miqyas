@@ -91,8 +91,11 @@ describe('probe', () => {
   });
 
   it('is never allowed on another origin, whatever was granted', () => {
-    for (const k of ['other', 'backendOfOther'] as const) {
-      expect(decide(probeSent('GET', `${O[k]}/x`, 'probe'), world(), everyGrant())).toMatchObject({ answer: 'refuse', environment: expect.any(String) });
+    for (const [k, environment] of [
+      ['other', 'other'],
+      ['backendOfOther', 'backend'],
+    ] as const) {
+      expect(decide(probeSent('GET', `${O[k]}/x`, 'probe'), world(), everyGrant())).toMatchObject({ answer: 'refuse', environment });
     }
   });
 });
