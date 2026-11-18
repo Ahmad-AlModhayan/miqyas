@@ -54,6 +54,9 @@ export type Reason = (typeof REASONS)[NotKnown][number];
 /** What a claim needs before it can be judged at all (docs/FOUNDATION.md §4, docs/ALGORITHMS.md E2). */
 export type Needs = { inputs?: string[]; effect?: EffectClass; kinds: string[] };
 
+/** The rule a quantifier reads: `holds` over each item, or for `count`, `count` over `n`. */
+type QuantifiedBy<Rule> = { quantifier: Exclude<Quantifier, 'count'>; holds: Rule } | { quantifier: 'count'; count: Rule };
+
 /** A `set` claim as its file states it (docs/FOUNDATION.md §4). */
 export type SetClaim = {
   id: string;
@@ -62,18 +65,13 @@ export type SetClaim = {
   needs?: Needs;
   view: { kinds: string[]; by?: string[] };
   shape: 'set';
-  quantifier: Quantifier;
   from: string;
   where?: string;
   usable?: string;
-  /** Every quantifier but `count`. */
-  holds?: string;
-  /** `count` only: CEL over `n`. */
-  count?: string;
   covered: string;
   /** `every` and `none` only. */
   vacuous?: 'pass' | 'not_checked';
-};
+} & QuantifiedBy<string>;
 
 /** Every claim the judge takes. The other shapes join this union as they are judged. */
 export type Claim = SetClaim;
@@ -88,8 +86,8 @@ export interface LoadedClaim {
   claim: SetClaim;
   /** SHA-256 of the claim file's bytes, in hex. */
   rule: string;
-  /** Each rule the claim states, compiled. The loader sees that `holds` or `count` is there as the quantifier asks. */
-  compiled: { where?: CompiledExpression; usable?: CompiledExpression; holds?: CompiledExpression; count?: CompiledExpression; covered: CompiledExpression };
+  /** Each rule the claim states, compiled, with the quantifier that reads `holds` or `count`. */
+  compiled: { where?: CompiledExpression; usable?: CompiledExpression; covered: CompiledExpression } & QuantifiedBy<CompiledExpression>;
   /** The name of the example on which the claim gave `fail`. */
   failedOn: string;
 }
@@ -166,11 +164,11 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
       unusable++; // the measurement can't be used
       continue;
     }
-    if (claim.quantifier === 'count') {
+    if (compiled.quantifier === 'count') {
       yes.push(seq);
       continue;
     }
-    const holds = evaluate(compiled.holds as CompiledExpression, item);
+    const holds = evaluate(compiled.holds, item);
     if (holds === 'true') yes.push(seq);
     else if (holds === 'false') no.push(seq);
     else errored++;
@@ -221,7 +219,7 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
             : "uncertain items: an expression gave an error, and a measurement couldn't be used",
       );
     const empty = (): Outcome => (claim.vacuous === 'pass' ? { verdict: 'pass', shown: [] } : notKnown('nothing to check'));
-    switch (claim.quantifier) {
+    switch (compiled.quantifier) {
       case 'every':
         if (no.length > 0) return { verdict: 'fail', shown: no };
         if (uncertain > 0) return uncertainItems();
@@ -243,7 +241,7 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
         if (!met) return notKnown('coverage not met');
         // The count rule over every count the uncertain items allow: each may be inside the claim or not.
         const answers = new Set<Truth>();
-        for (let n = yes.length; n <= yes.length + uncertain; n++) answers.add(evaluate(compiled.count as CompiledExpression, { n }));
+        for (let n = yes.length; n <= yes.length + uncertain; n++) answers.add(evaluate(compiled.count, { n }));
         if (answers.size > 1 || answers.has('error')) return uncertainItems(answers.has('error'));
         return answers.has('true') ? { verdict: 'pass', shown: [] } : { verdict: 'fail', shown: [] };
       }

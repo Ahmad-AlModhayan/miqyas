@@ -53,11 +53,13 @@ export async function loadClaim(bytes: Uint8Array, sha256: Sha256): Promise<Load
   }
   if (!isPlainObject(data)) throw new ClaimRejection('the claim file is not a JSON object');
   const claim = readClaim(data);
-  const compiled: LoadedClaim['compiled'] = { covered: rule('covered', claim.covered) };
-  for (const place of ['where', 'usable', 'holds', 'count'] as const) {
-    const source = claim[place];
-    if (source !== undefined) compiled[place] = rule(place, source);
-  }
+  const covered = rule('covered', claim.covered);
+  const where = claim.where === undefined ? {} : { where: rule('where', claim.where) };
+  const usable = claim.usable === undefined ? {} : { usable: rule('usable', claim.usable) };
+  const compiled: LoadedClaim['compiled'] =
+    claim.quantifier === 'count'
+      ? { covered, ...where, ...usable, quantifier: 'count', count: rule('count', claim.count) }
+      : { covered, ...where, ...usable, quantifier: claim.quantifier, holds: rule('holds', claim.holds) };
   const examples = readExamples(data.examples);
   for (const verdict of MUST_GIVE) {
     if (!examples.some((e) => e.expect === verdict)) {
@@ -139,11 +141,10 @@ function readClaim(data: Record<string, unknown>): SetClaim {
     ...(needs !== undefined ? { needs } : {}),
     view: { kinds: [...viewData.kinds], ...(viewData.by ? { by: [...viewData.by] } : {}) },
     shape: 'set',
-    quantifier,
     from,
     ...optional('where'),
     ...optional('usable'),
-    ...(quantifier === 'count' ? { count: text('count') } : { holds: text('holds') }),
+    ...(quantifier === 'count' ? { quantifier, count: text('count') } : { quantifier, holds: text('holds') }),
     covered: text('covered'),
     ...(vacuous !== undefined ? { vacuous: vacuous as 'pass' | 'not_checked' } : {}),
   };
