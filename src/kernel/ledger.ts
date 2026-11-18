@@ -105,16 +105,20 @@ export class LedgerWriter {
 
   /** Every refusal is a rejected LedgerError, and a refused record takes no seq and writes nothing. */
   private write(t: RecordType, body: Json, at: string): Promise<number> {
+    const seq = this.next;
     let json: string;
     try {
-      json = this.serialize(this.next, t, body, at);
+      json = this.serialize(seq, t, body, at);
+      // Reading a body can run its owner's code, and that code can reach this writer. A record or a seal written
+      // meanwhile has taken this seq, so the line just made would repeat it, or follow the seal.
+      if (this.next !== seq) throw new LedgerError('the ledger was written to while this record was being read');
     } catch (error) {
       if (error instanceof LedgerError) return Promise.reject(error);
       // A body nested deeper than the stack allows, for one: refused like any other, not thrown.
       return Promise.reject(new LedgerError(`the record could not be checked: ${String(error)}`));
     }
     if (t === 'run.seal') this.sealed = true;
-    const seq = this.next++;
+    this.next = seq + 1;
     const done = this.queue.then(async () => {
       if (this.broken !== undefined) throw new LedgerError('an earlier write failed; the ledger is closed');
       try {
@@ -152,10 +156,6 @@ export class LedgerWriter {
   }
 }
 
-/**
- * The first place where a value isn't JSON that survives a round trip unchanged, and what is there ("body.size is
- * 1.5"), or undefined when there is none. Integers only, as facts hold no floating point.
- */
 /** Throws LedgerError for a body the verifier would fail: one that isn't plain JSON, or whose blobs aren't references. */
 function checkBody(body: unknown): void {
   const notAllowed = describeNonJson(body, 'body');
@@ -164,6 +164,10 @@ function checkBody(body: unknown): void {
   if (badBlob !== undefined) throw new LedgerError(`${badBlob}: each is {digest, size, mediaType}`);
 }
 
+/**
+ * The first place where a value isn't JSON that survives a round trip unchanged, and what is there ("body.size is
+ * 1.5"), or undefined when there is none. Integers only, as facts hold no floating point.
+ */
 function describeNonJson(value: unknown, where: string): string | undefined {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return undefined;
   if (typeof value === 'number') {

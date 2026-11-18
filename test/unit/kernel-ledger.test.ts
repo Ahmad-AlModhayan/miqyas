@@ -158,6 +158,56 @@ describe('the ledger writer and reader', () => {
     expect(read.records.map((r) => r.t)).toEqual(['run.open']);
   });
 
+  it('refuses a record whose body appends to the ledger while it is being read, so no seq is used twice', async () => {
+    const store = new MemoryStore();
+    const writer = await open(store);
+    let inside: Promise<number> | undefined;
+    // A proxy whose property, the first time it is read, appends another record through the same writer.
+    const reaching = new Proxy(
+      { n: 1 },
+      {
+        get: (target, key) => {
+          if (key === 'n' && inside === undefined) inside = writer.append('fact', { from: 'inside' }, AT);
+          return Reflect.get(target, key);
+        },
+      },
+    );
+
+    await expect(writer.append('fact', reaching, AT)).rejects.toThrow(LedgerError);
+    expect(await inside).toBe(1);
+
+    const read = await readLedger(store);
+    expect(read.problems).toEqual([]);
+    expect(read.records.map((r) => [r.seq, r.body])).toEqual([
+      [0, { format: 1 }],
+      [1, { from: 'inside' }],
+    ]);
+    expect(await writer.append('fact', { n: 2 }, AT)).toBe(2);
+  });
+
+  it('refuses a record whose body seals the ledger while it is being read, so nothing follows the seal', async () => {
+    const store = new MemoryStore();
+    const writer = await open(store);
+    let inside: Promise<number> | undefined;
+    const sealing = new Proxy(
+      { n: 1 },
+      {
+        get: (target, key) => {
+          if (key === 'n' && inside === undefined) inside = writer.seal({ result: 'pass' }, AT);
+          return Reflect.get(target, key);
+        },
+      },
+    );
+
+    await expect(writer.append('fact', sealing, AT)).rejects.toThrow(LedgerError);
+    expect(await inside).toBe(1);
+
+    const read = await readLedger(store);
+    expect(read.problems).toEqual([]);
+    expect(read.sealed).toBe(true);
+    expect(read.records.map((r) => r.t)).toEqual(['run.open', 'run.seal']);
+  });
+
   it('refuses a record whose blobs are not exact {digest, size, mediaType} entries, and writes nothing', async () => {
     const store = new MemoryStore();
     const writer = await open(store);
