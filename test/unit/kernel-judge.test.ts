@@ -179,7 +179,8 @@ describe('the judge', () => {
     const loaded = await loadClaim(encode(scoreClaim()), sha256);
     const depthOf = (...facts: Fact[]) => judgeSet(loaded, { subject: 'repository', facts: placed(...facts) }).depth;
     expect(depthOf(item(1, { withheld: ['score'] }), complete())).toBe('measured');
-    expect(depthOf(item(1, { from: [1] }), complete())).toBe('derived');
+    expect(depthOf(item(1, { from: [4] }), complete())).toBe('derived'); // derived from the collection fact, at 4
+    expect(depthOf(item(1, { from: [1] }), complete())).toBe('measured'); // nothing given at 1: an input it can't see
     expect(depthOf(item(1, { withheld: ['score'], from: [1] }), complete())).toBe('measured');
     expect(depthOf(item(1), complete())).toBe('facts');
     // A fact outside the view withholds nothing from this claim.
@@ -240,16 +241,51 @@ describe('a claim file that is refused', () => {
     await refused({ ...scoreClaim(), shape: 'pair' }).toThrow(/only "set" is judged so far/);
   });
 
-  it('has a quantifier other than none, naming it', async () => {
-    for (const quantifier of ['every', 'some', 'count']) {
-      await refused({ ...scoreClaim(), quantifier }).toThrow(new RegExp(`quantifier "${quantifier}": only "none" is judged so far`));
+  it('has a quantifier the judge does not know, naming it and the ones it does', async () => {
+    for (const quantifier of ['all', 'most', undefined]) {
+      await refused({ ...scoreClaim(), quantifier }).toThrow(
+        new RegExp(`quantifier ${JSON.stringify(quantifier) ?? 'undefined'}: it must be one of "every", "some", "none", "count"`),
+      );
     }
   });
 
-  it('uses where, usable or count, naming the field', async () => {
-    for (const field of ['where', 'usable', 'count']) {
-      await refused(scoreClaim(allThree, undefined, { [field]: 'true' })).toThrow(new RegExp(`has "${field}": it is not judged yet`));
+  it('has no covered rule: a rule claim states when its enumeration is complete', async () => {
+    const { covered: _, ...noCovered } = scoreClaim();
+    await refused(noCovered).toThrow(/needs covered as text/);
+  });
+
+  it('gives holds to a count claim, or count to any other, so a rule would be dropped', async () => {
+    await refused({ ...scoreClaim(), quantifier: 'count', count: 'n >= 1' }).toThrow(/is a count claim and has holds/);
+    const { holds: _, ...noHolds } = scoreClaim();
+    await refused({ ...noHolds, quantifier: 'count' }).toThrow(/needs count as text/);
+    await refused(scoreClaim(allThree, undefined, { count: 'n >= 1' })).toThrow(/has count, which only a count claim reads/);
+  });
+
+  it('says what an empty set means in a some or count claim, which is never vacuous', async () => {
+    await refused({ ...scoreClaim(allThree, undefined, { vacuous: 'pass' }), quantifier: 'some' }).toThrow(/has vacuous, which only an every or none claim reads/);
+    const { holds: _, ...count } = scoreClaim(allThree, undefined, { vacuous: 'not_checked', count: 'n >= 1' });
+    await refused({ ...count, quantifier: 'count' }).toThrow(/has vacuous, which only an every or none claim reads/);
+  });
+
+  it('has a where, usable or count rule that is empty, not text, or over a CEL limit, naming the rule', async () => {
+    for (const field of ['where', 'usable']) {
+      await refused(scoreClaim(allThree, undefined, { [field]: '' })).toThrow(new RegExp(`needs ${field} as text`));
+      await refused(scoreClaim(allThree, undefined, { [field]: 7 })).toThrow(new RegExp(`needs ${field} as text`));
+      await refused(scoreClaim(allThree, undefined, { [field]: 'item.score > 7.5' })).toThrow(new RegExp(`^${field}: subset`));
     }
+    const { holds: _, ...count } = scoreClaim(allThree, undefined, { count: 'n > 1.5' });
+    await refused({ ...count, quantifier: 'count' }).toThrow(/^count: subset/);
+  });
+
+  it('states its needs in the wrong form', async () => {
+    const cases: [unknown, RegExp][] = [
+      ['accounts', /needs needs as an object/],
+      [{ inputs: ['accounts'] }, /needs needs.kinds as a list of text/],
+      [{ kinds: ['t.item'], inputs: 'accounts' }, /needs needs.inputs as a list of text/],
+      [{ kinds: ['t.item'], effect: 'shout' }, /needs needs.effect as one of "observe", "interact", "probe", "write", "disrupt", "execute"/],
+      [{ kinds: ['t.item'], secrets: [] }, /unknown key "needs.secrets"/],
+    ];
+    for (const [needs, why] of cases) await refused(scoreClaim(allThree, undefined, { needs })).toThrow(why);
   });
 
   it('has a key it does not know, at the top, in its view or in an example, naming the key', async () => {
