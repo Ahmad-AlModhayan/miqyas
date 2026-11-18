@@ -5,20 +5,14 @@
 import { describe, expect, it } from 'vitest';
 import { loadClaim } from '../../src/kernel/claim.js';
 import type { Fact, PlacedFact } from '../../src/kernel/fact.js';
-import { type JudgeInput, REASONS, type Verdict, judgeSet } from '../../src/kernel/judge.js';
+import { type JudgeInput, type Quantifier, REASONS, type Verdict, judgeSet } from '../../src/kernel/judge.js';
 import type { Json } from '../../src/kernel/ledger.js';
-import { sha256 } from '../kernel-helpers.js';
+import { type Given, done, item, judge as judgeOver, loadFile, place, setClaimFile, sha256 } from '../kernel-helpers.js';
 
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 
-type Quantifier = 'every' | 'some' | 'none' | 'count';
-type Given = { kind: string; by: string; body: Json; from?: number[]; withheld?: string[]; subject?: string; run?: number };
-
-/** An item inside the claim: `w` is what `where` reads, `u` what `usable` reads, `v` what `holds` reads. */
-const item = (v: Json, more: { [k: string]: Json } = {}): Given => ({ kind: 't.item', by: 'c@1', body: { v, w: true, u: 1, ...more } });
 const outsideItem = (v: Json = 9) => item(v, { w: false });
 const errorItem = () => item('x'); // `item.v > 5` over text is an error
-const done = (status = 'complete'): Given => ({ kind: 'collection', by: 'c@1', body: { status } });
 
 /** `holds` is `item.v > 5`: 9 holds, 1 fails. The examples every claim file must carry (ADR 0014), per quantifier. */
 const EXAMPLES: Record<Quantifier, { fail: Given[]; pass: Given[] }> = {
@@ -28,38 +22,12 @@ const EXAMPLES: Record<Quantifier, { fail: Given[]; pass: Given[] }> = {
   count: { fail: [item(1)], pass: [item(1), item(1)] }, // count `n >= 2`
 };
 
-function claimFile(quantifier: Quantifier, extra: Record<string, unknown> = {}) {
-  const { fail, pass } = EXAMPLES[quantifier];
-  // An example gives the inputs its claim needs, as a run would.
-  const needed = ((extra.needs as { inputs?: string[] } | undefined)?.inputs ?? []).map((name) => [name, 'given']);
-  const inputs = needed.length > 0 ? { inputs: Object.fromEntries(needed) } : {};
-  return {
-    id: `test.${quantifier}`,
-    version: 1,
-    title: `a ${quantifier} claim`,
-    view: { kinds: ['t.item', 'collection'] },
-    shape: 'set',
-    quantifier,
-    from: 't.item',
-    ...(quantifier === 'count' ? { count: 'n >= 2' } : { holds: 'item.v > 5' }),
-    covered: 'ctx.collections["c@1"].status == "complete"',
-    examples: [
-      { name: 'fails', expect: 'fail', facts: [...fail, done()], ...inputs },
-      { name: 'passes', expect: 'pass', facts: [...pass, done()], ...inputs },
-      { name: 'not collected', expect: 'not_checked', facts: [done('failed')], ...inputs },
-    ],
-    ...extra,
-  };
-}
+const claimFile = (quantifier: Quantifier, extra: Record<string, unknown> = {}) => setClaimFile(quantifier, EXAMPLES[quantifier], extra);
+const load = (quantifier: Quantifier, extra: Record<string, unknown> = {}) => loadFile(claimFile(quantifier, extra));
 
-const load = (quantifier: Quantifier, extra: Record<string, unknown> = {}) => loadClaim(encode(claimFile(quantifier, extra)), sha256);
-
-/** Places facts at ledger positions 1, 2, 3 and so on, about the subject `s`. */
-const placed = (...given: Given[]): PlacedFact[] =>
-  given.map((g, i) => ({ seq: i + 1, fact: { v: 1, run: 1, subject: 's', ...g } as Fact }));
-
+/** Loads a claim of this quantifier with `extra`, and judges it over these facts. */
 const judge = async (quantifier: Quantifier, facts: Given[], extra: Record<string, unknown> = {}, more: Partial<JudgeInput> = {}): Promise<Verdict> =>
-  judgeSet(await load(quantifier, extra), { subject: 's', facts: placed(...facts), ...more });
+  judgeOver(await load(quantifier, extra), place(facts), more);
 
 /** The verdict, its reason and what it showed, which is what a table row decides. */
 const row = (v: Verdict) => ({ verdict: v.verdict, reason: v.reason, shown: v.shown });
@@ -465,7 +433,7 @@ describe('the view, the read set, the depth and the kind of assurance', () => {
 
   it('reads the facts of its view whatever kind they are, though it takes items only from its from', async () => {
     const loaded = await load('every', { view: { kinds: ['t.item', 't.note', 'collection'] } });
-    const v = judgeSet(loaded, { subject: 's', facts: placed(item(9), { kind: 't.note', by: 'c@1', body: { v: 1 } }, done()) });
+    const v = judgeSet(loaded, { subject: 's', facts: place([item(9), { kind: 't.note', by: 'c@1', body: { v: 1 } }, done()]) });
     expect(v.read).toEqual([1, 2, 3]);
     expect(v.items.held).toBe(1);
     expect(row(v)).toEqual(pass());

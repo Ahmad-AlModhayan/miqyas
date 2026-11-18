@@ -1,12 +1,62 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// What the tests hand the kernel: SHA-256 from node:crypto, and a store that keeps files in memory under a root.
+// What the tests hand the kernel: SHA-256 from node:crypto, a store that keeps files in memory under a root, and the
+// small claims and facts the judge's tests share.
 import { createHash } from 'node:crypto';
+import { loadClaim } from '../src/kernel/claim.js';
+import type { Fact, PlacedFact } from '../src/kernel/fact.js';
+import { type JudgeInput, type LoadedClaim, type Quantifier, type Verdict, judgeSet } from '../src/kernel/judge.js';
+import type { Json } from '../src/kernel/ledger.js';
 import type { Sha256, Store } from '../src/kernel/store.js';
 
 export const sha256: Sha256 = async (bytes) => new Uint8Array(createHash('sha256').update(bytes).digest());
 
 export const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
 export const text = (bytes: Uint8Array | undefined): string => new TextDecoder().decode(bytes);
+
+/** A fact as a test gives it: what a rule reads, the rest taking the plainest value when it is placed. */
+export type Given = { kind: string; by: string; body: Json; from?: number[]; withheld?: string[]; subject?: string; run?: number };
+
+/** An item inside a test claim: `w` is what `where` reads, `u` what `usable` reads, `v` what `holds` reads. */
+export const item = (v: Json, more: { [k: string]: Json } = {}): Given => ({ kind: 't.item', by: 'c@1', body: { v, w: true, u: 1, ...more } });
+/** The `collection` fact of collector `c@1`, which a test claim's `covered` reads. */
+export const done = (status = 'complete'): Given => ({ kind: 'collection', by: 'c@1', body: { status } });
+
+/** Places facts at ledger positions `start`, `start + 1` and so on, about the subject `s`. */
+export const place = (given: readonly Given[], start = 1): PlacedFact[] =>
+  given.map((g, i) => ({ seq: start + i, fact: { v: 1, run: 1, subject: 's', ...g } as Fact }));
+
+/**
+ * A `set` claim file over `t.item` items, its `holds` being `item.v > 5` and its `count` `n >= 2`, carrying the three
+ * examples every claim file must (ADR 0014): `fail` and `pass` beside a complete collection, and a failed collection.
+ * An example gives the inputs its claim needs, as a run would. `extra` adds or replaces keys.
+ */
+export function setClaimFile(quantifier: Quantifier, examples: { fail: Given[]; pass: Given[] }, extra: Record<string, unknown> = {}) {
+  const needed = ((extra.needs as { inputs?: string[] } | undefined)?.inputs ?? []).map((name) => [name, 'given']);
+  const inputs = needed.length > 0 ? { inputs: Object.fromEntries(needed) } : {};
+  return {
+    id: `test.${quantifier}`,
+    version: 1,
+    title: `a ${quantifier} claim`,
+    view: { kinds: ['t.item', 'collection'] },
+    shape: 'set',
+    quantifier,
+    from: 't.item',
+    ...(quantifier === 'count' ? { count: 'n >= 2' } : { holds: 'item.v > 5' }),
+    covered: 'ctx.collections["c@1"].status == "complete"',
+    examples: [
+      { name: 'fails', expect: 'fail', facts: [...examples.fail, done()], ...inputs },
+      { name: 'passes', expect: 'pass', facts: [...examples.pass, done()], ...inputs },
+      { name: 'not collected', expect: 'not_checked', facts: [done('failed')], ...inputs },
+    ],
+    ...extra,
+  };
+}
+
+export const loadFile = (file: unknown): Promise<LoadedClaim> => loadClaim(utf8(JSON.stringify(file)), sha256);
+
+/** Judges a loaded claim over placed facts about the subject `s`. */
+export const judge = (loaded: LoadedClaim, facts: PlacedFact[], more: Partial<JudgeInput> = {}): Verdict =>
+  judgeSet(loaded, { subject: 's', facts, ...more });
 
 /**
  * The checkpoint text over a ledger's complete lines, computed here and not with the kernel: RFC 9162 section 2.1.1

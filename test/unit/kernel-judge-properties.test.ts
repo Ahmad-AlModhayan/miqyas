@@ -2,11 +2,9 @@
 // What the judge guarantees for `set` claims (docs/ALGORITHMS.md A6), tested over generated claims and facts. The
 // generator is a small seeded one written here, so a failure names its seed and can be run again exactly.
 import { describe, expect, it } from 'vitest';
-import { loadClaim } from '../../src/kernel/claim.js';
-import type { Fact, PlacedFact } from '../../src/kernel/fact.js';
-import { type LoadedClaim, type Verdict, judgeSet } from '../../src/kernel/judge.js';
+import type { LoadedClaim, Quantifier, Verdict } from '../../src/kernel/judge.js';
 import type { Json } from '../../src/kernel/ledger.js';
-import { sha256 } from '../kernel-helpers.js';
+import { type Given, done, item, judge, loadFile, place, setClaimFile } from '../kernel-helpers.js';
 
 const RUNS = 300;
 
@@ -34,11 +32,7 @@ function generator(seed: number) {
 }
 type Gen = ReturnType<typeof generator>;
 
-type Quantifier = 'every' | 'some' | 'none' | 'count';
-type Given = { kind: string; by: string; body: Json; run?: number; subject?: string };
-
-const item = (v: Json, w: Json = true, u: Json = 1): Given => ({ kind: 't.item', by: 'c@1', body: { v, w, u } });
-const collection = (status: string, run: number): Given => ({ kind: 'collection', by: 'c@1', body: { status }, run });
+const collection = (status: string, run: number): Given => ({ ...done(status), run });
 
 /** The count rules, each with how many items make it pass and fail, so its file can carry its examples. */
 const COUNTS = [
@@ -53,31 +47,23 @@ function claimFile(g: Gen) {
   const count = g.pick(COUNTS);
   const passing = { every: [item(9)], some: [item(9)], none: [item(1)], count: Array.from({ length: count.pass }, () => item(1)) }[quantifier];
   const failing = { every: [item(1)], some: [item(1)], none: [item(9)], count: Array.from({ length: count.fail }, () => item(1)) }[quantifier];
-  const done = collection('complete', 1);
-  return {
-    id: 'generated',
-    version: 1,
-    title: 'a generated claim',
-    view: { kinds: ['t.item', 'collection'], by: ['c@1'] },
-    shape: 'set',
+  return setClaimFile(
     quantifier,
-    from: 't.item',
-    ...(g.chance(0.5) ? { where: 'item.w' } : {}),
-    ...(g.chance(0.5) ? { usable: 'item.u > 0' } : {}),
-    ...(quantifier === 'count' ? { count: count.rule } : { holds: 'item.v > 5' }),
-    ...((quantifier === 'every' || quantifier === 'none') && g.chance(0.5) ? { vacuous: g.pick(['pass', 'not_checked']) } : {}),
-    covered: 'ctx.collections["c@1"].status == "complete"',
-    examples: [
-      { name: 'fails', expect: 'fail', facts: [...failing, done] },
-      { name: 'passes', expect: 'pass', facts: [...passing, done] },
-      { name: 'not collected', expect: 'not_checked', facts: [collection('failed', 1)] },
-    ],
-  };
+    { fail: failing, pass: passing },
+    {
+      id: 'generated',
+      view: { kinds: ['t.item', 'collection'], by: ['c@1'] },
+      ...(g.chance(0.5) ? { where: 'item.w' } : {}),
+      ...(g.chance(0.5) ? { usable: 'item.u > 0' } : {}),
+      ...(quantifier === 'count' ? { count: count.rule } : {}),
+      ...((quantifier === 'every' || quantifier === 'none') && g.chance(0.5) ? { vacuous: g.pick(['pass', 'not_checked']) } : {}),
+    },
+  );
 }
 
 /** One item, any of: holds or fails, inside or outside, usable or not, or an error in any rule. */
 function randomItem(g: Gen): Given {
-  return item(g.pick<Json>([1, 3, 6, 9, 'x']), g.pick<Json>([true, true, true, false, 'x']), g.pick<Json>([1, 1, 1, 0, 'x']));
+  return item(g.pick<Json>([1, 3, 6, 9, 'x']), { w: g.pick<Json>([true, true, true, false, 'x']), u: g.pick<Json>([1, 1, 1, 0, 'x']) });
 }
 
 /** A view's worth of facts: items, collections over several runs, and facts the view doesn't hold. */
@@ -90,9 +76,6 @@ function randomFacts(g: Gen): Given[] {
   return g.shuffle(facts);
 }
 
-const place = (given: Given[], start = 1): PlacedFact[] =>
-  given.map((g, i) => ({ seq: start + i, fact: { v: 1, run: 1, subject: 's', ...g } as Fact }));
-const judge = (loaded: LoadedClaim, facts: PlacedFact[]): Verdict => judgeSet(loaded, { subject: 's', facts });
 /** What a verdict decides, without the ledger positions it names. */
 const decided = (v: Verdict) => ({ verdict: v.verdict, reason: v.reason, items: v.items, met: v.coverage.met, vacuous: v.vacuous });
 
@@ -104,7 +87,7 @@ async function forAll(check: (g: Gen, loaded: LoadedClaim, facts: Given[]) => vo
   for (let seed = 1; seed <= RUNS; seed++) {
     const g = generator(seed);
     const file = claimFile(g);
-    if (!loadedBySeed.has(seed)) loadedBySeed.set(seed, loadClaim(new TextEncoder().encode(JSON.stringify(file)), sha256));
+    if (!loadedBySeed.has(seed)) loadedBySeed.set(seed, loadFile(file));
     const loaded = await (loadedBySeed.get(seed) as Promise<LoadedClaim>);
     const facts = randomFacts(g);
     try {
