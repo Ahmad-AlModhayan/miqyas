@@ -2,9 +2,10 @@
 // What the judge guarantees for `set` claims (docs/ALGORITHMS.md A6), tested over generated claims and facts. The
 // generator is a small seeded one written here, so a failure names its seed and can be run again exactly.
 import { describe, expect, it } from 'vitest';
-import type { LoadedClaim, Quantifier, Verdict } from '../../src/kernel/judge.js';
+import type { PlacedFact } from '../../src/kernel/fact.js';
+import { EFFECT_CLASSES, type EffectClass, type JudgeInput, type LoadedClaim, type Needs, type Quantifier, type Verdict } from '../../src/kernel/judge.js';
 import type { Json } from '../../src/kernel/ledger.js';
-import { type Given, done, item, judge, loadFile, place, setClaimFile } from '../kernel-helpers.js';
+import { type Given, done, item, judge as judgeOver, loadFile, place, setClaimFile } from '../kernel-helpers.js';
 
 const RUNS = 300;
 
@@ -41,7 +42,7 @@ const COUNTS = [
   { rule: 'n == 1', pass: 1, fail: 0 },
 ];
 
-/** A claim, from the generator: any quantifier, with or without `where`, `usable` and `vacuous`. */
+/** A claim, from the generator: any quantifier, with or without `where`, `usable`, `vacuous` and `needs`. */
 function claimFile(g: Gen) {
   const quantifier = g.pick<Quantifier>(['every', 'some', 'none', 'count']);
   const count = g.pick(COUNTS);
@@ -57,9 +58,44 @@ function claimFile(g: Gen) {
       ...(g.chance(0.5) ? { usable: 'item.u > 0' } : {}),
       ...(quantifier === 'count' ? { count: count.rule } : {}),
       ...((quantifier === 'every' || quantifier === 'none') && g.chance(0.5) ? { vacuous: g.pick(['pass', 'not_checked']) } : {}),
+      ...(g.chance(0.5) ? { needs: randomNeeds(g) } : {}),
     },
   );
 }
+
+function randomNeeds(g: Gen): Needs {
+  return {
+    ...(g.chance(0.5) ? { inputs: ['accounts'] } : {}),
+    ...(g.chance(0.5) ? { effect: g.pick<EffectClass>(['observe', 'probe', 'write']) } : {}),
+    kinds: g.chance(0.5) ? ['t.item'] : ['t.item', 't.other'],
+  };
+}
+
+/** What a run gives the judge for a claim's needs, and whether that leaves any of them unmet. */
+type Run = { more: Partial<JudgeInput>; unmet: boolean };
+
+/** A run that meets every need of the claim, or all but one: a kind, the input, or the effect, taken away. */
+function randomRun(g: Gen, needs: Needs | undefined): Run {
+  if (needs === undefined) return { more: {}, unmet: false };
+  const least = EFFECT_CLASSES.indexOf(needs.effect ?? 'observe');
+  let kinds = [...needs.kinds];
+  let inputs: { [name: string]: Json } = Object.fromEntries((needs.inputs ?? []).map((name) => [name, 'given']));
+  let effect = g.pick(EFFECT_CLASSES.slice(least));
+  const takeAway = [
+    () => {
+      const kind = g.pick(needs.kinds);
+      kinds = kinds.filter((k) => k !== kind);
+    },
+    ...(needs.inputs !== undefined ? [() => (inputs = {})] : []),
+    ...(least > 0 ? [() => (effect = g.pick(EFFECT_CLASSES.slice(0, least)))] : []),
+  ];
+  const unmet = g.chance(0.5);
+  if (unmet) g.pick(takeAway)();
+  return { more: { inputs, supplies: { kinds, effect } }, unmet };
+}
+
+/** Judges the claim over the facts with what the run gives. */
+const judge = (loaded: LoadedClaim, run: Run, facts: PlacedFact[]): Verdict => judgeOver(loaded, facts, run.more);
 
 /** One item, any of: holds or fails, inside or outside, usable or not, or an error in any rule. */
 function randomItem(g: Gen): Given {
@@ -83,15 +119,16 @@ const decided = (v: Verdict) => ({ verdict: v.verdict, reason: v.reason, items: 
 const loadedBySeed = new Map<number, Promise<LoadedClaim>>();
 
 /** Runs `check` over RUNS generated claims and views, naming the seed of a case that breaks it. */
-async function forAll(check: (g: Gen, loaded: LoadedClaim, facts: Given[]) => void): Promise<void> {
+async function forAll(check: (g: Gen, loaded: LoadedClaim, facts: Given[], run: Run) => void): Promise<void> {
   for (let seed = 1; seed <= RUNS; seed++) {
     const g = generator(seed);
     const file = claimFile(g);
     if (!loadedBySeed.has(seed)) loadedBySeed.set(seed, loadFile(file));
     const loaded = await (loadedBySeed.get(seed) as Promise<LoadedClaim>);
     const facts = randomFacts(g);
+    const run = randomRun(g, loaded.claim.needs);
     try {
-      check(g, loaded, facts);
+      check(g, loaded, facts, run);
     } catch (error) {
       throw new Error(`seed ${seed}, a ${file.quantifier} claim: ${(error as Error).message}`);
     }
@@ -106,43 +143,43 @@ const spoil = (given: Given, how: number): Given => {
 
 describe('what the judge guarantees for set claims (ALGORITHMS A6)', () => {
   it('1. function: the same claim and view give the same verdict', async () => {
-    await forAll((_g, loaded, facts) => {
-      expect(judge(loaded, place(facts))).toEqual(judge(loaded, place(facts)));
+    await forAll((_g, loaded, facts, run) => {
+      expect(judge(loaded, run, place(facts))).toEqual(judge(loaded, run, place(facts)));
     });
   });
 
   it('2. order: reordering the facts of a view, or the positions they hold, never changes the verdict', async () => {
-    await forAll((g, loaded, facts) => {
-      const before = judge(loaded, place(facts));
+    await forAll((g, loaded, facts, run) => {
+      const before = judge(loaded, run, place(facts));
       const shuffled = place(facts);
-      expect(judge(loaded, g.shuffle(shuffled))).toEqual(before);
+      expect(judge(loaded, run, g.shuffle(shuffled))).toEqual(before);
       // The same facts at other positions: what is read and shown moves with them, and nothing else changes. Each
       // collector run records one collection fact, so the order of two in one run never arises.
-      expect(decided(judge(loaded, place(g.shuffle(facts))))).toEqual(decided(before));
+      expect(decided(judge(loaded, run, place(g.shuffle(facts))))).toEqual(decided(before));
     });
   });
 
   it('3. persistence: a fail of every or none, and a pass of some, stay when facts are added', async () => {
-    await forAll((g, loaded, facts) => {
-      const before = judge(loaded, place(facts));
+    await forAll((g, loaded, facts, run) => {
+      const before = judge(loaded, run, place(facts));
       const q = loaded.claim.quantifier;
       const settled = ((q === 'every' || q === 'none') && before.verdict === 'fail') || (q === 'some' && before.verdict === 'pass');
       if (!settled) return;
       const more = randomFacts(g);
-      const after = judge(loaded, [...place(facts), ...place(more, facts.length + 1)]);
+      const after = judge(loaded, run, [...place(facts), ...place(more, facts.length + 1)]);
       expect(after.verdict).toBe(before.verdict);
       // Adding a counterexample never changes a fail either.
       if (before.verdict === 'fail') {
         const counterexample = item(q === 'every' ? 1 : 9);
-        expect(judge(loaded, [...place(facts), ...place([counterexample], facts.length + 1)]).verdict).toBe('fail');
+        expect(judge(loaded, run, [...place(facts), ...place([counterexample], facts.length + 1)]).verdict).toBe('fail');
       }
     });
   });
 
   it('4. no uncovered absence: a pass of every, none or count, and a fail of some, imply covered was true', async () => {
     let seen = 0;
-    await forAll((_g, loaded, facts) => {
-      const v = judge(loaded, place(facts));
+    await forAll((_g, loaded, facts, run) => {
+      const v = judge(loaded, run, place(facts));
       const q = loaded.claim.quantifier;
       if ((q !== 'some' && v.verdict === 'pass') || (q === 'some' && v.verdict === 'fail')) {
         seen++;
@@ -153,11 +190,11 @@ describe('what the judge guarantees for set claims (ALGORITHMS A6)', () => {
   });
 
   it('lowering coverage never turns a verdict that is not known into a pass, nor makes a pass or fail that was not there', async () => {
-    await forAll((g, loaded, facts) => {
+    await forAll((g, loaded, facts, run) => {
       const covered = [...facts.filter((f) => f.kind !== 'collection'), collection('complete', 1)];
       const lowered = [...facts.filter((f) => f.kind !== 'collection'), g.pick([collection('failed', 1)])];
-      const high = judge(loaded, place(covered));
-      const low = judge(loaded, place(lowered));
+      const high = judge(loaded, run, place(covered));
+      const low = judge(loaded, run, place(lowered));
       expect(low.coverage.met).toBe(false);
       if (low.verdict === 'pass' || low.verdict === 'fail') expect(high.verdict).toBe(low.verdict);
     });
@@ -165,22 +202,40 @@ describe('what the judge guarantees for set claims (ALGORITHMS A6)', () => {
 
   it('5. errors never help: turning an item into an error, or marking it unusable, never makes a pass or a fail that was not there', async () => {
     let changed = 0;
-    await forAll((g, loaded, facts) => {
+    await forAll((g, loaded, facts, run) => {
       const items = facts.map((f, i) => [f, i] as const).filter(([f]) => f.kind === 't.item' && f.subject === undefined && f.by === 'c@1');
       if (items.length === 0) return;
       const [target, at] = g.pick(items);
       const spoiled = facts.map((f, i) => (i === at ? spoil(target, g.int(0, 3)) : f));
-      const before = judge(loaded, place(facts));
-      const after = judge(loaded, place(spoiled));
+      const before = judge(loaded, run, place(facts));
+      const after = judge(loaded, run, place(spoiled));
       if (after.verdict !== before.verdict) changed++;
       if (after.verdict === 'pass' || after.verdict === 'fail') expect(before.verdict).toBe(after.verdict);
     });
     expect(changed).toBeGreaterThan(10);
   });
 
+  it('unmet needs: a verdict is never a pass, and a fail only of every or none with a counterexample shown', async () => {
+    let seen = 0;
+    await forAll((_g, loaded, facts, run) => {
+      if (!run.unmet) return;
+      seen++;
+      const v = judge(loaded, run, place(facts));
+      expect(v.verdict).not.toBe('pass');
+      if (v.verdict === 'fail') {
+        expect(['every', 'none']).toContain(loaded.claim.quantifier);
+        expect(v.shown.length).toBeGreaterThan(0);
+      } else {
+        expect(v.verdict).toBe('blocked');
+        expect(v.add?.length).toBeGreaterThan(0);
+      }
+    });
+    expect(seen).toBeGreaterThan(30);
+  });
+
   it('7. seen to fail: a claim that gives a pass names the example on which it gives a fail', async () => {
-    await forAll((_g, loaded, facts) => {
-      const v = judge(loaded, place(facts));
+    await forAll((_g, loaded, facts, run) => {
+      const v = judge(loaded, run, place(facts));
       if (v.verdict === 'pass') expect(v.failed_on).toBe('fails');
     });
   });

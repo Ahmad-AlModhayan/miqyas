@@ -183,8 +183,10 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
   const vacuous = (claim.quantifier === 'every' || claim.quantifier === 'none') && held.length + failed.length + uncertain === 0;
   const add = unmet(claim.needs, input);
   let outcome = decide();
-  // A counterexample is enough whatever is missing; anything short of a fail waits on the person.
-  if (add.length > 0 && outcome.verdict !== 'fail') outcome = { verdict: 'blocked', reason: blockedBy(add[0] as string), shown: [] };
+  // A counterexample of an `every` or `none` claim is enough whatever is missing. Anything else waits on the person:
+  // a `some` or `count` claim fails by not finding something, and `covered` can't tell whether what it needs was there.
+  const counterexample = outcome.verdict === 'fail' && (claim.quantifier === 'every' || claim.quantifier === 'none');
+  if (add.length > 0 && !counterexample) outcome = { verdict: 'blocked', reason: blockedBy(add[0] as string), shown: [] };
 
   return {
     claim: claimRef(claim),

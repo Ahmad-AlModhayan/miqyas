@@ -403,6 +403,37 @@ describe('reasons and what to add', () => {
     expect((await judge('every', [item(9), done('failed')], unmet)).verdict).toBe('blocked');
   });
 
+  it('a none claim with a counterexample fails whatever needs are not met', async () => {
+    for (const [unmet, supplies] of [
+      [needs({ kinds: ['t.item'] }), {}],
+      [needs({ kinds: ['t.item'], effect: 'probe' }), { supplies: { kinds: ['t.item'] } }],
+    ] as const) {
+      const v = await judge('none', [item(1), item(9), done()], unmet, supplies);
+      expect(row(v)).toEqual(fail([2]));
+      expect(v.add).toBeUndefined();
+    }
+  });
+
+  it('a some or count claim that finds nothing is blocked, not failed, when its needs are not met, though covered', async () => {
+    // Not finding one settles nothing until covered, and covered can't tell whether a kind it needs was ever recorded.
+    const cases: [Quantifier, Given[]][] = [
+      ['some', [done()]],
+      ['some', [item(1), item(2), done()]],
+      ['count', [done()]],
+      ['count', [item(1), done()]],
+    ];
+    for (const [quantifier, facts] of cases) {
+      const kind = await judge(quantifier, facts, needs({ kinds: ['t.item'] }));
+      expect(row(kind)).toEqual({ verdict: 'blocked', reason: 'no collector records a kind it needs', shown: [] });
+      expect(kind.add).toEqual(['kind:t.item']);
+      const effect = await judge(quantifier, facts, needs({ kinds: ['t.item'], effect: 'probe' }), { supplies: { kinds: ['t.item'] } });
+      expect(row(effect)).toEqual({ verdict: 'blocked', reason: 'an effect it needs is not allowed', shown: [] });
+      expect(effect.add).toEqual(['effect:probe']);
+      // With the needs met, the same facts fail.
+      expect(row(await judge(quantifier, facts, needs({ kinds: ['t.item'] }), { supplies: { kinds: ['t.item'] } }))).toEqual(fail());
+    }
+  });
+
   it("judges a claim's own examples with its needs for effect and kinds met", async () => {
     const loaded = await load('every', needs({ kinds: ['t.item'], effect: 'probe' }));
     expect(loaded.claim.needs).toEqual({ kinds: ['t.item'], effect: 'probe' });
