@@ -5,7 +5,7 @@
 // clock, because the kernel has none and a record's time comes from the caller. It is also where the rules every
 // collector follows are enforced (docs/FOUNDATION.md §3): a fact must match the schema of its kind, and no fact of a
 // collector run is accepted after that run's collection fact.
-import { BlobStore } from '../kernel/blobs.js';
+import { type BlobRef, BlobStore } from '../kernel/blobs.js';
 import { type Head, toBase64 } from '../kernel/checkpoint.js';
 import { type Json, LedgerWriter, type RecordType } from '../kernel/ledger.js';
 import type { Fact } from '../kernel/fact.js';
@@ -15,11 +15,8 @@ import { assertFact } from './fact-check.js';
 /** The record types a run appends as it goes: every type but the two that open and close the ledger. */
 export type AppendableType = Exclude<RecordType, 'run.open' | 'run.seal'>;
 
-/**
- * How a record names a blob it holds (docs/FOUNDATION.md §3): put it in the record's `blobs`, under any name. A type
- * and not an interface, so that it can go straight into a record's body.
- */
-export type StoredBlob = { digest: string; size: number; mediaType: string };
+/** How a record names a blob it holds (docs/FOUNDATION.md §3): put it in the record's `blobs`, under any name. */
+export type StoredBlob = BlobRef;
 
 /** What the run and its collectors are given. */
 export interface RunRecorder {
