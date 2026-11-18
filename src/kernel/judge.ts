@@ -143,9 +143,10 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
     )
     .sort((a, b) => a.seq - b.seq);
 
-  // Each item goes to one of four groups: it holds, it fails, it is outside, or it is uncertain.
-  const held: number[] = [];
-  const failed: number[] = [];
+  // Each item goes to one of four groups, named as in ALGORITHMS A1: `yes` (it holds, or for `count` it is inside the
+  // claim), `no` (it fails), outside, or uncertain. The record calls the first two `held` and `failed`.
+  const yes: number[] = [];
+  const no: number[] = [];
   let outside = 0;
   let errored = 0;
   let unusable = 0;
@@ -166,12 +167,12 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
       continue;
     }
     if (claim.quantifier === 'count') {
-      held.push(seq);
+      yes.push(seq);
       continue;
     }
     const holds = evaluate(compiled.holds as CompiledExpression, item);
-    if (holds === 'true') held.push(seq);
-    else if (holds === 'false') failed.push(seq);
+    if (holds === 'true') yes.push(seq);
+    else if (holds === 'false') no.push(seq);
     else errored++;
   }
   const uncertain = errored + unusable;
@@ -180,13 +181,15 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
   const met = evaluate(compiled.covered, { ctx }) === 'true'; // an error is not covered
 
   // No item inside an `every` or `none` claim: reported whatever the verdict, so a `where` that selects nothing is seen.
-  const vacuous = (claim.quantifier === 'every' || claim.quantifier === 'none') && held.length + failed.length + uncertain === 0;
-  const add = unmet(claim.needs, input);
+  const vacuous = (claim.quantifier === 'every' || claim.quantifier === 'none') && yes.length + no.length + uncertain === 0;
+  const missing = unmet(claim.needs, input);
+  const add = missing.map(({ need, name }) => `${need}:${name}`);
   let outcome = decide();
   // A counterexample of an `every` or `none` claim is enough whatever is missing. Anything else waits on the person:
   // a `some` or `count` claim fails by not finding something, and `covered` can't tell whether what it needs was there.
   const counterexample = outcome.verdict === 'fail' && (claim.quantifier === 'every' || claim.quantifier === 'none');
-  if (add.length > 0 && !counterexample) outcome = { verdict: 'blocked', reason: blockedBy(add[0] as string), shown: [] };
+  const first = missing[0];
+  if (first !== undefined && !counterexample) outcome = { verdict: 'blocked', reason: BLOCKED_BY[first.need], shown: [] };
 
   return {
     claim: claimRef(claim),
@@ -195,7 +198,7 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
     verdict: outcome.verdict,
     ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
     ...(outcome.verdict === 'blocked' ? { add } : {}),
-    items: { held: held.length, failed: failed.length, outside, uncertain },
+    items: { held: yes.length, failed: no.length, outside, uncertain },
     read: inView.map(({ seq }) => seq),
     shown: outcome.shown,
     coverage: { rule: claim.covered, met, saw: ctx },
@@ -220,18 +223,18 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
     const empty = (): Outcome => (claim.vacuous === 'pass' ? { verdict: 'pass', shown: [] } : notKnown('nothing to check'));
     switch (claim.quantifier) {
       case 'every':
-        if (failed.length > 0) return { verdict: 'fail', shown: failed };
+        if (no.length > 0) return { verdict: 'fail', shown: no };
         if (uncertain > 0) return uncertainItems();
         if (!met) return notKnown('coverage not met');
         if (vacuous) return empty();
         return { verdict: 'pass', shown: [] };
       case 'some':
-        if (held.length > 0) return { verdict: 'pass', shown: held };
+        if (yes.length > 0) return { verdict: 'pass', shown: yes };
         if (uncertain > 0) return uncertainItems();
         if (!met) return notKnown('coverage not met');
         return { verdict: 'fail', shown: [] };
       case 'none':
-        if (held.length > 0) return { verdict: 'fail', shown: held };
+        if (yes.length > 0) return { verdict: 'fail', shown: yes };
         if (uncertain > 0) return uncertainItems();
         if (!met) return notKnown('coverage not met');
         if (vacuous) return empty();
@@ -240,7 +243,7 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
         if (!met) return notKnown('coverage not met');
         // The count rule over every count the uncertain items allow: each may be inside the claim or not.
         const answers = new Set<Truth>();
-        for (let n = held.length; n <= held.length + uncertain; n++) answers.add(evaluate(compiled.count as CompiledExpression, { n }));
+        for (let n = yes.length; n <= yes.length + uncertain; n++) answers.add(evaluate(compiled.count as CompiledExpression, { n }));
         if (answers.size > 1 || answers.has('error')) return uncertainItems(answers.has('error'));
         return answers.has('true') ? { verdict: 'pass', shown: [] } : { verdict: 'fail', shown: [] };
       }
@@ -248,26 +251,29 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
   }
 }
 
-/**
- * What to add: each of the claim's `needs` the run doesn't meet, as `input:<name>`, `effect:<class>` and
- * `kind:<kind>`, in that order (docs/FOUNDATION.md §4; docs/ALGORITHMS.md E2).
- */
-function unmet(needs: Needs | undefined, input: JudgeInput): string[] {
-  if (needs === undefined) return [];
-  const add: string[] = [];
-  const inputs = input.inputs ?? {};
-  for (const name of needs.inputs ?? []) if (!Object.hasOwn(inputs, name)) add.push(`input:${name}`);
-  const allowed = input.supplies?.effect ?? 'observe';
-  if (needs.effect !== undefined && EFFECT_CLASSES.indexOf(needs.effect) > EFFECT_CLASSES.indexOf(allowed)) add.push(`effect:${needs.effect}`);
-  const kinds = input.supplies?.kinds ?? [];
-  for (const kind of needs.kinds) if (!kinds.includes(kind)) add.push(`kind:${kind}`);
-  return add;
-}
+/** One of a claim's `needs` the run doesn't meet. The verdict's `add` writes it as `<need>:<name>`. */
+type Unmet = { need: 'input' | 'effect' | 'kind'; name: string };
 
-function blockedBy(first: string): Reason {
-  if (first.startsWith('input:')) return 'an input is missing';
-  if (first.startsWith('effect:')) return 'an effect it needs is not allowed';
-  return 'no collector records a kind it needs';
+const BLOCKED_BY: { [need in Unmet['need']]: Reason } = {
+  input: 'an input is missing',
+  effect: 'an effect it needs is not allowed',
+  kind: 'no collector records a kind it needs',
+};
+
+/**
+ * What to add: each of the claim's `needs` the run doesn't meet, its inputs, then its effect class, then its kinds
+ * (docs/FOUNDATION.md §4; docs/ALGORITHMS.md E2).
+ */
+function unmet(needs: Needs | undefined, input: JudgeInput): Unmet[] {
+  if (needs === undefined) return [];
+  const missing: Unmet[] = [];
+  const inputs = input.inputs ?? {};
+  for (const name of needs.inputs ?? []) if (!Object.hasOwn(inputs, name)) missing.push({ need: 'input', name });
+  const allowed = input.supplies?.effect ?? 'observe';
+  if (needs.effect !== undefined && EFFECT_CLASSES.indexOf(needs.effect) > EFFECT_CLASSES.indexOf(allowed)) missing.push({ need: 'effect', name: needs.effect });
+  const kinds = input.supplies?.kinds ?? [];
+  for (const kind of needs.kinds) if (!kinds.includes(kind)) missing.push({ need: 'kind', name: kind });
+  return missing;
 }
 
 /** `ctx.collections`: each collector's `collection` fact in the view, keyed by the collector, the last run winning. */
