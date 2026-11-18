@@ -20,18 +20,16 @@ export type BodySchema = JsonSchema & { readonly type: 'object'; readonly proper
 export type ModelPolicy = 'never' | 'scrubbed';
 
 /** Who caused the traffic or the change a fact records (docs/FOUNDATION.md §3). */
-export const FACT_CAUSES = ['page', 'plan', 'probe', 'crawl'] as const;
+const FACT_CAUSES = ['page', 'plan', 'probe', 'crawl'] as const;
 export type FactCause = (typeof FACT_CAUSES)[number];
 
 /** How a collector run ended (docs/FOUNDATION.md §3, "It closes"). */
-export const COLLECTION_STATUSES = ['complete', 'partial', 'failed'] as const;
+const COLLECTION_STATUSES = ['complete', 'partial', 'failed'] as const;
 
 export interface FactKind {
   kind: string;
   /** The version of this schema. A fact names it in `v`. */
   v: number;
-  /** Who records it, as the table of §3 says. */
-  recordedBy: string;
   model: ModelPolicy;
   /** It records traffic or a change something caused: a fact of it must carry its `cause`. */
   traffic: boolean;
@@ -46,7 +44,12 @@ export interface FactKind {
 const str: JsonSchema = { type: 'string', minLength: 1 };
 const text: JsonSchema = { type: 'string' };
 const bool: JsonSchema = { type: 'boolean' };
-const count: JsonSchema = { type: 'integer', minimum: 0 };
+/**
+ * An integer from `minimum` to `maximum`, never beyond the integers a record can hold: the ledger refuses any other
+ * number, and a fact is refused here first, naming its kind and the field.
+ */
+const int = (minimum = -Number.MAX_SAFE_INTEGER, maximum = Number.MAX_SAFE_INTEGER): JsonSchema => ({ type: 'integer', minimum, maximum });
+const count = int(0);
 const nullable = (schema: JsonSchema): JsonSchema => ({ anyOf: [schema, { type: 'null' }] });
 const list = (items: JsonSchema): JsonSchema => ({ type: 'array', items });
 const oneOf = (...values: readonly string[]): JsonSchema => ({ type: 'string', enum: [...values] });
@@ -61,31 +64,30 @@ function object(required: { [field: string]: JsonSchema }, optional: { [field: s
 }
 
 /** A map of names to values of one schema. */
-const record = (values: JsonSchema): JsonSchema => ({ type: 'object', additionalProperties: values });
+const objectOf = (values: JsonSchema): JsonSchema => ({ type: 'object', additionalProperties: values });
 
 /**
  * A path as a record holds it: relative to the repository, with "/". Not absolute, no drive letter, no backslash, no
  * "." or ".." segment, no empty segment: so a fact never holds a path of the machine it ran on, nor one that leaves
  * the repository.
  */
-export const REPOSITORY_PATH: JsonSchema = {
+const REPOSITORY_PATH: JsonSchema = {
   type: 'string',
   pattern: '^(?!\\.{1,2}(/|$))(?!.*/\\.{1,2}(/|$))(?![A-Za-z]:)[^/\\\\]+(/[^/\\\\]+)*$',
 };
 
 /** A SHA-256 digest as the blob store writes it. */
-export const SHA256_DIGEST: JsonSchema = { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' };
+const SHA256_DIGEST: JsonSchema = { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' };
 
 /** How a fact names a blob (docs/FOUNDATION.md §3). */
 const BLOB_REF: JsonSchema = object({ digest: SHA256_DIGEST, size: count, mediaType: str });
 
-const http = (): JsonSchema => ({ type: 'integer', minimum: 100, maximum: 599 });
+const http = (): JsonSchema => int(100, 599);
 
 export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'ui.snapshot',
     v: 1,
-    recordedBy: 'web worker; later mobile and desktop',
     model: 'scrubbed',
     traffic: false,
     identity: ['url'],
@@ -103,7 +105,6 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'ui.event',
     v: 1,
-    recordedBy: 'web worker',
     model: 'scrubbed',
     traffic: false,
     identity: ['type', 'message'],
@@ -112,7 +113,6 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'ui.control',
     v: 1,
-    recordedBy: 'crawl',
     model: 'scrubbed',
     traffic: true,
     identity: ['label'],
@@ -135,7 +135,6 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'http.exchange',
     v: 1,
-    recordedBy: 'web worker, API worker',
     model: 'scrubbed',
     traffic: true,
     identity: ['method', 'url'],
@@ -145,7 +144,7 @@ export const FACT_KINDS: readonly FactKind[] = [
         url: str,
         route: nullable(str),
         status: nullable(http()),
-        headers: record(text),
+        headers: objectOf(text),
         // As whom it was sent: nobody, or a named account with its role.
         as: nullable(object({ account: str, role: str })),
       },
@@ -158,7 +157,6 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'asset',
     v: 1,
-    recordedBy: 'web worker',
     model: 'never',
     traffic: false,
     identity: ['from', 'name'],
@@ -168,7 +166,6 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'code.coverage',
     v: 1,
-    recordedBy: 'web worker',
     model: 'never',
     traffic: false,
     identity: ['session', 'script'],
@@ -178,7 +175,6 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'a11y.violation',
     v: 1,
-    recordedBy: 'axe adapter',
     model: 'scrubbed',
     traffic: false,
     identity: ['rule', 'node'],
@@ -187,7 +183,6 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'repo.tree',
     v: 1,
-    recordedBy: 'repository reader',
     model: 'never',
     traffic: false,
     identity: ['commit'],
@@ -196,7 +191,6 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'repo.file',
     v: 1,
-    recordedBy: 'repository reader',
     model: 'never',
     traffic: false,
     identity: ['path'],
@@ -205,16 +199,14 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'secret.match',
     v: 1,
-    recordedBy: 'gitleaks adapter',
     model: 'never',
     traffic: false,
     identity: ['rule', 'path', 'line'],
-    body: object({ rule: str, path: REPOSITORY_PATH, line: { type: 'integer', minimum: 1 }, redacted: text }),
+    body: object({ rule: str, path: REPOSITORY_PATH, line: int(1), redacted: text }),
   },
   {
     kind: 'db.table',
     v: 1,
-    recordedBy: 'migrations reader',
     model: 'never',
     traffic: false,
     identity: ['schema', 'name'],
@@ -223,7 +215,6 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'dep.package',
     v: 1,
-    recordedBy: 'lockfile reader',
     model: 'never',
     traffic: false,
     identity: ['ecosystem', 'name', 'version', 'lockfile'],
@@ -232,7 +223,6 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'dep.advisory',
     v: 1,
-    recordedBy: 'osv adapter',
     model: 'never',
     traffic: false,
     identity: ['id', 'package', 'lockfile'],
@@ -249,25 +239,23 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'tool.run',
     v: 1,
-    recordedBy: 'every adapter',
     model: 'never',
     traffic: false,
     identity: ['tool'],
     body: object(
       { tool: str, version: nullable(str), finished: bool },
-      { outcome: str, command: list(text), exitCode: nullable({ type: 'integer' }), inputs: record(SHA256_DIGEST) },
+      { outcome: str, command: list(text), exitCode: nullable(int()), inputs: objectOf(SHA256_DIGEST) },
     ),
   },
   {
     kind: 'test.case',
     v: 1,
-    recordedBy: 'test-runner adapter',
     model: 'never',
     traffic: false,
     identity: ['id'],
     body: {
       // One test as it ran, or the list of tests planned, recorded before the run.
-      ...object({}, { id: str, status: oneOf('passed', 'failed', 'skipped', 'errored'), attempts: { type: 'integer', minimum: 1 }, planned: list(str) }),
+      ...object({}, { id: str, status: oneOf('passed', 'failed', 'skipped', 'errored'), attempts: int(1), planned: list(str) }),
       if: { type: 'object', required: ['planned'] },
       then: { type: 'object', properties: { id: false, status: false, attempts: false } },
       else: { type: 'object', required: ['id', 'status', 'attempts'] },
@@ -276,21 +264,19 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'step.done',
     v: 1,
-    recordedBy: 'plan runner',
     model: 'scrubbed',
     traffic: true,
     identity: ['plan', 'step'],
-    body: object({ plan: str, step: { type: 'integer', minimum: 0 }, outcome: oneOf('done', 'failed', 'unknown') }, { reason: str }),
+    body: object({ plan: str, step: int(0), outcome: oneOf('done', 'failed', 'unknown') }, { reason: str }),
   },
   {
     kind: 'sample',
     v: 1,
-    recordedBy: 'any collector',
     model: 'scrubbed',
     traffic: false,
     identity: ['name'],
     body: {
-      ...object({ name: str, value: { type: 'integer' }, unit: oneOf('ms', 'bytes', 'count', 'yes-no') }),
+      ...object({ name: str, value: int(), unit: oneOf('ms', 'bytes', 'count', 'yes-no') }),
       // A yes or no is 1 or 0.
       if: { type: 'object', required: ['unit'], properties: { unit: { const: 'yes-no' } } },
       then: { type: 'object', properties: { value: { enum: [0, 1] } } },
@@ -299,12 +285,11 @@ export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'collection',
     v: 1,
-    recordedBy: 'every collector, or the engine',
     model: 'scrubbed',
     traffic: false,
     identity: ['setOut'],
     body: {
-      ...object({ setOut: str, status: oneOf(...COLLECTION_STATUSES), counts: record(count), dropped: count }, { reason: str }),
+      ...object({ setOut: str, status: oneOf(...COLLECTION_STATUSES), counts: objectOf(count), dropped: count }, { reason: str }),
       allOf: [
         // A run that didn't finish says why it stopped.
         {
@@ -313,7 +298,7 @@ export const FACT_KINDS: readonly FactKind[] = [
         },
         // A run that dropped facts can't say it finished (ADR 0010).
         {
-          if: { type: 'object', required: ['dropped'], properties: { dropped: { type: 'integer', minimum: 1 } } },
+          if: { type: 'object', required: ['dropped'], properties: { dropped: int(1) } },
           then: { type: 'object', properties: { status: { enum: ['partial', 'failed'] } } },
         },
       ],
@@ -351,13 +336,13 @@ export function factSchema(k: FactKind): JsonSchema {
       // The collector or derivation, as id@version.
       by: { type: 'string', pattern: '^[a-z0-9][a-z0-9._-]*@[0-9][0-9A-Za-z.+-]*$' },
       // Which attempt of that collector.
-      run: { type: 'integer', minimum: 1 },
+      run: int(1),
       subject: str,
       origin: str,
-      place: record(str),
-      effect: { type: 'integer', minimum: 1 },
+      place: objectOf(str),
+      effect: int(1),
       cause: oneOf(...FACT_CAUSES),
-      from: list({ type: 'integer', minimum: 1 }),
+      from: list(int(1)),
       body: k.body,
       blobs:
         blobs === undefined

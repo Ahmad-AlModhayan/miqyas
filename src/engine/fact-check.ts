@@ -50,10 +50,28 @@ export function checkFact(fact: unknown): FactCheck {
   const k = typeof v === 'number' ? factKind(kind, v) : undefined;
   if (k === undefined) return refused(kind, 'v', `no schema is known for version ${JSON.stringify(v)} of this kind`);
   const validate = compiled.get(`${k.kind}@${k.v}`) as ValidateFunction;
-  if (validate(fact)) return { ok: true };
-  const error = (validate.errors ?? [])[0];
-  if (error === undefined) return refused(kind, '', 'it does not validate');
-  return refused(kind, fieldOf(error), error.message ?? error.keyword);
+  if (!validate(fact)) {
+    const error = (validate.errors ?? [])[0];
+    if (error === undefined) return refused(kind, '', 'it does not validate');
+    return refused(kind, fieldOf(error), error.message ?? error.keyword);
+  }
+  const minusZero = minusZeroAt(fact, []);
+  if (minusZero !== undefined) return refused(kind, minusZero, 'must not be minus zero, which a record cannot hold');
+  return { ok: true };
+}
+
+/**
+ * The first field that holds minus zero, as a dotted path, or undefined. A schema can't tell it from 0, and JSON writes
+ * it as 0, so the ledger refuses it; it is refused here first, so that the refusal names the kind and the field.
+ */
+function minusZeroAt(value: unknown, path: string[]): string | undefined {
+  if (Object.is(value, -0)) return path.join('.');
+  if (value === null || typeof value !== 'object') return undefined;
+  for (const [key, item] of Object.entries(value)) {
+    const found = minusZeroAt(item, [...path, key]);
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 /** Throws FactRefused unless the fact matches its schema. */

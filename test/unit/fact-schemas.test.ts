@@ -4,7 +4,7 @@
 // itself: a fact in, ok or a refusal that names the kind and the field out.
 import { describe, expect, it } from 'vitest';
 import { checkFact } from '../../src/engine/fact-check.js';
-import { FACT_KINDS, factKind } from '../../src/protocol/facts.js';
+import { FACT_KINDS, factKind, factSchema } from '../../src/protocol/facts.js';
 
 const DIGEST = `sha256:${'ab'.repeat(32)}`;
 const blob = (mediaType: string) => ({ digest: DIGEST, size: 12, mediaType });
@@ -78,6 +78,28 @@ function refusal(f: unknown) {
   return { kind: result.kind, field: result.field, message: result.message };
 }
 
+type Schema = { [keyword: string]: unknown };
+
+/**
+ * Every schema and subschema of the whole fact of every kind. Only where a keyword holds a schema: a property of the
+ * body named `type` (as `ui.event` has) is a field, and the values of `const` and `enum` are data.
+ */
+function everySchema(): Schema[] {
+  const found: Schema[] = [];
+  const isSchema = (node: unknown): node is Schema => node !== null && typeof node === 'object' && !Array.isArray(node);
+  const walk = (node: unknown): void => {
+    if (!isSchema(node)) return;
+    found.push(node);
+    for (const keyword of ['properties', 'patternProperties', '$defs']) {
+      Object.values((node[keyword] as Schema | undefined) ?? {}).forEach(walk);
+    }
+    for (const keyword of ['items', 'additionalProperties', 'not', 'if', 'then', 'else', 'contains', 'propertyNames']) walk(node[keyword]);
+    for (const keyword of ['allOf', 'anyOf', 'oneOf', 'prefixItems']) ((node[keyword] as unknown[] | undefined) ?? []).forEach(walk);
+  };
+  FACT_KINDS.forEach((k) => walk(factSchema(k)));
+  return found;
+}
+
 describe('the fact kinds of the foundation', () => {
   it('give each kind a worker, an adapter or a reader records a schema at version 1, and none of the rest', () => {
     expect(FACT_KINDS.map((k) => k.kind).sort()).toEqual([...COLLECTED].sort());
@@ -87,19 +109,18 @@ describe('the fact kinds of the foundation', () => {
   });
 
   it('use integers and strings, never a floating-point number, anywhere in a schema', () => {
-    const types: unknown[] = [];
-    const walk = (node: unknown): void => {
-      if (Array.isArray(node)) node.forEach(walk);
-      else if (node !== null && typeof node === 'object') {
-        for (const [key, value] of Object.entries(node)) {
-          if (key === 'type') types.push(...[value].flat());
-          walk(value);
-        }
-      }
-    };
-    walk(FACT_KINDS);
+    const types = everySchema().flatMap((s) => (s.type === undefined ? [] : [s.type].flat()));
     expect(types).toContain('integer');
     expect(types).not.toContain('number');
+  });
+
+  it('bound every integer within the integers a record can hold', () => {
+    const integers = everySchema().filter((s) => [s.type].flat().includes('integer'));
+    expect(integers.length).toBeGreaterThan(0);
+    for (const s of integers) {
+      expect(s.minimum, JSON.stringify(s)).toBeGreaterThanOrEqual(-Number.MAX_SAFE_INTEGER);
+      expect(s.maximum, JSON.stringify(s)).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER);
+    }
   });
 
   it('declare for each kind whether its content may ever go to a model, and repository content never does', () => {
@@ -160,6 +181,28 @@ describe('checking a fact against its schema', () => {
     expect(refusal(withBody('ui.snapshot', (b) => (b.viewport = { width: 1280.5, height: 800 })))).toMatchObject({ field: 'body.viewport.width' });
   });
 
+  it('refuses an integer beyond the integers a record can hold, naming the kind and the field', () => {
+    for (const big of [1e300, 2 ** 60, -(2 ** 60)]) {
+      expect(refusal(withBody('sample', (b) => (b.value = big)))).toMatchObject({ kind: 'sample', field: 'body.value' });
+      expect(refusal(withBody('tool.run', (b) => (b.exitCode = big)))).toMatchObject({ kind: 'tool.run', field: 'body.exitCode' });
+      expect(refusal(fact('repo.file', { run: big }))).toMatchObject({ kind: 'repo.file', field: 'run' });
+    }
+    expect(refusal(withBody('collection', (b) => (b.counts = { lockfiles: 2 ** 60 })))).toMatchObject({ field: 'body.counts.lockfiles' });
+    expect(refusal(fact('repo.file', { effect: 1e300 }))).toMatchObject({ field: 'effect' });
+    for (const edge of [Number.MAX_SAFE_INTEGER, -Number.MAX_SAFE_INTEGER]) {
+      expect(checkFact(withBody('sample', (b) => (b.value = edge)))).toEqual({ ok: true });
+    }
+  });
+
+  it('refuses minus zero, which a record cannot hold, naming the kind and the field', () => {
+    expect(refusal(withBody('collection', (b) => (b.dropped = -0)))).toMatchObject({ kind: 'collection', field: 'body.dropped' });
+    expect(refusal(withBody('sample', (b) => (b.value = -0)))).toMatchObject({ kind: 'sample', field: 'body.value' });
+    expect(refusal(withBody('collection', (b) => (b.counts = { 'apps/web': -0 })))).toMatchObject({ field: 'body.counts.apps/web' });
+    const r = refusal(withBody('tool.run', (b) => (b.exitCode = -0)));
+    expect(r).toMatchObject({ kind: 'tool.run', field: 'body.exitCode' });
+    expect(r.message).toContain('tool.run');
+  });
+
   it('refuses a fact without the fields every fact has', () => {
     for (const field of ['v', 'by', 'run', 'subject', 'body']) {
       const f: Record<string, unknown> = fact('repo.file');
@@ -217,6 +260,26 @@ describe('checking a fact against its schema', () => {
     expect(refusal(fact('ui.snapshot', { blobs: { screenshot: blob('image/png') } }))).toMatchObject({ field: 'blobs.nodes' });
     expect(refusal(fact('ui.snapshot', { blobs: { ...VALID['ui.snapshot']!.blobs as object, video: blob('video/webm') } }))).toMatchObject({ field: 'blobs.video' });
     expect(refusal(fact('asset', { blobs: { content: { ...blob('text/javascript'), digest: 'md5:00' } } }))).toMatchObject({ field: 'blobs.content.digest' });
+  });
+});
+
+describe('the fields around the body', () => {
+  it('a place is names to non-empty strings', () => {
+    expect(checkFact(fact('repo.file', { place: { file: 'package-lock.json', step: '2' } }))).toEqual({ ok: true });
+    expect(refusal(fact('repo.file', { place: { file: 3 } }))).toMatchObject({ kind: 'repo.file', field: 'place.file' });
+    expect(refusal(fact('repo.file', { place: { screen: '' } }))).toMatchObject({ kind: 'repo.file', field: 'place.screen' });
+  });
+
+  it('an effect is the ledger position of a gate record, so a whole number from 1', () => {
+    expect(checkFact(fact('http.exchange', { effect: 4 }))).toEqual({ ok: true });
+    expect(refusal(fact('http.exchange', { effect: 0 }))).toMatchObject({ kind: 'http.exchange', field: 'effect' });
+    expect(refusal(fact('http.exchange', { effect: '4' }))).toMatchObject({ kind: 'http.exchange', field: 'effect' });
+  });
+
+  it('from is a list of ledger positions, each a whole number from 1', () => {
+    expect(checkFact(fact('sample', { from: [1, 5] }))).toEqual({ ok: true });
+    expect(refusal(fact('sample', { from: [3, 0] }))).toMatchObject({ kind: 'sample', field: 'from.1' });
+    expect(refusal(fact('sample', { from: 3 }))).toMatchObject({ kind: 'sample', field: 'from' });
   });
 });
 
