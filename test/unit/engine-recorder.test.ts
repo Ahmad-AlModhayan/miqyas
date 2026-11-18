@@ -151,6 +151,48 @@ describe('a collector run closes', () => {
     expect(facts[2]!.body).toMatchObject({ status: 'failed', counts: { facts: 2 } });
   });
 
+  it('counts in the closing fact the engine writes only the facts of the run that are in the ledger', async () => {
+    const { recorder, ledger } = await recorderOverMemory();
+    // The writer refuses the first fact after the second fact of the same run was accepted.
+    const ghost = recorder.record('fact', { ...file('a.lock'), origin: undefined } as unknown as Parameters<typeof recorder.record>[1]);
+    const kept = recorder.record('fact', file('b.lock'));
+    await expect(ghost).rejects.toThrow(/undefined/);
+    expect(await kept).toBe(1);
+    await recorder.seal(null);
+    const facts = (await ledger()).filter((r) => r.t === 'fact').map((r) => r.body);
+    expect(facts.map((f) => [f.by, f.kind])).toEqual([
+      ['lockfile-reader@1', 'repo.file'],
+      ['lockfile-reader@1', 'collection'],
+    ]);
+    expect(facts[1]!.body).toMatchObject({ status: 'failed', counts: { facts: 1 } });
+  });
+
+  it('refuses every fact once the seal has started, so that no run opens or grows while the engine closes the open ones', async () => {
+    const { recorder, ledger } = await recorderOverMemory();
+    await recorder.record('fact', file('package-lock.json', 'r@1'));
+    const sealing = recorder.seal(null);
+    const late = recorder.record('fact', file('yarn.lock', 'late@1'));
+    const more = recorder.record('fact', file('pnpm-lock.yaml', 'r@1'));
+    await expect(late).rejects.toThrow(/being sealed/);
+    await expect(more).rejects.toThrow(/being sealed/);
+    const sealed = await sealing;
+    const records = await ledger();
+    // The refused facts took no position.
+    expect(records.map((r) => r.seq)).toEqual([0, 1, 2, 3]);
+    expect(sealed.seq).toBe(3);
+    expect(records.map((r) => [r.t, r.body.by, r.body.kind])).toEqual([
+      ['run.open', undefined, undefined],
+      ['fact', 'r@1', 'repo.file'],
+      ['fact', 'r@1', 'collection'],
+      ['run.seal', undefined, undefined],
+    ]);
+    // Every run that has a fact in the sealed ledger has its collection fact.
+    const facts = records.filter((r) => r.t === 'fact').map((r) => r.body);
+    const runOf = (f: Record<string, unknown>) => JSON.stringify([f.by, f.run]);
+    expect(new Set(facts.filter((f) => f.kind === 'collection').map(runOf))).toEqual(new Set(facts.map(runOf)));
+    await expect(recorder.record('fact', file('after.lock', 'later@1'))).rejects.toThrow(/sealed/);
+  });
+
   it('opens no run for a fact it refused', async () => {
     const { recorder, ledger } = await recorderOverMemory();
     await recorder.record('fact', { ...file('/abs'), by: 'refused-reader@1' }).catch(() => undefined);
