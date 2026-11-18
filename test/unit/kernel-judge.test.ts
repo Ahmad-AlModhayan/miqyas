@@ -15,8 +15,7 @@ const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value
 
 const fact = (kind: string, by: string, body: Fact['body']): Fact => ({ kind, v: 1, by, run: 1, subject: 'repository', body });
 const reader = (lockfiles: number, status = 'complete') => fact('collection', 'lockfile-reader@1', { status, counts: { lockfiles } });
-const osv = (scanned: number, status = 'complete') =>
-  fact('collection', 'osv-adapter@1', { status, counts: { lockfiles: 1, scanned, advisories: 0 } });
+const osv = (status = 'complete') => fact('collection', 'osv-adapter@1', { status, counts: { lockfiles: 1, advisories: 0 } });
 const advisory = (id: string, severity: string, malicious = false) =>
   fact('dep.advisory', 'osv-adapter@1', { id, severity, malicious, package: { name: 'p', version: '1.0.0', ecosystem: 'npm' } });
 const placed = (...facts: Fact[]): PlacedFact[] => facts.map((f, i) => ({ seq: i + 3, fact: f }));
@@ -31,7 +30,7 @@ describe("check 13's claim", () => {
 
   it('fails on a critical advisory, and its verdict lists the facts read, the advisory shown and the coverage it saw', async () => {
     const loaded = await loadClaim(bytes(), sha256);
-    const facts = placed(reader(1), advisory('GHSA-crit-0001', 'critical'), advisory('GHSA-low-0003', 'low'), osv(1));
+    const facts = placed(reader(1), advisory('GHSA-crit-0001', 'critical'), advisory('GHSA-low-0003', 'low'), osv());
     const verdict = judgeSet(loaded, { subject: 'repository', facts });
     expect(verdict).toEqual({
       claim: 'readiness.13.dependencies@1',
@@ -47,7 +46,7 @@ describe("check 13's claim", () => {
         saw: {
           collections: {
             'lockfile-reader@1': { status: 'complete', counts: { lockfiles: 1 } },
-            'osv-adapter@1': { status: 'complete', counts: { lockfiles: 1, scanned: 1, advisories: 0 } },
+            'osv-adapter@1': { status: 'complete', counts: { lockfiles: 1, advisories: 0 } },
           },
           inputs: {},
         },
@@ -62,7 +61,7 @@ describe("check 13's claim", () => {
   it('reads only the facts its view names', async () => {
     const loaded = await loadClaim(bytes(), sha256);
     const other = fact('dep.advisory', 'someone-else@1', { id: 'X', severity: 'critical', malicious: false });
-    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(reader(1), other, osv(1)) });
+    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(reader(1), other, osv()) });
     expect(verdict.verdict).toBe('pass');
     expect(verdict.vacuous).toBe(true);
     expect(verdict.read).toEqual([3, 5]);
@@ -72,13 +71,13 @@ describe("check 13's claim", () => {
     const loaded = await loadClaim(bytes(), sha256);
     const of = (subject: string, f: Fact): Fact => ({ ...f, subject });
 
-    const coveredElsewhere = judgeSet(loaded, { subject: 'repository', facts: placed(of('other', reader(1)), of('other', osv(1))) });
+    const coveredElsewhere = judgeSet(loaded, { subject: 'repository', facts: placed(of('other', reader(1)), of('other', osv())) });
     expect(coveredElsewhere.verdict).toBe('not_checked');
     expect(coveredElsewhere.reason).toBe('coverage not met');
     expect(coveredElsewhere.read).toEqual([]);
     expect(coveredElsewhere.coverage.saw).toEqual({ collections: {}, inputs: {} });
 
-    const failsElsewhere = placed(reader(1), of('elsewhere', advisory('GHSA-crit-0001', 'critical')), of('other', advisory('GHSA-med-0002', 'medium')), osv(1));
+    const failsElsewhere = placed(reader(1), of('elsewhere', advisory('GHSA-crit-0001', 'critical')), of('other', advisory('GHSA-med-0002', 'medium')), osv());
     const verdict = judgeSet(loaded, { subject: 'repository', facts: failsElsewhere });
     expect(verdict.verdict).toBe('pass');
     expect(verdict.items).toEqual({ held: 0, failed: 0, outside: 0, uncertain: 0 });
@@ -86,12 +85,11 @@ describe("check 13's claim", () => {
     expect(verdict.view.subject).toBe('repository');
   });
 
-  it('does not pass when coverage is not met: no database, no lockfile, or fewer lockfiles scanned than found', async () => {
+  it('does not pass when coverage is not met: no database, no lockfile, or no scan at all', async () => {
     const loaded = await loadClaim(bytes(), sha256);
     for (const facts of [
-      placed(reader(1), advisory('GHSA-med', 'medium'), osv(0, 'failed')),
-      placed(reader(0), osv(0)),
-      placed(reader(2), osv(1)),
+      placed(reader(1), advisory('GHSA-med', 'medium'), osv('failed')),
+      placed(reader(0), osv()),
       placed(reader(1)),
     ]) {
       const verdict = judgeSet(loaded, { subject: 'repository', facts });
@@ -103,7 +101,7 @@ describe("check 13's claim", () => {
 
   it('a counterexample fails it at any coverage', async () => {
     const loaded = await loadClaim(bytes(), sha256);
-    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(reader(1), advisory('MAL-1', 'low', true), osv(0, 'failed')) });
+    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(reader(1), advisory('MAL-1', 'low', true), osv('failed')) });
     expect(verdict.verdict).toBe('fail');
     expect(verdict.coverage.met).toBe(false);
   });

@@ -66,23 +66,27 @@ async function newPath(name: string, repoPath: string, runEnv: NodeJS.ProcessEnv
   return { dir, ledger, records };
 }
 
+/** The verdict and depth each fixture must give, as literals, so that both paths going wrong together is still seen. */
 const cases = [
-  { fixture: 'seed-osv-critical', shown: 'GHSA-crit-0001' },
-  { fixture: 'seed-osv-high', shown: 'GHSA-high-0002' },
-  { fixture: 'seed-osv-mal', shown: 'MAL-2026-9999' },
-  { fixture: 'clean-twin', shown: undefined },
+  { fixture: 'seed-osv-critical', verdict: 'fail', depth: 'measured', shown: 'GHSA-crit-0001' },
+  { fixture: 'seed-osv-high', verdict: 'fail', depth: 'measured', shown: 'GHSA-high-0002' },
+  { fixture: 'seed-osv-mal', verdict: 'fail', depth: 'measured', shown: 'MAL-2026-9999' },
+  { fixture: 'clean-twin', verdict: 'pass', depth: 'facts', shown: undefined },
 ];
 
 describe('check 13: the new path gives the current path verdict', { timeout: 300_000 }, () => {
-  for (const { fixture, shown } of cases) {
-    it(`on ${fixture}`, async () => {
+  for (const { fixture, verdict: expected, depth, shown } of cases) {
+    it(`on ${fixture}: ${expected}`, async () => {
       const repo = path.join(tmp, 'repos', fixture);
       cpSync(path.join(FIXTURES, fixture), repo, { recursive: true });
 
       const current = (await evaluateCheck13Dependencies({ repoPath: repo, osv: { env } })).check.verdict;
       const { dir, ledger, records } = await newPath(fixture, repo, env);
       const verdict = records.find((r) => r.t === 'verdict')!;
-      expect(verdict.body.verdict).toBe(current);
+      expect(current).toBe(expected);
+      expect(verdict.body.verdict).toBe(expected);
+      // A verdict that reads an advisory rests on the adapter's severity, whose score is not kept (FOUNDATION §3, §4).
+      expect(verdict.body.depth).toBe(depth);
 
       // The advisories shown are the counterexamples, by their ledger positions; the facts read include them.
       const advisories = records.filter((r) => r.t === 'fact' && r.body.kind === 'dep.advisory');
@@ -107,7 +111,17 @@ describe('check 13: the new path gives the current path verdict', { timeout: 300
     expect(current).toBe('not_checked');
     const { records } = await newPath('no-db', repo, noDb);
     const verdict = records.find((r) => r.t === 'verdict')!;
-    expect(verdict.body.verdict).toBe(current);
+    expect(verdict.body.verdict).toBe('not_checked');
     expect(verdict.body.reason).toBe('coverage not met');
+  });
+
+  it('records each lockfile by its path in the repository, so two in different folders are told apart', async () => {
+    const repo = path.join(tmp, 'repos', 'two-folders');
+    cpSync(path.join(FIXTURES, 'seed-osv-critical'), path.join(repo, 'apps', 'web'), { recursive: true });
+    cpSync(path.join(FIXTURES, 'clean-twin'), path.join(repo, 'apps', 'api'), { recursive: true });
+    const { ledger, records } = await newPath('two-folders', repo, { ...env, SHIM_NO_DB: '1' });
+    const files = records.filter((r) => r.t === 'fact' && r.body.kind === 'repo.file').map((r) => r.body.body!.path);
+    expect(files).toEqual(['apps/api/package-lock.json', 'apps/web/package-lock.json']);
+    expect(ledger).not.toContain(tmp);
   });
 });

@@ -51,19 +51,32 @@ async function recordFact(recorder: RunRecorder, fact: Fact): Promise<PlacedFact
   return { seq, fact };
 }
 
-const factOf = (kind: string, by: string, subject: string, body: Json): Fact => ({ kind, v: 1, by, run: 1, subject, body });
+const factOf = (kind: string, by: string, subject: string, body: Json, withheld?: string[]): Fact => ({
+  kind,
+  v: 1,
+  by,
+  run: 1,
+  subject,
+  body,
+  ...(withheld ? { withheld } : {}),
+});
 
-/** A path as a record may hold it: relative, with "/". An absolute one is cut to its last part. */
-function relativePath(p: string): string {
-  const parts = p.split(/[\\/]+/).filter((part) => part !== '');
-  const absolute = /^([A-Za-z]:|[\\/])/.test(p) || parts.includes('..');
-  return absolute ? (parts.at(-1) ?? 'lockfile') : parts.join('/');
+/**
+ * A path as a record holds it: relative to the repository, with "/", as the adapter gives it. One that is absolute or
+ * leaves the repository is refused, so a record never holds a path of the machine it ran on, nor a cut one.
+ */
+function repositoryPath(p: string): string {
+  const parts = p.split(/[\\/]+/).filter((part) => part !== '' && part !== '.');
+  if (/^([A-Za-z]:|[\\/])/.test(p) || parts.includes('..') || parts.length === 0) {
+    throw new Error(`${JSON.stringify(p)} is not a path relative to the repository`);
+  }
+  return parts.join('/');
 }
 
 /** Records one `repo.file` fact per lockfile found, then the reader's `collection` fact. */
 export async function recordLockfiles(recorder: RunRecorder, subject: string, found: LockfilesFound): Promise<PlacedFact[]> {
   const out: PlacedFact[] = [];
-  const lockfiles = 'failed' in found ? [] : found.lockfiles.map(relativePath);
+  const lockfiles = 'failed' in found ? [] : found.lockfiles.map(repositoryPath);
   for (const file of lockfiles) {
     out.push(await recordFact(recorder, factOf('repo.file', LOCKFILE_READER, subject, { path: file, role: 'lockfile' })));
   }
@@ -85,31 +98,35 @@ export async function recordLockfiles(recorder: RunRecorder, subject: string, fo
 /** Records the tool's run, one `dep.advisory` fact per advisory, then the adapter's `collection` fact. */
 export async function recordOsvScan(recorder: RunRecorder, subject: string, scan: OsvScan): Promise<PlacedFact[]> {
   const out: PlacedFact[] = [];
-  const add = async (kind: string, body: Json) => out.push(await recordFact(recorder, factOf(kind, OSV_ADAPTER, subject, body)));
+  const add = async (kind: string, body: Json, withheld?: string[]) =>
+    out.push(await recordFact(recorder, factOf(kind, OSV_ADAPTER, subject, body, withheld)));
   if ('failed' in scan) {
     await add('collection', {
       setOut: 'every lockfile found, against the offline vulnerability database',
       status: 'failed',
       reason: scan.failed,
-      counts: { lockfiles: 0, scanned: 0, packages: 0, advisories: 0 },
+      counts: { lockfiles: 0, packages: 0, advisories: 0 },
       dropped: 0,
     });
     return out;
   }
+  const hits = scan.status === 'ok' ? scan.hits : [];
+  const lockfiles = hits.map((hit) => repositoryPath(hit.sourcePath)); // refused before anything of the scan is recorded
   if (scan.status !== 'no_lockfiles') {
     await add('tool.run', { tool: 'osv-scanner', version: scan.version, finished: scan.status === 'ok', outcome: scan.status });
   }
-  const hits = scan.status === 'ok' ? scan.hits : [];
-  for (const hit of hits) {
-    await add('dep.advisory', {
+  for (const [i, hit] of hits.entries()) {
+    const advisory = {
       id: hit.id,
       aliases: [...hit.aliases],
       malicious: hit.isMalicious,
       severity: hit.severity,
       package: { name: hit.packageName, version: hit.packageVersion, ecosystem: hit.ecosystem },
-      lockfile: relativePath(hit.sourcePath),
+      lockfile: lockfiles[i] as string,
       fixed: [...hit.fixedVersions],
-    });
+    };
+    // The severity is the adapter's classification, and the score it came from is not kept (docs/FOUNDATION.md §3).
+    await add('dep.advisory', advisory, ['severity']);
   }
   const reason = OSV_REASONS[scan.status];
   await add('collection', {
@@ -118,7 +135,6 @@ export async function recordOsvScan(recorder: RunRecorder, subject: string, scan
     ...(reason !== undefined ? { reason } : {}),
     counts: {
       lockfiles: scan.lockfiles.length,
-      scanned: scan.status === 'ok' ? scan.lockfiles.length : 0,
       packages: scan.packageCount,
       advisories: hits.length,
     },

@@ -46,7 +46,7 @@ const criticalScan = (lockfiles: string[]) => ({
 describe("check 13's collectors", () => {
   it('the lockfile reader records each lockfile found, relative, and closes with its collection fact', async () => {
     const { store, recorder } = await recorderOverMemory();
-    const lockfiles = await findRepoLockfiles(SEED);
+    const lockfiles = await findRepoLockfiles(SEED); // relative to the repository, with "/", as the adapter gives them
     const placed = await recordLockfiles(recorder, 'repository', { lockfiles });
     expect(placed.map((p) => p.seq)).toEqual([1, 2]);
     const records = (await readLedger(store)).records.slice(1);
@@ -70,6 +70,9 @@ describe("check 13's collectors", () => {
     const { store, recorder } = await recorderOverMemory();
     const placed = await recordOsvScan(recorder, 'repository', criticalScan(await findRepoLockfiles(SEED)));
     expect(placed.map((p) => p.fact.kind)).toEqual(['tool.run', 'dep.advisory', 'collection']);
+    // The severity is the adapter's classification; the score it came from is not kept, so the fact says so.
+    expect(placed.map((p) => p.fact.withheld)).toEqual([undefined, ['severity'], undefined]);
+    expect((await readLedger(store)).records[2]!.body).toMatchObject({ kind: 'dep.advisory', withheld: ['severity'] });
     const bodies = (await readLedger(store)).records.slice(1).map((r) => (r.body as { body: unknown }).body);
     expect(bodies).toEqual([
       { tool: 'osv-scanner', version: '2.7.0', finished: true, outcome: 'ok' },
@@ -85,7 +88,7 @@ describe("check 13's collectors", () => {
       {
         setOut: 'every lockfile found, against the offline vulnerability database',
         status: 'complete',
-        counts: { lockfiles: 1, scanned: 1, packages: 1, advisories: 1 },
+        counts: { lockfiles: 1, packages: 1, advisories: 1 },
         dropped: 0,
       },
     ]);
@@ -107,16 +110,30 @@ describe("check 13's collectors", () => {
           setOut: 'every lockfile found, against the offline vulnerability database',
           status: 'failed',
           reason: 'the offline vulnerability database is not present',
-          counts: { lockfiles: 1, scanned: 0, packages: 0, advisories: 0 },
+          counts: { lockfiles: 1, packages: 0, advisories: 0 },
           dropped: 0,
         },
       ],
     ]);
   });
 
-  it('cuts a path a tool gives as absolute to its last part', async () => {
+  it('records a lockfile by its path relative to the repository, with forward slashes', async () => {
     const { recorder } = await recorderOverMemory();
-    const placed = await recordLockfiles(recorder, 'repository', { lockfiles: [path.join(SEED, 'package-lock.json'), 'apps/web/yarn.lock'] });
-    expect(placed.slice(0, 2).map((p) => (p.fact.body as { path: string }).path)).toEqual(['package-lock.json', 'apps/web/yarn.lock']);
+    const placed = await recordLockfiles(recorder, 'repository', { lockfiles: ['apps\\web\\yarn.lock', 'apps/api/yarn.lock', 'package-lock.json'] });
+    expect(placed.slice(0, 3).map((p) => (p.fact.body as { path: string }).path)).toEqual(['apps/web/yarn.lock', 'apps/api/yarn.lock', 'package-lock.json']);
+    const scan = await recordOsvScan(recorder, 'repository', { ...criticalScan([]), hits: [{ ...criticalScan([]).hits[0]!, sourcePath: 'apps\\web\\package-lock.json' }] });
+    expect((scan[1]!.fact.body as { lockfile: string }).lockfile).toBe('apps/web/package-lock.json');
+  });
+
+  it('refuses a path that is absolute or leaves the repository, and records nothing of it', async () => {
+    for (const bad of [path.join(SEED, 'package-lock.json'), '/srv/app/package-lock.json', 'C:\\app\\yarn.lock', '../package-lock.json']) {
+      const { store, recorder } = await recorderOverMemory();
+      await expect(recordLockfiles(recorder, 'repository', { lockfiles: [bad] })).rejects.toThrow(/is not a path relative to the repository/);
+      await expect(recordOsvScan(recorder, 'repository', { ...criticalScan([]), hits: [{ ...criticalScan([]).hits[0]!, sourcePath: bad }] })).rejects.toThrow(
+        /is not a path relative to the repository/,
+      );
+      expect(store.textOf('ledger.jsonl')).not.toContain('package-lock');
+      expect(store.textOf('ledger.jsonl')).not.toContain('yarn');
+    }
   });
 });
