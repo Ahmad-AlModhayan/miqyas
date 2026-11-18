@@ -7,7 +7,7 @@
   "quantifier": "none",
   "from": "dep.advisory",
   "holds": "item.malicious || item.severity in [\"critical\", \"high\"]",
-  "covered": "ctx.collections[\"lockfile-reader@1\"].status == \"complete\" && ctx.collections[\"osv-adapter@1\"].status == \"complete\" && ctx.collections[\"lockfile-reader@1\"].counts.lockfiles > 0",
+  "covered": "ctx.collections[\"lockfile-reader@1\"].status == \"complete\" && ctx.collections[\"osv-adapter@1\"].status == \"complete\" && ctx.collections[\"lockfile-reader@1\"].counts.lockfiles > 0 && ctx.collections[\"osv-adapter@1\"].counts.lockfiles > 0",
   "vacuous": "pass",
   "examples": [
     {
@@ -51,6 +51,14 @@
       "facts": [
         { "kind": "collection", "by": "lockfile-reader@1", "body": { "status": "complete", "counts": { "lockfiles": 1 } } },
         { "kind": "collection", "by": "osv-adapter@1", "body": { "status": "failed", "counts": { "lockfiles": 1, "advisories": 0 } } }
+      ]
+    },
+    {
+      "name": "a scan that saw no lockfile where the reader found one is not known",
+      "expect": "not_checked",
+      "facts": [
+        { "kind": "collection", "by": "lockfile-reader@1", "body": { "status": "complete", "counts": { "lockfiles": 1 } } },
+        { "kind": "collection", "by": "osv-adapter@1", "body": { "status": "complete", "counts": { "lockfiles": 0, "advisories": 0 } } }
       ]
     }
   ]

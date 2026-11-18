@@ -126,7 +126,9 @@ describe("check 13's collectors", () => {
   });
 
   it('refuses a path that is absolute or leaves the repository, and records nothing of it', async () => {
-    for (const bad of [path.join(SEED, 'package-lock.json'), '/srv/app/package-lock.json', 'C:\\app\\yarn.lock', '../package-lock.json']) {
+    // The two made-up forms are as short as they can be: a leading slash, and a drive letter. Off Windows nothing
+    // else reaches the refusal of a drive letter.
+    for (const bad of [path.join(SEED, 'package-lock.json'), '/package-lock.json', 'Z:\\yarn.lock', '../package-lock.json']) {
       const { store, recorder } = await recorderOverMemory();
       await expect(recordLockfiles(recorder, 'repository', { lockfiles: [bad] })).rejects.toThrow(/is not a path relative to the repository/);
       await expect(recordOsvScan(recorder, 'repository', { ...criticalScan([]), hits: [{ ...criticalScan([]).hits[0]!, sourcePath: bad }] })).rejects.toThrow(
