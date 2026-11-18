@@ -18,8 +18,8 @@ export type VerdictValue = (typeof VERDICTS)[number];
  * The effect classes of the gate, least first (docs/FOUNDATION.md §6). A claim's `needs` names the least it needs;
  * the run allows every class up to the one it was given.
  */
-export const EFFECTS = ['observe', 'interact', 'probe', 'write', 'disrupt', 'execute'] as const;
-export type Effect = (typeof EFFECTS)[number];
+export const EFFECT_CLASSES = ['observe', 'interact', 'probe', 'write', 'disrupt', 'execute'] as const;
+export type EffectClass = (typeof EFFECT_CLASSES)[number];
 
 /**
  * Why a verdict is not known: one list, each reason under the one word it goes with (docs/FOUNDATION.md §4). The
@@ -52,7 +52,7 @@ export type NotKnown = keyof typeof REASONS;
 export type Reason = (typeof REASONS)[NotKnown][number];
 
 /** What a claim needs before it can be judged at all (docs/FOUNDATION.md §4, docs/ALGORITHMS.md E2). */
-export type Needs = { inputs?: string[]; effect?: Effect; kinds: string[] };
+export type Needs = { inputs?: string[]; effect?: EffectClass; kinds: string[] };
 
 /** A `set` claim as its file states it (docs/FOUNDATION.md §4). */
 export type SetClaim = {
@@ -105,7 +105,7 @@ export interface JudgeInput {
    * What the run can supply beyond its inputs, for the claim's `needs`: the effect it allows (`observe` when not
    * given) and the kinds its collectors record (none when not given).
    */
-  supplies?: { effect?: Effect; kinds?: readonly string[] };
+  supplies?: { effect?: EffectClass; kinds?: readonly string[] };
 }
 
 /** The verdict record's body (docs/FOUNDATION.md §4, "Evidence"). */
@@ -256,7 +256,7 @@ function unmet(needs: Needs | undefined, input: JudgeInput): string[] {
   const inputs = input.inputs ?? {};
   for (const name of needs.inputs ?? []) if (!Object.hasOwn(inputs, name)) add.push(`input:${name}`);
   const allowed = input.supplies?.effect ?? 'observe';
-  if (needs.effect !== undefined && EFFECTS.indexOf(needs.effect) > EFFECTS.indexOf(allowed)) add.push(`effect:${needs.effect}`);
+  if (needs.effect !== undefined && EFFECT_CLASSES.indexOf(needs.effect) > EFFECT_CLASSES.indexOf(allowed)) add.push(`effect:${needs.effect}`);
   const kinds = input.supplies?.kinds ?? [];
   for (const kind of needs.kinds) if (!kinds.includes(kind)) add.push(`kind:${kind}`);
   return add;

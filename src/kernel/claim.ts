@@ -9,8 +9,8 @@ import { CelRejection, type CompiledExpression, compile } from './cel.js';
 import type { Fact, PlacedFact } from './fact.js';
 import type { Json } from './ledger.js';
 import {
-  EFFECTS,
-  type Effect,
+  EFFECT_CLASSES,
+  type EffectClass,
   type LoadedClaim,
   type Needs,
   QUANTIFIERS,
@@ -155,12 +155,12 @@ function readNeeds(value: unknown, refuse: (why: string) => never): Needs {
   if (unknown !== undefined) refuse(`has an unknown key ${JSON.stringify(`needs.${unknown}`)}`);
   if (!isTextList(value.kinds)) refuse('needs needs.kinds as a list of text');
   if (value.inputs !== undefined && !isTextList(value.inputs)) refuse('needs needs.inputs as a list of text');
-  if (value.effect !== undefined && !EFFECTS.includes(value.effect as Effect)) {
-    refuse(`needs needs.effect as one of ${EFFECTS.map((e) => JSON.stringify(e)).join(', ')}`);
+  if (value.effect !== undefined && !EFFECT_CLASSES.includes(value.effect as EffectClass)) {
+    refuse(`needs needs.effect as one of ${EFFECT_CLASSES.map((e) => JSON.stringify(e)).join(', ')}`);
   }
   return {
     ...(value.inputs !== undefined ? { inputs: [...(value.inputs as string[])] } : {}),
-    ...(value.effect !== undefined ? { effect: value.effect as Effect } : {}),
+    ...(value.effect !== undefined ? { effect: value.effect as EffectClass } : {}),
     kinds: [...(value.kinds as string[])],
   };
 }
