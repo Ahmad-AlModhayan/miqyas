@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { BlobStore, blobPath } from '../../src/kernel/blobs.js';
 import { formatCheckpoint, parseCheckpoint } from '../../src/kernel/checkpoint.js';
 import { LedgerWriter } from '../../src/kernel/ledger.js';
-import { verifyIntact } from '../../src/kernel/verify.js';
+import { verifyIntact, verifyResult } from '../../src/kernel/verify.js';
 import { MemoryStore, independentCheckpoint, sha256, utf8 } from '../kernel-helpers.js';
 
 const AT = '2026-11-17T10:00:00Z';
@@ -301,5 +301,56 @@ describe('the checkpoint text (ALGORITHMS K3)', () => {
 
   it('is read from those three lines', () => {
     expect(parseCheckpoint(TEXT)).toEqual({ origin: 'run-1', size: 0, root: ROOT });
+  });
+});
+
+describe('does the result follow? (verifyResult)', () => {
+  /** A run of the given verdicts, sealed with the given result, or not sealed. */
+  async function run(verdicts: (string | null)[], result?: unknown) {
+    const store = new MemoryStore('runs/b');
+    const writer = await LedgerWriter.open(store, sha256, { origin: 'run-2', at: AT, body: { format: 1 } });
+    for (const [i, verdict] of verdicts.entries()) {
+      await writer.append('verdict', verdict === null ? { claim: `c${i + 1}@1` } : { claim: `c${i + 1}@1`, verdict }, AT);
+    }
+    if (result !== undefined) await writer.seal({ result } as never, AT);
+    return store;
+  }
+
+  it('gives what it recomputed, what the seal holds, and that they agree', async () => {
+    const store = await run(['pass', 'pass'], { verdict: 'pass', verdicts: 2 });
+    expect(await verifyResult(store)).toEqual({
+      seal: { seq: 3, verdict: 'pass', verdicts: 2 },
+      recomputed: { verdict: 'pass', verdicts: 2 },
+      records: [
+        { seq: 1, claim: 'c1@1', verdict: 'pass' },
+        { seq: 2, claim: 'c2@1', verdict: 'pass' },
+      ],
+      agree: true,
+    });
+  });
+
+  it('does not agree when the seal says another conclusion, or another count', async () => {
+    expect(await verifyResult(await run(['pass', 'fail'], { verdict: 'pass', verdicts: 2 }))).toMatchObject({
+      recomputed: { verdict: 'fail', verdicts: 2 },
+      agree: false,
+    });
+    expect(await verifyResult(await run(['pass'], { verdict: 'pass', verdicts: 2 }))).toMatchObject({
+      seal: { seq: 2, verdict: 'pass', verdicts: 2 },
+      recomputed: { verdict: 'pass', verdicts: 1 },
+      agree: false,
+    });
+  });
+
+  it('gives null for what the seal or a verdict record does not state, which never agrees', async () => {
+    expect(await verifyResult(await run([null], {}))).toEqual({
+      seal: { seq: 2, verdict: null, verdicts: null },
+      recomputed: { verdict: 'not_known', verdicts: 1 },
+      records: [{ seq: 1, claim: 'c1@1', verdict: null }],
+      agree: false,
+    });
+  });
+
+  it('gives no seal for a run that was not sealed', async () => {
+    expect(await verifyResult(await run(['pass']))).toEqual({ seal: null });
   });
 });

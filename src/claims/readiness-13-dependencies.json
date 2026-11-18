@@ -1,0 +1,73 @@
+{
+  "id": "readiness.13.dependencies",
+  "version": 1,
+  "title": "No critical, high or malicious dependency in the lockfiles",
+  "view": { "kinds": ["dep.advisory", "collection"], "by": ["lockfile-reader@1", "osv-adapter@1"] },
+  "shape": "set",
+  "quantifier": "none",
+  "from": "dep.advisory",
+  "holds": "item.malicious || item.severity in [\"critical\", \"high\"]",
+  "covered": "ctx.collections[\"lockfile-reader@1\"].status == \"complete\" && ctx.collections[\"osv-adapter@1\"].status == \"complete\" && ctx.collections[\"lockfile-reader@1\"].counts.lockfiles > 0 && ctx.collections[\"osv-adapter@1\"].counts.lockfiles == ctx.collections[\"lockfile-reader@1\"].counts.lockfiles",
+  "vacuous": "pass",
+  "examples": [
+    {
+      "name": "a high advisory fails",
+      "expect": "fail",
+      "facts": [
+        { "kind": "collection", "by": "lockfile-reader@1", "body": { "status": "complete", "counts": { "lockfiles": 1 } } },
+        { "kind": "dep.advisory", "by": "osv-adapter@1", "body": { "id": "GHSA-0000-high", "malicious": false, "severity": "high" } },
+        { "kind": "collection", "by": "osv-adapter@1", "body": { "status": "complete", "counts": { "lockfiles": 1, "advisories": 1 } } }
+      ]
+    },
+    {
+      "name": "a malicious package fails whatever its severity",
+      "expect": "fail",
+      "facts": [
+        { "kind": "collection", "by": "lockfile-reader@1", "body": { "status": "complete", "counts": { "lockfiles": 1 } } },
+        { "kind": "dep.advisory", "by": "osv-adapter@1", "body": { "id": "MAL-0000-0001", "malicious": true, "severity": "low" } },
+        { "kind": "collection", "by": "osv-adapter@1", "body": { "status": "complete", "counts": { "lockfiles": 1, "advisories": 1 } } }
+      ]
+    },
+    {
+      "name": "a medium advisory over a full scan passes",
+      "expect": "pass",
+      "facts": [
+        { "kind": "collection", "by": "lockfile-reader@1", "body": { "status": "complete", "counts": { "lockfiles": 1 } } },
+        { "kind": "dep.advisory", "by": "osv-adapter@1", "body": { "id": "GHSA-0000-med", "malicious": false, "severity": "medium" } },
+        { "kind": "collection", "by": "osv-adapter@1", "body": { "status": "complete", "counts": { "lockfiles": 1, "advisories": 1 } } }
+      ]
+    },
+    {
+      "name": "no advisory over a full scan passes",
+      "expect": "pass",
+      "facts": [
+        { "kind": "collection", "by": "lockfile-reader@1", "body": { "status": "complete", "counts": { "lockfiles": 1 } } },
+        { "kind": "collection", "by": "osv-adapter@1", "body": { "status": "complete", "counts": { "lockfiles": 1, "advisories": 0 } } }
+      ]
+    },
+    {
+      "name": "no advisory with no database to scan against is not known",
+      "expect": "not_checked",
+      "facts": [
+        { "kind": "collection", "by": "lockfile-reader@1", "body": { "status": "complete", "counts": { "lockfiles": 1 } } },
+        { "kind": "collection", "by": "osv-adapter@1", "body": { "status": "failed", "counts": { "lockfiles": 1, "advisories": 0 } } }
+      ]
+    },
+    {
+      "name": "a scan that saw no lockfile where the reader found one is not known",
+      "expect": "not_checked",
+      "facts": [
+        { "kind": "collection", "by": "lockfile-reader@1", "body": { "status": "complete", "counts": { "lockfiles": 1 } } },
+        { "kind": "collection", "by": "osv-adapter@1", "body": { "status": "complete", "counts": { "lockfiles": 0, "advisories": 0 } } }
+      ]
+    },
+    {
+      "name": "a scan that saw fewer lockfiles than the reader found is not known",
+      "expect": "not_checked",
+      "facts": [
+        { "kind": "collection", "by": "lockfile-reader@1", "body": { "status": "complete", "counts": { "lockfiles": 2 } } },
+        { "kind": "collection", "by": "osv-adapter@1", "body": { "status": "complete", "counts": { "lockfiles": 1, "advisories": 0 } } }
+      ]
+    }
+  ]
+}
