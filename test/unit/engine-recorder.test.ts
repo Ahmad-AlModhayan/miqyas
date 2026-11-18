@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { FactRefused } from '../../src/engine/fact-check.js';
 import { openRecorder } from '../../src/engine/recorder.js';
 import { readLedger } from '../../src/kernel/ledger.js';
-import { MemoryStore, sha256 } from '../kernel-helpers.js';
+import { MemoryStore, collectionFact, sha256 } from '../kernel-helpers.js';
 
 async function recorderOverMemory() {
   const store = new MemoryStore();
@@ -16,14 +16,8 @@ async function recorderOverMemory() {
 }
 
 const file = (path: string, by = 'lockfile-reader@1', run = 1) => ({ kind: 'repo.file', v: 1, by, run, subject: 'repository', body: { path, role: 'lockfile' } });
-const closing = (by = 'lockfile-reader@1', run = 1, status = 'complete') => ({
-  kind: 'collection',
-  v: 1,
-  by,
-  run,
-  subject: 'repository',
-  body: { setOut: 'every supported lockfile in the repository', status, ...(status === 'complete' ? {} : { reason: 'stopped' }), counts: { lockfiles: 1 }, dropped: 0 },
-});
+const closing = (by = 'lockfile-reader@1', run = 1, status: 'complete' | 'failed' = 'complete') =>
+  collectionFact({ by, run, subject: 'repository', setOut: 'every supported lockfile in the repository', counts: { lockfiles: 1 }, status });
 
 describe('the recorder checks each fact against its kind', () => {
   it('refuses a fact that fails its schema, naming the kind and the field, and nothing of it reaches the ledger', async () => {
@@ -37,6 +31,15 @@ describe('the recorder checks each fact against its kind', () => {
     // The refusal took no position: the next fact is the next record.
     expect(await recorder.record('fact', file('package-lock.json'))).toBe(1);
     expect((await ledger()).map((r) => r.t)).toEqual(['run.open', 'fact']);
+  });
+
+  it('refuses minus zero as a fact that fails its schema, naming the kind and the field, before the writer sees it', async () => {
+    const { recorder, ledger } = await recorderOverMemory();
+    const minusZero = { ...closing(), body: { ...closing().body, dropped: -0 } };
+    const refusal = await recorder.record('fact', minusZero).catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(FactRefused);
+    expect(refusal).toMatchObject({ kind: 'collection', field: 'body.dropped' });
+    expect((await ledger()).map((r) => r.t)).toEqual(['run.open']);
   });
 
   it('refuses a fact of a kind with no schema', async () => {
@@ -98,47 +101,23 @@ describe('a collector run closes', () => {
     const records = await ledger();
     expect(records.map((r) => r.t)).toEqual(['run.open', 'fact', 'fact', 'fact', 'fact', 'fact', 'fact', 'fact', 'run.seal']);
     const closings = records.slice(6, 8).map((r) => r.body);
+    const byTheEngine = { subject: 'repository', setOut: 'not stated: the collector did not close its run', status: 'failed' as const };
+    const reason = 'the run ended before the collector recorded its collection fact';
     expect(closings).toEqual([
-      {
-        kind: 'collection',
-        v: 1,
-        by: 'lockfile-reader@1',
-        run: 1,
-        subject: 'repository',
-        body: {
-          setOut: 'not stated: the collector did not close its run',
-          status: 'failed',
-          reason: 'the run ended before the collector recorded its collection fact',
-          counts: { facts: 2 },
-          dropped: 0,
-        },
-      },
-      {
-        kind: 'collection',
-        v: 1,
-        by: 'other-reader@1',
-        run: 3,
-        subject: 'repository',
-        body: {
-          setOut: 'not stated: the collector did not close its run',
-          status: 'failed',
-          reason: 'the run ended before the collector recorded its collection fact',
-          counts: { facts: 1 },
-          dropped: 0,
-        },
-      },
+      collectionFact({ ...byTheEngine, by: 'lockfile-reader@1', run: 1, reason, counts: { facts: 2 } }),
+      collectionFact({ ...byTheEngine, by: 'other-reader@1', run: 3, reason, counts: { facts: 1 } }),
     ]);
     expect(records[8]!.body).toMatchObject({ counts: { records: 9, byType: { fact: 7 } } });
   });
 
   it('takes a run back as it was when the ledger writer refuses a fact its schema accepted', async () => {
     const { recorder, ledger } = await recorderOverMemory();
-    // The writer refuses what JSON would not carry back unchanged; the schema has no view on -0 or a missing value.
+    // The writer refuses what JSON would not carry back unchanged; the schema has no view on a missing value.
     const ghost = { ...file('a.lock', 'ghost-reader@1'), origin: undefined } as unknown as Parameters<typeof recorder.record>[1];
     await expect(recorder.record('fact', ghost)).rejects.toThrow(/undefined/);
     await recorder.record('fact', file('package-lock.json'));
-    const minusZero = { ...closing(), body: { ...closing().body, dropped: -0 } };
-    await expect(recorder.record('fact', minusZero)).rejects.toThrow(/-0/);
+    const unsent = { ...closing(), origin: undefined } as unknown as Parameters<typeof recorder.record>[1];
+    await expect(recorder.record('fact', unsent)).rejects.toThrow(/undefined/);
     // The collection fact was refused, so the run is still open: it takes another fact, and the engine closes it.
     await recorder.record('fact', file('yarn.lock'));
     await recorder.seal(null);

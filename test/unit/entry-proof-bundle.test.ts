@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FsStore, nodeSha256 } from '../../src/entry/fs-store.js';
 import { buildRunOpen, runWithProofBundle } from '../../src/entry/proof-bundle.js';
 import { verifyIntact } from '../../src/kernel/verify.js';
-import { independentCheckpoint, utf8 } from '../kernel-helpers.js';
+import { collectionFact, independentCheckpoint, utf8 } from '../kernel-helpers.js';
 
 let tmp: string;
 let dir: string;
@@ -37,7 +37,7 @@ const asset = (blob: { digest: string; size: number; mediaType: string }) => ({
   body: { from: 'served', name: 'https://app.test/' },
   blobs: { content: blob },
 });
-const closing = { kind: 'collection', v: 1, by: 'test-worker@1', run: 1, subject: 'target', body: { setOut: 'the page', status: 'complete', counts: { assets: 1 }, dropped: 0 } };
+const closing = collectionFact({ by: 'test-worker@1', subject: 'target', setOut: 'the page', counts: { assets: 1 } });
 
 async function listFiles(root: string, prefix = ''): Promise<string[]> {
   const out: string[] = [];

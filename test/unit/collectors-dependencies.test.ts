@@ -9,7 +9,7 @@ import { checkFact } from '../../src/engine/fact-check.js';
 import { openRecorder } from '../../src/engine/recorder.js';
 import type { PlacedFact } from '../../src/kernel/fact.js';
 import { readLedger } from '../../src/kernel/ledger.js';
-import { MemoryStore, sha256 } from '../kernel-helpers.js';
+import { MemoryStore, collectionFact, sha256 } from '../kernel-helpers.js';
 
 const SEED = path.resolve(import.meta.dirname, '../../corpus/fixtures/grade1-checks/seed-osv-critical');
 
@@ -54,17 +54,7 @@ describe("check 13's collectors", () => {
     const records = (await readLedger(store)).records.slice(1);
     expect(records.map((r) => [r.t, r.body])).toEqual([
       ['fact', { kind: 'repo.file', v: 1, by: 'lockfile-reader@1', run: 1, subject: 'repository', body: { path: 'package-lock.json', role: 'lockfile' } }],
-      [
-        'fact',
-        {
-          kind: 'collection',
-          v: 1,
-          by: 'lockfile-reader@1',
-          run: 1,
-          subject: 'repository',
-          body: { setOut: 'every supported lockfile in the repository', status: 'complete', counts: { lockfiles: 1 }, dropped: 0 },
-        },
-      ],
+      ['fact', collectionFact({ by: 'lockfile-reader@1', subject: 'repository', setOut: 'every supported lockfile in the repository', counts: { lockfiles: 1 } })],
     ]);
   });
 

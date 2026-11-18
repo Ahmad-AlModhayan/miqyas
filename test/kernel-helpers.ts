@@ -35,6 +35,25 @@ export function independentCheckpoint(origin: string, ledger: string): string {
   return `${origin}\n${lines.length}\n${root(lines).toString('base64')}\n`;
 }
 
+/**
+ * The `collection` fact that closes a collector run (docs/FOUNDATION.md §3), as a test writes it: complete with
+ * nothing dropped unless it says otherwise, and with a reason whenever it is not complete.
+ */
+export function collectionFact(close: {
+  by: string;
+  run?: number;
+  subject: string;
+  setOut: string;
+  counts: { [name: string]: number };
+  status?: 'complete' | 'partial' | 'failed';
+  reason?: string;
+  dropped?: number;
+}): { kind: string; v: number; by: string; run: number; subject: string; body: { [field: string]: string | number | { [name: string]: number } } } {
+  const { by, run = 1, subject, setOut, counts, status = 'complete', dropped = 0 } = close;
+  const reason = close.reason ?? (status === 'complete' ? undefined : 'stopped');
+  return { kind: 'collection', v: 1, by, run, subject, body: { setOut, status, ...(reason === undefined ? {} : { reason }), counts, dropped } };
+}
+
 /** A store held in memory. Every path is kept under `root`, as a folder on disk would keep it. */
 export class MemoryStore implements Store {
   readonly files = new Map<string, Uint8Array>();

@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { main } from '../../src/entry/cli.js';
 import { verifyBundle } from '../../src/entry/verify.js';
 import { runWithProofBundle } from '../../src/entry/proof-bundle.js';
-import { independentCheckpoint } from '../kernel-helpers.js';
+import { collectionFact, independentCheckpoint } from '../kernel-helpers.js';
 
 let tmp: string;
 let dir: string;
@@ -23,7 +23,7 @@ async function makeBundle(at: string): Promise<void> {
     const fact = { by: 'test-worker@1', run: 1, subject: 'target', v: 1 };
     await recorder.record('fact', { ...fact, kind: 'asset', body: { from: 'served', name: 'https://app.test/alpha' }, blobs: { content: blob } });
     await recorder.record('verdict', { claim: 'c1@1', verdict: 'pass' });
-    await recorder.record('fact', { ...fact, kind: 'collection', body: { setOut: 'the page', status: 'complete', counts: { assets: 1 }, dropped: 0 } });
+    await recorder.record('fact', collectionFact({ by: fact.by, run: fact.run, subject: fact.subject, setOut: 'the page', counts: { assets: 1 } }));
     return { result: 0, fold: { verdict: 'pass', verdicts: 1 } };
   });
 }
