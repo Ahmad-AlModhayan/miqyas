@@ -227,10 +227,14 @@ describe('count', () => {
     expect(row(await judge('count', [errorItem(), errorItem(), done()]))).toEqual(pass());
   });
 
-  it('is not known when the count rule gives an error', async () => {
-    expect(row(await judge('count', [done()], divides))).toEqual(notChecked('the count rule gave an error'));
+  it('is not known, for an expression that gave an error, when the count rule gives an error (ALGORITHMS A1)', async () => {
+    expect(row(await judge('count', [done()], divides))).toEqual(notChecked(ERRORED));
     // An error among the counts the uncertain items allow is still an error, whatever the other counts give.
-    expect(row(await judge('count', [item(1, { w: 'x' }), done()], { ...divides, where: 'item.w' }))).toEqual(notChecked('the count rule gave an error'));
+    expect(row(await judge('count', [item(1, { w: 'x' }), done()], { ...divides, where: 'item.w' }))).toEqual(notChecked(ERRORED));
+    // Beside an item that could not be used, the reason says both.
+    expect(row(await judge('count', [item(1, { u: 0 }), done()], { ...divides, usable: 'item.u > 0' }))).toEqual(
+      notChecked("uncertain items: an expression gave an error, and a measurement couldn't be used"),
+    );
   });
 });
 
@@ -347,6 +351,11 @@ describe('reasons and what to add', () => {
     const all = Object.values(REASONS).flat();
     expect(new Set(all).size).toBe(all.length);
     expect(Object.keys(REASONS).sort()).toEqual(['blocked', 'not_checked', 'unverified']);
+  });
+
+  it("is FOUNDATION's list: blocked names a missing flag, and an error in the count rule has no reason of its own", () => {
+    expect(REASONS.blocked as readonly string[]).toContain('a flag is missing');
+    expect(Object.values(REASONS).flat() as string[]).not.toContain('the count rule gave an error');
   });
 
   it('is blocked when an input it needs was not given, and what to add names it', async () => {

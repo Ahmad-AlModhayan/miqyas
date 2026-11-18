@@ -31,6 +31,7 @@ export const REASONS = {
     'an effect it needs is not allowed',
     'no collector records a kind it needs',
     'a secret is missing',
+    'a flag is missing',
     'a tool is not installed',
     'a step was never bound',
   ],
@@ -39,7 +40,6 @@ export const REASONS = {
     'uncertain items: an expression gave an error',
     "uncertain items: a measurement couldn't be used",
     "uncertain items: an expression gave an error, and a measurement couldn't be used",
-    'the count rule gave an error',
     'nothing to check',
     'a collector failed',
     'dropped for time',
@@ -208,11 +208,12 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
 
   function decide(): Outcome {
     const notKnown = (reason: Reason): Outcome => ({ verdict: 'not_checked', reason, shown: [] });
-    const uncertainItems = (): Outcome =>
+    // `countErred`: the count rule gave an error, which A1 counts among the uncertain items as an expression's error.
+    const uncertainItems = (countErred = false): Outcome =>
       notKnown(
         unusable === 0
           ? 'uncertain items: an expression gave an error'
-          : errored === 0
+          : errored === 0 && !countErred
             ? "uncertain items: a measurement couldn't be used"
             : "uncertain items: an expression gave an error, and a measurement couldn't be used",
       );
@@ -240,8 +241,7 @@ export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
         // The count rule over every count the uncertain items allow: each may be inside the claim or not.
         const answers = new Set<Truth>();
         for (let n = held.length; n <= held.length + uncertain; n++) answers.add(evaluate(compiled.count as CompiledExpression, { n }));
-        if (answers.has('error')) return notKnown('the count rule gave an error');
-        if (answers.size > 1) return uncertainItems();
+        if (answers.size > 1 || answers.has('error')) return uncertainItems(answers.has('error'));
         return answers.has('true') ? { verdict: 'pass', shown: [] } : { verdict: 'fail', shown: [] };
       }
     }
