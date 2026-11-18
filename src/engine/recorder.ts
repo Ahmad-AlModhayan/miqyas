@@ -2,24 +2,29 @@
 // How a run writes its proof bundle (docs/FOUNDATION.md §5, §10). The run, and the collectors it starts, append
 // records and store blobs through a RunRecorder and never touch the store or the ledger writer themselves. The
 // recorder holds no input or output of its own: it is built over a kernel Store and Sha256 it is handed, and over a
-// clock, because the kernel has none and a record's time comes from the caller.
-import { BlobStore } from '../kernel/blobs.js';
+// clock, because the kernel has none and a record's time comes from the caller. It is also where the rules every
+// collector follows are enforced (docs/FOUNDATION.md §3): a fact must match the schema of its kind, and no fact of a
+// collector run is accepted after that run's collection fact.
+import { type BlobRef, BlobStore } from '../kernel/blobs.js';
 import { type Head, toBase64 } from '../kernel/checkpoint.js';
 import { type Json, LedgerWriter, type RecordType } from '../kernel/ledger.js';
+import type { Fact } from '../kernel/fact.js';
 import type { Sha256, Store } from '../kernel/store.js';
+import { assertFact } from './fact-check.js';
 
 /** The record types a run appends as it goes: every type but the two that open and close the ledger. */
 export type AppendableType = Exclude<RecordType, 'run.open' | 'run.seal'>;
 
-/**
- * How a record names a blob it holds (docs/FOUNDATION.md §3): put it in the record's `blobs`, under any name. A type
- * and not an interface, so that it can go straight into a record's body.
- */
-export type StoredBlob = { digest: string; size: number; mediaType: string };
+/** How a record names a blob it holds (docs/FOUNDATION.md §3): put it in the record's `blobs`, under any name. */
+export type StoredBlob = BlobRef;
 
 /** What the run and its collectors are given. */
 export interface RunRecorder {
-  /** Appends one record, timed by the recorder's clock, and resolves to its seq once the store holds it. */
+  /**
+   * Appends one record, timed by the recorder's clock, and resolves to its seq once the store holds it. A fact that
+   * does not match the schema of its kind is refused with FactRefused; one of a closed collector run, and any fact
+   * once the seal has started, is refused too. None of them reaches the ledger.
+   */
   record(t: AppendableType, body: Json): Promise<number>;
   /** Stores evidence too large for a record, once, under its SHA-256. A fact names it by the BlobRef this returns. */
   putBlob(bytes: Uint8Array, mediaType: string): Promise<StoredBlob>;
@@ -37,7 +42,10 @@ export interface SealedRun {
 
 /** The recorder as its owner holds it. Only the owner can seal; the run is handed the RunRecorder alone. */
 export interface OpenRunRecorder extends RunRecorder {
-  /** Appends run.seal with `result` (what the run concluded) and the counts, and returns the head to print. */
+  /**
+   * Refuses every fact from here on, closes as failed each collector run still open, then appends run.seal with `result` (what the run concluded) and
+   * the counts, and returns the head to print.
+   */
   seal(result: Json): Promise<SealedRun>;
 }
 
@@ -65,20 +73,48 @@ export async function openRecorder(store: Store, sha256: Sha256, options: Record
   const blobs = new BlobStore(store, sha256);
   const counts = new Map<string, number>([['run.open', 1]]);
   const count = (t: string, by: number) => counts.set(t, (counts.get(t) ?? 0) + by);
+  const collectorRuns = new CollectorRuns();
+  // Set when the seal starts. From then on no fact is accepted, so no collector run can open or grow while the engine
+  // closes the ones still open, and every run in the sealed ledger ends with its collection fact.
+  let sealing = false;
+
+  const append = (t: AppendableType, body: Json): Promise<number> => {
+    // Checked, counted and its run's state changed when asked, not when written: so a seal asked for right after
+    // counts every record before it, and a fact asked for after its run's collection fact is refused even while that
+    // fact is still being written. A refusal by the writer takes the count and the run's change back.
+    let undo = () => {};
+    try {
+      if (t === 'fact') undo = collectorRuns.accept(body);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    count(t, 1);
+    return writer.append(t, body, at()).catch((error: unknown) => {
+      count(t, -1);
+      undo();
+      throw error;
+    });
+  };
+
+  const record = (t: AppendableType, body: Json): Promise<number> => {
+    if (t === 'fact' && sealing) {
+      return Promise.reject(new Error('the run is being sealed, or is sealed: no fact is accepted once the seal has started'));
+    }
+    return append(t, body);
+  };
 
   return {
-    record(t, body) {
-      // Counted when asked, so a seal asked for right after counts every record before it; a refusal takes it back.
-      count(t, 1);
-      return writer.append(t, body, at()).catch((error: unknown) => {
-        count(t, -1);
-        throw error;
-      });
-    },
+    record,
     putBlob: async (bytes, mediaType) => ({ ...(await blobs.put(bytes, mediaType)) }),
     getBlob: (digest) => blobs.get(digest),
     head: () => writer.head(),
     async seal(result) {
+      sealing = true;
+      // Every record asked for before the seal settles first, so a fact the writer refused is out of its run's count.
+      await writer.head();
+      // A collector run still open is one whose collector died or forgot to close: the engine closes it as failed
+      // (docs/FOUNDATION.md §3, "It closes"), so that every run in a sealed ledger ends with its collection fact.
+      for (const open of collectorRuns.open()) await append('fact', engineClosing(open));
       const byType: { [type: string]: number } = {};
       const all = [...counts, ['run.seal', 1] as const].filter(([, n]) => n > 0);
       for (const [t, n] of all.sort(([a], [b]) => (a < b ? -1 : 1))) byType[t] = n;
@@ -87,6 +123,81 @@ export async function openRecorder(store: Store, sha256: Sha256, options: Record
       return { seq, head: await writer.head() };
     },
   };
+}
+
+/**
+ * One collector run (docs/FOUNDATION.md §3): one attempt of one collector, named by `by` and `run`, as the recorder
+ * has accepted its facts. Not the run of the whole ledger, which run.open and run.seal bound.
+ */
+interface CollectorRun {
+  by: string;
+  run: number;
+  /** The subject of its last fact. */
+  subject: string;
+  /** Its facts accepted and not refused by the writer since, the collection fact aside. */
+  facts: number;
+  /** Its collection fact has been accepted. */
+  closed: boolean;
+}
+
+/** A collector run whose collection fact has not been accepted. */
+type OpenCollectorRun = CollectorRun & { closed: false };
+
+/**
+ * The collector runs of one ledger. A collector run is closed by its `collection` fact. Every fact is checked against
+ * its kind here, before it is accepted.
+ */
+class CollectorRuns {
+  private readonly runs = new Map<string, CollectorRun>();
+
+  /** Accepts a fact or throws; returns how to take the acceptance back if the writer then refuses the record. */
+  accept(body: Json): () => void {
+    assertFact(body);
+    const fact = body as unknown as Fact;
+    const key = JSON.stringify([fact.by, fact.run]);
+    const run = this.runs.get(key) ?? { by: fact.by, run: fact.run, subject: fact.subject, facts: 0, closed: false };
+    if (run.closed) {
+      throw new Error(`a fact of ${fact.by} run ${fact.run} came after that run's collection fact, and the run is closed`);
+    }
+    this.runs.set(key, run);
+    if (fact.kind === 'collection') {
+      run.closed = true;
+    } else {
+      run.facts += 1;
+      run.subject = fact.subject;
+    }
+    // Takes back only what this fact changed, whatever was accepted since: the run's count stays the number of its
+    // facts that are in the ledger, and a run left with no fact and no closing is forgotten.
+    return () => {
+      if (fact.kind === 'collection') run.closed = false;
+      else run.facts -= 1;
+      if (run.facts === 0 && !run.closed && this.runs.get(key) === run) this.runs.delete(key);
+    };
+  }
+
+  /** The collector runs still open, in the order they opened. */
+  open(): OpenCollectorRun[] {
+    return [...this.runs.values()].filter((r): r is OpenCollectorRun => !r.closed);
+  }
+}
+
+/** The collection fact the engine writes for a collector run that ended without closing. */
+function engineClosing(open: OpenCollectorRun): Json {
+  const fact: Fact = {
+    kind: 'collection',
+    v: 1,
+    by: open.by,
+    run: open.run,
+    subject: open.subject,
+    body: {
+      setOut: 'not stated: the collector did not close its run',
+      status: 'failed',
+      reason: 'the run ended before the collector recorded its collection fact',
+      counts: { facts: open.facts },
+      dropped: 0,
+    },
+  };
+  return fact as unknown as Json;
 }
 
 /** How the head is printed when a run ends, so that it can be published where the bundle's holder doesn't control. */

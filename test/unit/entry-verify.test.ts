@@ -8,20 +8,22 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { main } from '../../src/entry/cli.js';
 import { verifyBundle } from '../../src/entry/verify.js';
 import { runWithProofBundle } from '../../src/entry/proof-bundle.js';
-import { independentCheckpoint } from '../kernel-helpers.js';
+import { collectionFact, independentCheckpoint } from '../kernel-helpers.js';
 
 let tmp: string;
 let dir: string;
 let tick = 0;
 const clock = () => new Date(Date.UTC(2026, 10, 17, 10, 15, tick++));
 
-/** A sealed bundle: run.open, a fact that names a blob, a verdict, run.seal. */
+/** A sealed bundle: run.open, a fact that names a blob, a verdict, the collection fact that closes the fact's run, run.seal. */
 async function makeBundle(at: string): Promise<void> {
   tick = 0;
   await runWithProofBundle({ dir: at, runId: 'run-1', open: { format: 1 }, now: clock, print: () => undefined }, async (recorder) => {
     const blob = await recorder.putBlob(new TextEncoder().encode('<html>the page</html>'), 'text/html');
-    await recorder.record('fact', { kind: 'page', note: 'alpha', blobs: { body: blob } });
+    const fact = { by: 'test-worker@1', run: 1, subject: 'target', v: 1 };
+    await recorder.record('fact', { ...fact, kind: 'asset', body: { from: 'served', name: 'https://app.test/alpha' }, blobs: { content: blob } });
     await recorder.record('verdict', { claim: 'c1@1', verdict: 'pass' });
+    await recorder.record('fact', collectionFact({ by: fact.by, run: fact.run, subject: fact.subject, setOut: 'the page', counts: { assets: 1 } }));
     return { result: 0, fold: { verdict: 'pass', verdicts: 1 } };
   });
 }
@@ -60,7 +62,7 @@ describe('verify on an untouched bundle', () => {
     const [, size, root] = (await readFile(path.join(dir, 'checkpoint'), 'utf8')).split('\n') as [string, string, string];
     expect(text(r.lines)).toContain('1. Intact? yes');
     expect(text(r.lines)).toContain(`head: ${size} records, root ${root}`);
-    expect(size).toBe('4');
+    expect(size).toBe('5');
   });
 
   it('says that the questions this version does not answer are not answered, so a pass is not read as more', async () => {
@@ -73,7 +75,7 @@ describe('verify on an untouched bundle', () => {
   it('answers that the result follows: the fold of the verdict records is what the seal says', async () => {
     const r = await verifyBundle(dir);
     expect(r.lines).toContain('2. Does the result follow? yes');
-    expect(r.lines).toContain('   the seal (record 3) says pass over 1 verdict; the fold of the 1 verdict record gives pass');
+    expect(r.lines).toContain('   the seal (record 4) says pass over 1 verdict; the fold of the 1 verdict record gives pass');
   });
 
   it('still verifies when the folder is copied somewhere else', async () => {
@@ -147,7 +149,7 @@ describe('verify on a bundle that was changed', () => {
     const r = await verifyBundle(dir);
     expect(r.exitCode).toBe(1);
     expect(text(r.lines)).toContain('1. Intact? NO');
-    expect(text(r.lines)).toMatch(/ledger\.jsonl: records 0 to 3 do not match the checkpoint root/);
+    expect(text(r.lines)).toMatch(/ledger\.jsonl: records 0 to 4 do not match the checkpoint root/);
   });
 
   it('fails when a ledger line is edited into one that cannot be read: names the record', async () => {
@@ -174,7 +176,7 @@ describe('verify on a bundle that was changed', () => {
     await rm(await blobFile());
     const r = await verifyBundle(dir);
     expect(r.exitCode).toBe(1);
-    expect(text(r.lines)).toMatch(/\(record 1\): the blob "body": there is no blob/);
+    expect(text(r.lines)).toMatch(/\(record 1\): the blob "content": there is no blob/);
   });
 
   it('fails when lines are removed from the end, even with a checkpoint that was never updated', async () => {
@@ -183,13 +185,13 @@ describe('verify on a bundle that was changed', () => {
     const r = await verifyBundle(dir);
     expect(r.exitCode).toBe(1);
     const out = text(r.lines);
-    expect(out).toMatch(/the checkpoint covers 4 records and the ledger holds 2: records 2 to 3 are missing/);
+    expect(out).toMatch(/the checkpoint covers 5 records and the ledger holds 2: records 2 to 4 are missing/);
     expect(out).toMatch(/no run\.seal/);
   });
 
   it('fails when only the seal line is removed, and says there is no seal', async () => {
     const lines = await readLines();
-    await writeLines(lines.slice(0, 3));
+    await writeLines(lines.slice(0, 4));
     const r = await verifyBundle(dir);
     expect(r.exitCode).toBe(1);
     expect(text(r.lines)).toMatch(/no run\.seal/);
@@ -197,12 +199,12 @@ describe('verify on a bundle that was changed', () => {
 
   it('fails when the seal is removed and the checkpoint is made to match, which is still no seal', async () => {
     const lines = await readLines();
-    const kept = lines.slice(0, 3);
+    const kept = lines.slice(0, 4);
     await writeLines(kept);
     await writeFile(path.join(dir, 'checkpoint'), independentCheckpoint('run-1', kept.join('\n') + '\n'));
     const r = await verifyBundle(dir);
     expect(r.exitCode).toBe(1);
-    expect(text(r.lines)).toMatch(/ledger\.jsonl \(record 3\): there is no run\.seal/);
+    expect(text(r.lines)).toMatch(/ledger\.jsonl \(record 4\): there is no run\.seal/);
   });
 
   it('fails when the checkpoint is gone', async () => {

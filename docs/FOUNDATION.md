@@ -561,6 +561,7 @@ and adds facts.
 | `libpg-query`, to read SQL | substrate | it is built from PostgreSQL's own parser, so SQL is read as the database reads it |
 | SHA-256, and HMAC-SHA-256 for keyed digests, from the platform | substrate | published standards, which a second verifier already has |
 | a CEL library | substrate | the language is specified apart from any implementation (ADR 0011) |
+| Ajv, to check JSON Schema | substrate | it checks each fact against the schema of its kind when the fact is recorded; the schemas are data of Miqyas's own, and Ajv is used in the engine, never in the kernel |
 | SARIF 2.1.0, JUnit XML, in-toto and DSSE, RFC 9162 | substrate (formats) | published formats; Miqyas reads and writes them with code of its own, so the borrowed part is the specification (ADRs 0007 and 0012) |
 | a PNG decoder, and a model provider's client library | substrate | one decodes an image and the other carries a request; code decides what is sent and what an answer means |
 | axe-core | outside tool | a catalogue of accessibility rules (check 4); bundled, and injected into the page by the web worker |

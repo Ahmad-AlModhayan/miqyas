@@ -4,12 +4,15 @@
 // blob store hashes every blob it is handed and every blob it gives back; one whose bytes don't match is refused.
 import { type Sha256, type Store, isPlainObject, toHex } from './store.js';
 
-/** How a fact names a blob (docs/FOUNDATION.md §3). */
-export interface BlobRef {
+/**
+ * How a fact names a blob (docs/FOUNDATION.md §3). A type and not an interface, so that it can go straight into a
+ * record's body.
+ */
+export type BlobRef = {
   digest: string;
   size: number;
   mediaType: string;
-}
+};
 
 export class BlobError extends Error {}
 

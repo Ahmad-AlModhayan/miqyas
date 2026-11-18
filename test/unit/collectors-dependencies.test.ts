@@ -4,10 +4,12 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { findRepoLockfiles } from '../../src/adapters/osv.js';
-import { recordLockfiles, recordOsvScan } from '../../src/collectors/dependencies.js';
+import { type LockfilesFound, type OsvScan, recordLockfiles, recordOsvScan } from '../../src/collectors/dependencies.js';
+import { checkFact } from '../../src/engine/fact-check.js';
 import { openRecorder } from '../../src/engine/recorder.js';
+import type { PlacedFact } from '../../src/kernel/fact.js';
 import { readLedger } from '../../src/kernel/ledger.js';
-import { MemoryStore, sha256 } from '../kernel-helpers.js';
+import { MemoryStore, collectionFact, sha256 } from '../kernel-helpers.js';
 
 const SEED = path.resolve(import.meta.dirname, '../../corpus/fixtures/grade1-checks/seed-osv-critical');
 
@@ -52,17 +54,7 @@ describe("check 13's collectors", () => {
     const records = (await readLedger(store)).records.slice(1);
     expect(records.map((r) => [r.t, r.body])).toEqual([
       ['fact', { kind: 'repo.file', v: 1, by: 'lockfile-reader@1', run: 1, subject: 'repository', body: { path: 'package-lock.json', role: 'lockfile' } }],
-      [
-        'fact',
-        {
-          kind: 'collection',
-          v: 1,
-          by: 'lockfile-reader@1',
-          run: 1,
-          subject: 'repository',
-          body: { setOut: 'every supported lockfile in the repository', status: 'complete', counts: { lockfiles: 1 }, dropped: 0 },
-        },
-      ],
+      ['fact', collectionFact({ by: 'lockfile-reader@1', subject: 'repository', setOut: 'every supported lockfile in the repository', counts: { lockfiles: 1 } })],
     ]);
   });
 
@@ -123,6 +115,25 @@ describe("check 13's collectors", () => {
     expect(placed.slice(0, 3).map((p) => (p.fact.body as { path: string }).path)).toEqual(['apps/web/yarn.lock', 'apps/api/yarn.lock', 'package-lock.json']);
     const scan = await recordOsvScan(recorder, 'repository', { ...criticalScan([]), hits: [{ ...criticalScan([]).hits[0]!, sourcePath: 'apps\\web\\package-lock.json' }] });
     expect((scan[1]!.fact.body as { lockfile: string }).lockfile).toBe('apps/web/package-lock.json');
+  });
+
+  it('on every way a scan can end, each run records facts that match their kinds and ends with its collection fact', async () => {
+    const scans: OsvScan[] = [
+      criticalScan(['package-lock.json']),
+      { ...criticalScan([]), status: 'no_lockfiles', version: null, hits: [], packageCount: 0 },
+      { ...criticalScan([]), status: 'missing', version: null, hits: [], packageCount: 0 },
+      { ...criticalScan(['package-lock.json']), status: 'error', hits: [] },
+      { failed: 'there was no repository to scan' },
+    ];
+    const founds: LockfilesFound[] = [{ lockfiles: ['package-lock.json', 'apps/web/yarn.lock'] }, { lockfiles: [] }, { failed: 'the repository folder does not exist' }];
+    const runs: PlacedFact[][] = [];
+    for (const scan of scans) runs.push(await recordOsvScan((await recorderOverMemory()).recorder, 'repository', scan));
+    for (const found of founds) runs.push(await recordLockfiles((await recorderOverMemory()).recorder, 'repository', found));
+    for (const placed of runs) {
+      for (const p of placed) expect(checkFact(p.fact)).toEqual({ ok: true });
+      expect(placed.map((p) => p.fact.kind).filter((k) => k === 'collection')).toEqual(['collection']);
+      expect(placed.at(-1)!.fact.kind).toBe('collection');
+    }
   });
 
   it('refuses a path that is absolute or leaves the repository, and records nothing of it', async () => {

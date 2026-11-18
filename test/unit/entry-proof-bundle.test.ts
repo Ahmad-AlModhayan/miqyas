@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FsStore, nodeSha256 } from '../../src/entry/fs-store.js';
 import { buildRunOpen, runWithProofBundle } from '../../src/entry/proof-bundle.js';
 import { verifyIntact } from '../../src/kernel/verify.js';
-import { independentCheckpoint, utf8 } from '../kernel-helpers.js';
+import { collectionFact, independentCheckpoint, utf8 } from '../kernel-helpers.js';
 
 let tmp: string;
 let dir: string;
@@ -25,6 +25,19 @@ let tick = 0;
 const clock = () => new Date(Date.UTC(2026, 10, 17, 10, 15, tick++));
 const lines = (ledger: string) => ledger.split('\n').filter((l) => l !== '');
 const OPEN = { format: 1, note: 'what the run knew' };
+
+/** Facts a collector could record (docs/FOUNDATION.md §3): a measurement, and a served file named by its blob. */
+const SAMPLE = { kind: 'sample', v: 1, by: 'test-probe@1', run: 1, subject: 'target', body: { name: 'first paint', value: 812, unit: 'ms' } };
+const asset = (blob: { digest: string; size: number; mediaType: string }) => ({
+  kind: 'asset',
+  v: 1,
+  by: 'test-worker@1',
+  run: 1,
+  subject: 'target',
+  body: { from: 'served', name: 'https://app.test/' },
+  blobs: { content: blob },
+});
+const closing = collectionFact({ by: 'test-worker@1', subject: 'target', setOut: 'the page', counts: { assets: 1 } });
 
 async function listFiles(root: string, prefix = ''): Promise<string[]> {
   const out: string[] = [];
@@ -44,7 +57,8 @@ describe('a run with a proof bundle', () => {
       { dir, runId: RUN, open: OPEN, now: clock, print: (line) => printed.push(line) },
       async (recorder) => {
         const blob = await recorder.putBlob(utf8('<html>evidence</html>'), 'text/html');
-        await recorder.record('fact', { kind: 'page', blobs: { body: blob } });
+        await recorder.record('fact', asset(blob));
+        await recorder.record('fact', closing);
         await recorder.record('verdict', { claim: 'c1', result: 'pass' });
         return { result: 7, fold: { verdict: 'pass' } };
       },
@@ -61,14 +75,15 @@ describe('a run with a proof bundle', () => {
     expect(records.map((r) => [r.seq, r.t])).toEqual([
       [0, 'run.open'],
       [1, 'fact'],
-      [2, 'verdict'],
-      [3, 'run.seal'],
+      [2, 'fact'],
+      [3, 'verdict'],
+      [4, 'run.seal'],
     ]);
     expect(records[0]!.body).toEqual(OPEN);
     expect(records[0]!.at).toBe('2026-11-17T10:15:00.000Z');
-    expect(records[3]!.body).toEqual({
+    expect(records[4]!.body).toEqual({
       format: 1,
-      counts: { records: 4, byType: { fact: 1, 'run.open': 1, 'run.seal': 1, verdict: 1 } },
+      counts: { records: 5, byType: { fact: 2, 'run.open': 1, 'run.seal': 1, verdict: 1 } },
       result: { verdict: 'pass' },
     });
 
@@ -78,7 +93,7 @@ describe('a run with a proof bundle', () => {
     const [origin, size, root] = checkpoint.split('\n') as [string, string, string];
     expect(origin).toBe(RUN);
     expect(printed).toEqual([`proof bundle head: ${size} records, root ${root}`]);
-    expect(size).toBe('4');
+    expect(size).toBe('5');
 
     expect((await verifyIntact(new FsStore(dir), nodeSha256)).ok).toBe(true);
   });
@@ -87,7 +102,7 @@ describe('a run with a proof bundle', () => {
     tick = 0;
     let seenMidRun = '';
     await runWithProofBundle({ dir, runId: RUN, open: OPEN, now: clock, print: () => undefined }, async (recorder) => {
-      await recorder.record('fact', { kind: 'page' });
+      await recorder.record('fact', SAMPLE);
       seenMidRun = await readFile(path.join(dir, 'ledger.jsonl'), 'utf8');
       return { result: 0, fold: null };
     });
@@ -97,7 +112,7 @@ describe('a run with a proof bundle', () => {
   it('holds no absolute path and not the folder the run was made in, so a copy elsewhere still verifies', async () => {
     tick = 0;
     await runWithProofBundle({ dir, runId: RUN, open: OPEN, now: clock, print: () => undefined }, async (recorder) => {
-      await recorder.record('fact', { kind: 'page' });
+      await recorder.record('fact', SAMPLE);
       return { result: 0, fold: null };
     });
     const text = (await readFile(path.join(dir, 'ledger.jsonl'), 'utf8')) + (await readFile(path.join(dir, 'checkpoint'), 'utf8'));
@@ -120,7 +135,7 @@ describe('a run with a proof bundle', () => {
     const printed: string[] = [];
     await expect(
       runWithProofBundle({ dir, runId: RUN, open: OPEN, now: clock, print: (l) => printed.push(l) }, async (recorder) => {
-        await recorder.record('fact', { kind: 'page' });
+        await recorder.record('fact', SAMPLE);
         throw new Error('the run broke');
       }),
     ).rejects.toThrow('the run broke');
@@ -160,7 +175,7 @@ describe('a run that is cut short', () => {
     tick = 0;
     await expect(
       runWithProofBundle({ dir, runId: RUN, open: OPEN, now: clock, print: () => undefined }, async (recorder) => {
-        await recorder.record('fact', { kind: 'page' });
+        await recorder.record('fact', SAMPLE);
         throw new Error('the process died');
       }),
     ).rejects.toThrow();
