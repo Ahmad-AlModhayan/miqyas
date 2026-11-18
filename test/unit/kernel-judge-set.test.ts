@@ -491,8 +491,10 @@ describe('the view, the read set, the depth and the kind of assurance', () => {
     // The item was derived from 1, which was derived from 2, which withholds a field: the verdict rests on it.
     expect(depth(at(2, source({ withheld: ['score'] })), at(1, source({ from: [2] })), at(5, { ...item(9), from: [1] }), at(6, done()))).toBe('measured');
     expect(depth(at(2, source()), at(1, source({ from: [2] })), at(5, { ...item(9), from: [1] }), at(6, done()))).toBe('derived');
-    // A source that is not among the facts given adds nothing; a loop of from ends.
-    expect(depth(at(5, { ...item(9), from: [99] }), at(6, done()))).toBe('derived');
+    // A source the judge can't see is an input that isn't in the bundle (ALGORITHMS A8), here or further back.
+    expect(depth(at(5, { ...item(9), from: [99] }), at(6, done()))).toBe('measured');
+    expect(depth(at(1, source({ from: [99] })), at(5, { ...item(9), from: [1] }), at(6, done()))).toBe('measured');
+    // A loop of from ends.
     expect(depth(at(1, source({ from: [2] })), at(2, source({ from: [1], withheld: ['x'] })), at(5, { ...item(9), from: [1] }), at(6, done()))).toBe('measured');
   });
 });

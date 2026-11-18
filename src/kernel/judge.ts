@@ -284,25 +284,27 @@ function collections(inView: readonly PlacedFact[]): { [by: string]: Json } {
 }
 
 /**
- * docs/ALGORITHMS.md A8, over the facts read and, through `from`, every fact among those given that they were derived
- * from. A fact that lists withheld fields makes the verdict `measured`: the judge does not yet tell which fields an
- * expression reads, so it takes the cautious answer.
+ * docs/ALGORITHMS.md A8, over the facts read and, through `from`, every fact they were derived from. A `from` source
+ * that isn't among the facts given is an input the judge can't see, so it can't be re-run: `measured`. A fact that
+ * lists withheld fields makes the verdict `measured` too: the judge does not yet tell which fields an expression
+ * reads, so it takes the cautious answer.
  */
 function depth(read: readonly PlacedFact[], given: readonly PlacedFact[]): Verdict['depth'] {
   const bySeq = new Map(given.map(({ seq, fact }) => [seq, fact]));
-  const rests: Fact[] = [];
+  const reached: Fact[] = [];
   const seen = new Set<number>();
   const queue = read.map(({ seq }) => seq);
   while (queue.length > 0) {
     const seq = queue.pop() as number;
-    const fact = bySeq.get(seq);
-    if (seen.has(seq) || fact === undefined) continue;
+    if (seen.has(seq)) continue;
     seen.add(seq);
-    rests.push(fact);
+    const fact = bySeq.get(seq);
+    if (fact === undefined) return 'measured';
+    reached.push(fact);
     queue.push(...(fact.from ?? []));
   }
-  if (rests.some((fact) => (fact.withheld?.length ?? 0) > 0)) return 'measured';
-  if (rests.some((fact) => fact.from !== undefined)) return 'derived';
+  if (reached.some((fact) => (fact.withheld?.length ?? 0) > 0)) return 'measured';
+  if (reached.some((fact) => fact.from !== undefined)) return 'derived';
   return 'facts';
 }
 

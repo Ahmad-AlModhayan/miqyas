@@ -179,7 +179,8 @@ describe('the judge', () => {
     const loaded = await loadClaim(encode(scoreClaim()), sha256);
     const depthOf = (...facts: Fact[]) => judgeSet(loaded, { subject: 'repository', facts: placed(...facts) }).depth;
     expect(depthOf(item(1, { withheld: ['score'] }), complete())).toBe('measured');
-    expect(depthOf(item(1, { from: [1] }), complete())).toBe('derived');
+    expect(depthOf(item(1, { from: [4] }), complete())).toBe('derived'); // derived from the collection fact, at 4
+    expect(depthOf(item(1, { from: [1] }), complete())).toBe('measured'); // nothing given at 1: an input it can't see
     expect(depthOf(item(1, { withheld: ['score'], from: [1] }), complete())).toBe('measured');
     expect(depthOf(item(1), complete())).toBe('facts');
     // A fact outside the view withholds nothing from this claim.
