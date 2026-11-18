@@ -9,7 +9,17 @@ export type Fact = {
   by: string;
   run: number;
   subject: string;
+  /** The origin it was observed at, for facts about network traffic. */
+  origin?: string;
+  /** Where it was measured: screen, route, file, table, session label, step. */
+  place?: Record<string, string>;
+  /** The ledger position of the gate record that allowed the action behind it. */
+  effect?: number;
+  /** Who caused the traffic or the change this fact records. A kind that records traffic requires it. */
+  cause?: 'page' | 'plan' | 'probe' | 'crawl';
   body: Json;
+  /** Large payloads, by digest. */
+  blobs?: Record<string, { digest: string; size: number; mediaType: string }>;
   /** The facts this one was derived from, by ledger position. */
   from?: number[];
   /** Fields of `body` that rest on a value the collector did not keep (docs/FOUNDATION.md §3). */
