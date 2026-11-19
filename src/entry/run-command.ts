@@ -103,7 +103,9 @@ export interface NewPathSettings {
  * The collectors run first. The --fail-on claim reads the bundle's `finding` facts, whoever recorded them, and only the
  * `collection` facts of the collectors that record findings, and the run supplies the `finding` kind only when one of
  * its collectors records it: so the claim never passes because nothing looked for findings, and no other collector's
- * closing stands in for theirs. With no such collector, as in a real run today, it is blocked.
+ * closing stands in for theirs. The claim is told which collectors record findings, and is covered only once every
+ * one has closed complete: one that never closed is not read as having found nothing. With no such collector, as in
+ * a real run today, it is blocked.
  */
 export async function judgeNewPath(recorder: BundleRecorder, settings: NewPathSettings): Promise<Verdict[]> {
   const collectors = settings.collectors ?? [];
@@ -114,7 +116,7 @@ export async function judgeNewPath(recorder: BundleRecorder, settings: NewPathSe
     const finders = collectors.filter((c) => c.records.includes('finding')).map((c) => c.by);
     const facts = failOnFacts(await recorder.recorded(), finders);
     const supplies = finders.length > 0 ? { supplies: { kinds: ['finding'] } } : {};
-    verdicts.push(...(await runFailOn(recorder, { severity: settings.failOn, subject: TARGET_SUBJECT, facts, ...supplies })));
+    verdicts.push(...(await runFailOn(recorder, { severity: settings.failOn, subject: TARGET_SUBJECT, facts, finders, ...supplies })));
   }
   return verdicts;
 }

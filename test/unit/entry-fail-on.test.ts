@@ -18,7 +18,8 @@ import { type Given, advisoryFact, collectionFact, done, finding, judge, loadFil
 
 /** The `collection` fact of the collector that records the findings. */
 const closed = (status = 'complete'): Given => done(status, 'f@1');
-const supplied = { supplies: { kinds: ['finding'] } };
+/** What the run hands the claim when `f@1` is the one collector declared as recording findings. */
+const supplied = { supplies: { kinds: ['finding'] }, inputs: { finders: ['f@1'] } };
 
 /** The severities, least first, from the one list the findings keep. */
 const SEVERITIES = (Object.keys(SEVERITY_RANK) as FindingSeverity[]).sort((a, b) => SEVERITY_RANK[a] - SEVERITY_RANK[b]);
@@ -41,6 +42,14 @@ describe('the --fail-on claim at the judge: no confirmed finding at or above the
       const loaded = await loadFile(await claimFile(severity));
       expect(loaded.claim.title).toBe(`no confirmed finding at or above ${severity}`);
       expect(loaded.failedOn).toBe(`a confirmed ${severity} finding`);
+    }
+  });
+
+  it('shows in every file that a declared finder which never closed leaves the claim not known', async () => {
+    for (const severity of SEVERITIES) {
+      const file = await claimFile(severity);
+      const two = file.examples.find((e: { inputs?: { finders?: string[] } }) => (e.inputs?.finders ?? []).length === 2);
+      expect(two).toMatchObject({ expect: 'not_checked', facts: [{ kind: 'collection', by: 'example', body: { status: 'complete' } }] });
     }
   });
 
@@ -67,6 +76,10 @@ describe('the --fail-on claim at the judge: no confirmed finding at or above the
     const loaded = await loadFile(await claimFile('high'));
     expect(judge(loaded, place([closed('failed')]), supplied)).toMatchObject({ verdict: 'not_checked', reason: 'coverage not met' });
     expect(judge(loaded, place([]), supplied)).toMatchObject({ verdict: 'not_checked', reason: 'coverage not met' });
+    // Told of a second declared finder that never closed, or not told which finders were declared: not covered.
+    const two = { ...supplied, inputs: { finders: ['f@1', 'f2@1'] } };
+    expect(judge(loaded, place([closed()]), two)).toMatchObject({ verdict: 'not_checked', reason: 'coverage not met' });
+    expect(judge(loaded, place([closed()]), { supplies: supplied.supplies })).toMatchObject({ verdict: 'not_checked', reason: 'coverage not met' });
     expect(judge(loaded, place([{ kind: 'finding', by: 'f@1', body: { state: 'confirmed' } }, closed()]), supplied)).toMatchObject({
       verdict: 'not_checked',
       reason: 'uncertain items: an expression gave an error',
@@ -132,7 +145,7 @@ describe('--fail-on through the run with --proof-bundle', () => {
   });
 
   const withFindings = (severity: FindingSeverity, facts: PlacedFact[]) => (recorder: Parameters<typeof runFailOn>[0]) =>
-    runFailOn(recorder, { severity, subject: TARGET_SUBJECT, facts, supplies: { kinds: ['finding'] } });
+    runFailOn(recorder, { severity, subject: TARGET_SUBJECT, facts, finders: ['f@1'], supplies: { kinds: ['finding'] } });
   const about = (given: Given[]) => place(given).map((p) => ({ ...p, fact: { ...p.fact, subject: TARGET_SUBJECT } }));
 
   it.each([
@@ -179,16 +192,16 @@ describe('--fail-on end to end: findings recorded through the recorder, the clai
   const FINDER = 'finder@1';
   type Found = { severity: FindingSeverity; state: 'confirmed' | 'unconfirmed' };
   /** How a collector looks at one subject: in a run of its own, the findings it records, then how it closes (null: it doesn't). */
-  type Look = { subject: string; found?: Found[]; status?: 'complete' | 'failed' | null };
+  type Look = { subject: string; found?: Found[]; status?: 'complete' | 'partial' | 'failed' | null };
   const fact = (recorder: RunRecorder, body: unknown) => recorder.record('fact', body as Json);
 
   /** A collector that looks for findings: each one rests on the advisory it read, as the `finding` kind requires. */
-  const finder = (looks: Look[]): NewPathCollector => ({
-    by: FINDER,
+  const finder = (looks: Look[], by = FINDER): NewPathCollector => ({
+    by,
     records: ['dep.advisory', 'finding'],
     collect: async (recorder) => {
       for (const [i, look] of looks.entries()) {
-        const envelope = { v: 1, by: FINDER, run: i + 1, subject: look.subject };
+        const envelope = { v: 1, by, run: i + 1, subject: look.subject };
         for (const [j, f] of (look.found ?? []).entries()) {
           const read = await fact(recorder, { ...advisoryFact(`GHSA-${i}-${j}`, f.severity), ...envelope });
           await fact(recorder, { ...finding(f.severity, f.state, [read]), ...envelope });
@@ -264,5 +277,35 @@ describe('--fail-on end to end: findings recorded through the recorder, the clai
     const { exit, verdicts } = await runWith('unclosed', [unclosed, other]);
     expect(exit).toBe(3);
     expect(verdicts.map((v) => [v.verdict, v.reason])).toEqual([['not_checked', 'coverage not met']]);
+  });
+
+  describe('two collectors declared as recording findings: covered only once every one closed complete', () => {
+    const SECOND = 'finder2@1';
+    const clean = finder([{ subject: TARGET_SUBJECT }]);
+
+    it('is not known while the second has not closed, though the first closed complete with no finding: exit 3', async () => {
+      const { exit, verdicts } = await runWith('two-unclosed', [clean, finder([{ subject: TARGET_SUBJECT, status: null }], SECOND)]);
+      expect(exit).toBe(3);
+      expect(verdicts.map((v) => [v.verdict, v.reason, v.coverage.met])).toEqual([['not_checked', 'coverage not met', false]]);
+    });
+
+    it.each(['failed', 'partial'] as const)('is not known while the second closed %s: exit 3', async (status) => {
+      const { exit, verdicts } = await runWith(`two-${status}`, [clean, finder([{ subject: TARGET_SUBJECT, status }], SECOND)]);
+      expect(exit).toBe(3);
+      expect(verdicts.map((v) => [v.verdict, v.reason, v.coverage.met])).toEqual([['not_checked', 'coverage not met', false]]);
+    });
+
+    it('passes once both closed complete with no finding: exit 0', async () => {
+      const { exit, verdicts } = await runWith('two-complete', [clean, finder([{ subject: TARGET_SUBJECT }], SECOND)]);
+      expect(exit).toBe(0);
+      expect(verdicts.map((v) => [v.verdict, v.coverage.met])).toEqual([['pass', true]]);
+    });
+
+    it('still fails on a confirmed finding at the threshold while the second has not closed: exit 1', async () => {
+      const found = finder([{ subject: TARGET_SUBJECT, found: [{ severity: 'high', state: 'confirmed' }] }]);
+      const { exit, verdicts } = await runWith('two-found', [found, finder([{ subject: TARGET_SUBJECT, status: null }], SECOND)]);
+      expect(exit).toBe(1);
+      expect(verdicts.map((v) => [v.verdict, v.coverage.met])).toEqual([['fail', false]]);
+    });
   });
 });

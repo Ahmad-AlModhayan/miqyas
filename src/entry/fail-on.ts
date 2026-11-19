@@ -28,6 +28,12 @@ export interface FailOnOptions {
   subject: string;
   /** The facts recorded so far that the claim may read. */
   facts: readonly PlacedFact[];
+  /**
+   * The collectors declared as recording findings, by the name their facts carry in `by`. The claim reads them as
+   * `ctx.inputs.finders` and is covered only once each has closed complete about the subject: a declared finder that
+   * never closed wrote no `collection` fact, so without this list its silence would read as nothing to see.
+   */
+  finders: readonly string[];
   supplies?: JudgeInput['supplies'];
 }
 
@@ -80,6 +86,7 @@ export async function runFailOn(recorder: RunRecorder, options: FailOnOptions): 
     const verdict = judgeClaim(loaded, {
       subject,
       facts: options.facts,
+      inputs: { finders: [...options.finders] },
       ...(options.supplies !== undefined ? { supplies: options.supplies } : {}),
     });
     await recorder.record('verdict', verdict);
