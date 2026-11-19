@@ -243,6 +243,52 @@ describe('unmatched: every quantifier against every mode, with a left item with 
   });
 });
 
+describe('unmatched fail: a lone left item is a counterexample only when coverage is met', () => {
+  // FOUNDATION §4 rule 4: an absence is never a pass without coverage, and no more a fail. Until the claim's `covered`
+  // holds a partner can still arrive, so the lone item is uncertain. A matched pair that decides the claim needs no
+  // coverage (A1), so it decides in every state.
+  type Coverage = 'met' | 'not met' | 'erroring' | 'no collection';
+  const COVERAGES: Coverage[] = ['met', 'not met', 'erroring', 'no collection'];
+  const closing = (c: Coverage): Given[] =>
+    c === 'met' ? [done()] : c === 'not met' ? [done('failed')] : c === 'erroring' ? [{ kind: 'collection', by: 'c@1', body: {} }] : [];
+  const holding = [leftItem(1, 1), rightItem(1, 1)];
+  const notHolding = [leftItem(1, 1), rightItem(1, 2)];
+  type Beside = 'alone' | 'a pair that holds' | 'a pair that does not hold';
+  const pairFor: Record<Beside, Given[]> = { alone: [], 'a pair that holds': holding, 'a pair that does not hold': notHolding };
+  // The lone left item is at position 1 alone, at position 3 beside a pair (positions 1 and 2).
+  type Expected = { verdict: string; reason: string | undefined; shown: number[] };
+  const TABLE: [PairQuantifier, Beside, { met: Expected; otherwise: Expected }][] = [
+    ['every', 'alone', { met: fail([1]), otherwise: notChecked(COVERAGE) }],
+    ['every', 'a pair that holds', { met: fail([3]), otherwise: notChecked(COVERAGE) }],
+    ['every', 'a pair that does not hold', { met: fail([1, 2, 3]), otherwise: fail([1, 2]) }],
+    ['none', 'alone', { met: fail([1]), otherwise: notChecked(COVERAGE) }],
+    ['none', 'a pair that does not hold', { met: fail([3]), otherwise: notChecked(COVERAGE) }],
+    ['none', 'a pair that holds', { met: fail([1, 2, 3]), otherwise: fail([1, 2]) }],
+    ['some', 'alone', { met: fail(), otherwise: notChecked(COVERAGE) }],
+    ['some', 'a pair that does not hold', { met: fail(), otherwise: notChecked(COVERAGE) }],
+    ['some', 'a pair that holds', { met: pass([1, 2]), otherwise: pass([1, 2]) }],
+  ];
+  for (const [q, beside, expected] of TABLE) {
+    for (const c of COVERAGES) {
+      const want = c === 'met' ? expected.met : expected.otherwise;
+      it(`${q}, the lone left item ${beside === 'alone' ? 'alone' : `beside ${beside}`}, coverage ${c}: ${want.verdict}${want.reason ? ` (${want.reason})` : ''}`, async () => {
+        const v = await judge(q, [...pairFor[beside], leftItem(2, 1), ...closing(c)], { unmatched: 'fail' });
+        expect(row(v)).toEqual(want);
+        expect(v.coverage.met).toBe(c === 'met');
+        expect(v.items.unmatched).toBe(1);
+      });
+    }
+  }
+
+  it('the record counts the lone item as uncertain while coverage is not met, and as a counterexample once it is', async () => {
+    const open = await judge('every', [leftItem(1, 1), done('failed')], { unmatched: 'fail' });
+    expect(open.items).toEqual({ held: 0, failed: 0, outside: 0, uncertain: 1, unmatched: 1 });
+    expect(open.vacuous).toBeUndefined();
+    const closed = await judge('every', [leftItem(1, 1), done()], { unmatched: 'fail' });
+    expect(closed.items).toEqual({ held: 0, failed: 1, outside: 0, uncertain: 0, unmatched: 1 });
+  });
+});
+
 describe('usable over a pair', () => {
   const extra = { usable: 'left.u > 0 && right.u > 0' };
 

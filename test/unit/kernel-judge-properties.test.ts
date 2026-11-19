@@ -325,10 +325,11 @@ describe('what the judge guarantees for pair claims (ALGORITHMS A6)', () => {
     await forAllPairs((g, loaded, claim, facts) => {
       const before = judgeOver(loaded, place(facts), none);
       const q = claim.quantifier;
-      // Under `unmatched: 'fail'` a fail can rest on a left item with no partner, which is an absence: a partner added
-      // later ends it. That is the one exception A6.3 states; the view is closed before the judge runs, so no partner
-      // arrives late (FOUNDATION §4, "Views"). Those claims are left out here.
-      const settled = claim.unmatched !== 'fail' && (((q === 'every' || q === 'none') && before.verdict === 'fail') || (q === 'some' && before.verdict === 'pass'));
+      // Under `unmatched: 'fail'` a covered fail can rest on a left item with no partner, which is an absence: a partner
+      // added later ends it, coverage or not. That is the one exception A6.3 states, so those fails are left out here.
+      // An uncovered fail under `fail` rests on a matched pair, and a pass of `some` on a witness pair: both are kept.
+      const fails = (q === 'every' || q === 'none') && before.verdict === 'fail' && (claim.unmatched !== 'fail' || !before.coverage.met);
+      const settled = fails || (q === 'some' && before.verdict === 'pass');
       if (!settled) return;
       seen++;
       const after = judgeOver(loaded, [...place(facts), ...place(randomPairFacts(g), facts.length + 1)], none);

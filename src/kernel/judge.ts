@@ -206,9 +206,11 @@ function factsInView(view: { kinds: string[]; by?: string[] }, input: JudgeInput
 
 /**
  * How a claim's items or pairs were sorted (docs/ALGORITHMS.md A1): `yes` holds (or for `count`, is inside the claim),
- * `no` fails, each with the positions it shows; the rest outside, or uncertain by an error or as unusable.
+ * `no` fails, each with the positions it shows; the rest outside, or uncertain by an error or as unusable. `open`: the
+ * left items of a `pair` claim under `unmatched: 'fail'` with no partner while coverage is not met, uncertain because a
+ * partner can still arrive. They only arise when coverage is not met, so the table's reason for them is that one.
  */
-type Groups = { yes: number[][]; no: number[][]; outside: number; errored: number; unusable: number };
+type Groups = { yes: number[][]; no: number[][]; outside: number; errored: number; unusable: number; open?: number };
 
 /** The table of ALGORITHMS A1 for every quantifier but `count`, over items or pairs. */
 function decideTable(quantifier: Exclude<Quantifier, 'count'>, g: Groups, met: boolean, vacuousRule: 'pass' | 'not_checked' | undefined): Outcome {
@@ -269,7 +271,8 @@ function verdictRecord(
   more: { unmatched?: number },
 ): Verdict {
   const { claim } = loaded;
-  const vacuous = (claim.quantifier === 'every' || claim.quantifier === 'none') && g.yes.length + g.no.length + g.errored + g.unusable === 0;
+  const uncertain = g.errored + g.unusable + (g.open ?? 0);
+  const vacuous = (claim.quantifier === 'every' || claim.quantifier === 'none') && g.yes.length + g.no.length + uncertain === 0;
   const missing = unmet(claim.needs, input);
   const add = missing.map(({ need, name }) => `${need}:${name}`);
   let outcome = decided;
@@ -283,7 +286,7 @@ function verdictRecord(
     verdict: outcome.verdict,
     ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
     ...(outcome.verdict === 'blocked' ? { add } : {}),
-    items: { held: g.yes.length, failed: g.no.length, outside: g.outside, uncertain: g.errored + g.unusable, ...more },
+    items: { held: g.yes.length, failed: g.no.length, outside: g.outside, uncertain, ...more },
     read: inView.map(({ seq }) => seq),
     shown: outcome.shown,
     coverage,
@@ -360,7 +363,8 @@ type Keyed = { seq: number; body: Json; key: string };
  * item with no partner is not counted, as in A2's loop. Under `uncovered` an unmatched item means coverage is not met,
  * under `fail` it is a counterexample (counted as held for a `none` claim, as failed for the others), under `ignore` it
  * is left out. Under `fail`, an unmatched item is uncertain instead while an item on the right is uncertain, since that
- * item could be its partner: an error never makes a fail.
+ * item could be its partner (an error never makes a fail), and while coverage is not met, since a partner can still
+ * arrive (an absence never makes a fail without coverage). A matched pair decides at any coverage, as in A1.
  */
 export function judgePair(loaded: LoadedPairClaim, input: JudgeInput): Verdict {
   const { claim, compiled } = loaded;
@@ -407,19 +411,22 @@ export function judgePair(loaded: LoadedPairClaim, input: JudgeInput): Verdict {
     }
   }
 
+  const ctx = { collections: collections(inView), inputs: input.inputs ?? {} };
+  const covered = evaluate(compiled.covered, { ctx }) === 'true'; // an error is not covered
   const policy = claim.unmatched ?? 'uncovered';
   if (policy === 'fail') {
+    // An unmatched item is an absence, so it is a counterexample only once the view has ruled its partner out: when
+    // coverage is met and no item on the right is uncertain. Until then it is uncertain (FOUNDATION §4, rule 4).
     // A counterexample goes where A1's table looks for one: among the pairs that hold for a `none` claim, among those
     // that fail for an `every` claim. A `some` claim has no counterexample; an unmatched item is one more that is not a
     // witness, so it counts as failed, and the claim fails, covered, with nothing shown, as any `some` that finds none.
     const against = claim.quantifier === 'none' ? groups.yes : groups.no;
     for (const seq of unmatched) {
       if (right.uncertain > 0) groups.errored++;
+      else if (!covered) groups.open = (groups.open ?? 0) + 1;
       else against.push([seq]);
     }
   }
-  const ctx = { collections: collections(inView), inputs: input.inputs ?? {} };
-  const covered = evaluate(compiled.covered, { ctx }) === 'true'; // an error is not covered
   const met = covered && (policy !== 'uncovered' || unmatched.length === 0);
   const decided = decideTable(claim.quantifier, groups, met, claim.vacuous);
   return verdictRecord(loaded, input, inView, groups, decided, { rule: claim.covered, met, saw: ctx }, { unmatched: unmatched.length });
