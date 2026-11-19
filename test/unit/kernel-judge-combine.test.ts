@@ -101,6 +101,68 @@ describe('a combination claim', () => {
   });
 });
 
+describe('what a combination records', () => {
+  const somePart = part(setClaimFile('some', { fail: [item(1)], pass: [item(9)] }), 'part.some');
+  const overItems = (how: 'all' | 'any') => ({
+    ...combination(how, [setPart, somePart]),
+    examples: [
+      { name: 'fails', expect: 'fail', facts: [item(1), done()] },
+      { name: 'passes', expect: 'pass', facts: [item(9), done()] },
+      { name: 'not collected', expect: 'not_checked', facts: [done('failed')] },
+    ],
+  });
+
+  it('the reason comes from the parts that gave the answer, not from the first part that has one', async () => {
+    // The set part is not_checked (its item errors) and comes first; the pair part is blocked, which decides `all`.
+    const loaded = await loadFile(combination('all', [setPart, { ...pairPart, needs: { kinds: ['t.left'] } }]));
+    const v = judge(loaded, place([item('x'), leftItem(1, 1), rightItem(1, 1), done()]));
+    expect(v.parts?.map((p) => [p.verdict, p.reason])).toEqual([
+      ['not_checked', 'uncertain items: an expression gave an error'],
+      ['blocked', 'no collector records a kind it needs'],
+    ]);
+    expect(v.verdict).toBe('blocked');
+    expect(v.reason).toBe('no collector records a kind it needs');
+  });
+
+  it('what it shows comes from the parts that gave the answer only', async () => {
+    // 1 fails the every part and is its counterexample; 2 is the some part's witness.
+    const facts = place([item(1), item(9), done()]);
+    const all = judge(await loadFile(overItems('all')), facts);
+    expect(all.parts?.map((p) => [p.verdict, p.shown])).toEqual([
+      ['fail', [1]],
+      ['pass', [2]],
+    ]);
+    expect([all.verdict, all.shown]).toEqual(['fail', [1]]);
+    const any = judge(await loadFile(overItems('any')), facts);
+    expect([any.verdict, any.shown]).toEqual(['pass', [2]]);
+  });
+
+  it('its depth is the deepest of its parts', async () => {
+    const loaded = await loadFile(combination('all'));
+    // The set part's item is derived from position 1; the pair part reads raw facts.
+    const v = judge(loaded, place([{ kind: 't.raw', by: 'c@1', body: {} }, { ...item(9), from: [1] }, leftItem(1, 1), rightItem(1, 1), done()]));
+    expect(v.parts?.map((p) => p.depth)).toEqual(['derived', 'facts']);
+    expect(v.depth).toBe('derived');
+  });
+
+  it('it is vacuous when a part is, and says nothing of it otherwise', async () => {
+    const loaded = await loadFile(combination('all'));
+    const v = judge(loaded, place([leftItem(1, 1), rightItem(1, 1), done()]));
+    expect(v.parts?.map((p) => p.vacuous)).toEqual([true, undefined]);
+    expect(v.vacuous).toBe(true);
+    expect(judge(loaded, place([item(9), leftItem(1, 1), rightItem(1, 1), done()]))).not.toHaveProperty('vacuous');
+  });
+
+  it('its coverage is met only when every part’s is', async () => {
+    const loaded = await loadFile(combination('all'));
+    // The left item at 2 has no partner, so the pair part's coverage is not met; the set part's is.
+    const v = judge(loaded, place([item(9), leftItem(1, 1), done()]));
+    expect(v.parts?.map((p) => p.coverage.met)).toEqual([true, false]);
+    expect(v.coverage).toEqual({ rule: 'all', met: false, saw: null });
+    expect(judge(loaded, place([item(9), leftItem(1, 1), rightItem(1, 1), done()])).coverage.met).toBe(true);
+  });
+});
+
 describe('the loader refuses a combination', () => {
   const refused = (file: unknown) => expect(loadFile(file)).rejects;
 
