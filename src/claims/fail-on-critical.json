@@ -1,0 +1,41 @@
+{
+  "id": "fail-on.critical",
+  "version": 1,
+  "title": "no confirmed finding at or above critical",
+  "needs": { "kinds": ["finding"] },
+  "view": { "kinds": ["finding", "collection"] },
+  "shape": "set",
+  "quantifier": "none",
+  "from": "finding",
+  "where": "item.severity in [\"critical\"]",
+  "holds": "item.state == \"confirmed\"",
+  "covered": "ctx.collections.size() > 0 && ctx.collections.all(by, ctx.collections[by].status == \"complete\")",
+  "vacuous": "pass",
+  "examples": [
+    {
+      "name": "a confirmed critical finding",
+      "expect": "fail",
+      "facts": [
+        { "kind": "finding", "by": "example", "body": { "severity": "critical", "state": "confirmed" } },
+        { "kind": "collection", "by": "example", "body": { "status": "complete" } }
+      ]
+    },
+    {
+      "name": "an unconfirmed critical finding, and a confirmed high one",
+      "expect": "pass",
+      "facts": [
+        { "kind": "finding", "by": "example", "body": { "severity": "critical", "state": "unconfirmed" } },
+        { "kind": "finding", "by": "example", "body": { "severity": "high", "state": "confirmed" } },
+        { "kind": "collection", "by": "example", "body": { "status": "complete" } }
+      ]
+    },
+    {
+      "name": "a collector that did not finish",
+      "expect": "not_checked",
+      "facts": [
+        { "kind": "finding", "by": "example", "body": { "severity": "critical", "state": "unconfirmed" } },
+        { "kind": "collection", "by": "example", "body": { "status": "failed" } }
+      ]
+    }
+  ]
+}

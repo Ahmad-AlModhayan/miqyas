@@ -5,7 +5,8 @@
 import type { RunRecorder } from '../engine/recorder.js';
 import { type SealResult, type Verdict, sealResult } from '../kernel/judge.js';
 import { runCheck13 } from './check13.js';
-import { type Severity, TARGET_SUBJECT, runFailOn } from './fail-on.js';
+import type { FailOnThreshold } from '../proof-core/findings.js';
+import { TARGET_SUBJECT, runFailOn } from './fail-on.js';
 import { type ProofBundleRun, runWithProofBundle } from './proof-bundle.js';
 
 /** The parts of a run, as arguments: how to open the driver, how to run with it, how to print what the run gave. */
@@ -69,7 +70,7 @@ export function bundledExit(current: CurrentPathResult, sealed: SealResult): Bun
 export interface NewPathSettings {
   profile?: string;
   repoPath?: string;
-  failOn?: Severity | 'none';
+  failOn?: FailOnThreshold;
 }
 
 /**

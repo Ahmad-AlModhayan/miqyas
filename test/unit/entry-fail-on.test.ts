@@ -6,11 +6,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SEVERITIES, type Severity, TARGET_SUBJECT, failOnClaimFile, runFailOn } from '../../src/entry/fail-on.js';
+import { TARGET_SUBJECT, failOnClaimPath, runFailOn } from '../../src/entry/fail-on.js';
 import { type CurrentPathResult, judgeNewPath, runBundled } from '../../src/entry/run-command.js';
 import { verifyBundle } from '../../src/entry/verify.js';
 import type { PlacedFact } from '../../src/kernel/fact.js';
 import { sealResult } from '../../src/kernel/judge.js';
+import { type FindingSeverity, SEVERITY_RANK } from '../../src/proof-core/findings.js';
 import { type Given, judge, loadFile, place } from '../kernel-helpers.js';
 
 /** A finding as the agreed shape has it: its severity and state in the body, the facts it rests on in `from`. */
@@ -18,17 +19,32 @@ const finding = (severity: string, state: string, from?: number[]): Given => ({ 
 const closed = (status = 'complete'): Given => ({ kind: 'collection', by: 'f@1', body: { status } });
 const supplied = { supplies: { kinds: ['finding'] } };
 
+/** The severities, least first, from the one list the findings keep. */
+const SEVERITIES = (Object.keys(SEVERITY_RANK) as FindingSeverity[]).sort((a, b) => SEVERITY_RANK[a] - SEVERITY_RANK[b]);
+/** A shipped claim file, as data. */
+const claimFile = async (severity: FindingSeverity) => JSON.parse(await readFile(failOnClaimPath(severity), 'utf8'));
+
 describe('the --fail-on claim at the judge: no confirmed finding at or above the severity', () => {
+  it('is data in src/claims, one file per severity, each naming exactly the severities at or above it', async () => {
+    for (const severity of SEVERITIES) {
+      expect(path.relative(path.resolve('src', 'claims'), failOnClaimPath(severity))).toBe(`fail-on-${severity}.json`);
+      const file = await claimFile(severity);
+      expect(file.id).toBe(`fail-on.${severity}`);
+      const atOrAbove = SEVERITIES.filter((s) => SEVERITY_RANK[s] >= SEVERITY_RANK[severity]);
+      expect(file.where).toBe(`item.severity in [${atOrAbove.map((s) => JSON.stringify(s)).join(', ')}]`);
+    }
+  });
+
   it('loads for every severity, with its examples, and says what it means', async () => {
     for (const severity of SEVERITIES) {
-      const loaded = await loadFile(failOnClaimFile(severity));
+      const loaded = await loadFile(await claimFile(severity));
       expect(loaded.claim.title).toBe(`no confirmed finding at or above ${severity}`);
       expect(loaded.failedOn).toBe(`a confirmed ${severity} finding`);
     }
   });
 
   it('fails on a confirmed finding at or above the severity, and shows it', async () => {
-    const loaded = await loadFile(failOnClaimFile('high'));
+    const loaded = await loadFile(await claimFile('high'));
     for (const severity of ['high', 'critical']) {
       const v = judge(loaded, place([finding('low', 'confirmed'), finding(severity, 'confirmed'), closed()]), supplied);
       expect(v.verdict).toBe('fail');
@@ -37,7 +53,7 @@ describe('the --fail-on claim at the judge: no confirmed finding at or above the
   });
 
   it('passes when every finding at or above it is unconfirmed or there is none, once every collector closed complete', async () => {
-    const loaded = await loadFile(failOnClaimFile('high'));
+    const loaded = await loadFile(await claimFile('high'));
     const v = judge(loaded, place([finding('critical', 'unconfirmed'), finding('medium', 'confirmed'), closed()]), supplied);
     expect(v.verdict).toBe('pass');
     expect(v.items).toEqual({ held: 0, failed: 1, outside: 1, uncertain: 0 });
@@ -47,7 +63,7 @@ describe('the --fail-on claim at the judge: no confirmed finding at or above the
   });
 
   it('is not known while a collector has not closed complete, or a finding has no severity it knows', async () => {
-    const loaded = await loadFile(failOnClaimFile('high'));
+    const loaded = await loadFile(await claimFile('high'));
     expect(judge(loaded, place([closed('failed')]), supplied)).toMatchObject({ verdict: 'not_checked', reason: 'coverage not met' });
     expect(judge(loaded, place([]), supplied)).toMatchObject({ verdict: 'not_checked', reason: 'coverage not met' });
     expect(judge(loaded, place([{ kind: 'finding', by: 'f@1', body: { state: 'confirmed' } }, closed()]), supplied)).toMatchObject({
@@ -57,19 +73,19 @@ describe('the --fail-on claim at the judge: no confirmed finding at or above the
   });
 
   it('is blocked while no collector records findings, saying to add one; a confirmed finding still fails', async () => {
-    const loaded = await loadFile(failOnClaimFile('high'));
+    const loaded = await loadFile(await claimFile('high'));
     expect(judge(loaded, place([closed()]))).toMatchObject({ verdict: 'blocked', reason: 'no collector records a kind it needs', add: ['kind:finding'] });
     expect(judge(loaded, place([finding('critical', 'confirmed'), closed()])).verdict).toBe('fail');
   });
 
   it('reads through from: a finding derived from facts it was given is derived', async () => {
-    const loaded = await loadFile(failOnClaimFile('high'));
+    const loaded = await loadFile(await claimFile('high'));
     const facts = place([{ kind: 'dep.advisory', by: 'f@1', body: {} }, finding('high', 'confirmed', [1]), closed()]);
     expect(judge(loaded, facts, supplied).depth).toBe('derived');
   });
 
   it('folds like any claim: no special case', async () => {
-    const loaded = await loadFile(failOnClaimFile('medium'));
+    const loaded = await loadFile(await claimFile('medium'));
     const failing = judge(loaded, place([finding('medium', 'confirmed'), closed()]), supplied);
     const passing = judge(loaded, place([closed()]), supplied);
     expect(sealResult([failing.verdict, 'pass'])).toMatchObject({ verdict: 'fail', exit: 1 });
@@ -114,7 +130,7 @@ describe('--fail-on through the run with --proof-bundle', () => {
     }
   });
 
-  const withFindings = (severity: Severity, facts: PlacedFact[]) => (recorder: Parameters<typeof runFailOn>[0]) =>
+  const withFindings = (severity: FindingSeverity, facts: PlacedFact[]) => (recorder: Parameters<typeof runFailOn>[0]) =>
     runFailOn(recorder, { severity, subject: TARGET_SUBJECT, facts, supplies: { kinds: ['finding'] } });
   const about = (given: Given[]) => place(given).map((p) => ({ ...p, fact: { ...p.fact, subject: TARGET_SUBJECT } }));
 
