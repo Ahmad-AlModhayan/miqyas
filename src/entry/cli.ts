@@ -527,8 +527,9 @@ async function cmdRun(args: string[], o: Opts, inject: Injected, quiet = false):
   };
 
   // --proof-bundle: the run also writes a proof bundle into its folder as it goes, check 13 and the --fail-on claim are
-  // judged on the new path, and the run exits by their fold (docs/FOUNDATION.md §4, §5, §15). Without it the run is
-  // exactly what it was.
+  // judged on the new path, and the run exits by the rule in `bundledExit`, which takes their fold and the current
+  // path's code and is never greener than the current path (docs/FOUNDATION.md §4, §5, §15). The seal keeps the fold.
+  // Without it the run is exactly what it was.
   if (o['proof-bundle']) {
     return await runBundled(
       {
