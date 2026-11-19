@@ -3,7 +3,7 @@
 // generator is a small seeded one written here, so a failure names its seed and can be run again exactly.
 import { describe, expect, it } from 'vitest';
 import type { PlacedFact } from '../../src/kernel/fact.js';
-import { EFFECT_CLASSES, type EffectClass, type JudgeInput, type LoadedClaim, type Needs, type Quantifier, type Verdict } from '../../src/kernel/judge.js';
+import { EFFECT_CLASSES, type EffectClass, type JudgeInput, type LoadedClaim, type Needs, type Quantifier, type SetClaim, type Verdict } from '../../src/kernel/judge.js';
 import type { Json } from '../../src/kernel/ledger.js';
 import { type Given, done, item, judge as judgeOver, loadFile, place, setClaimFile } from '../kernel-helpers.js';
 
@@ -126,7 +126,7 @@ async function forAll(check: (g: Gen, loaded: LoadedClaim, facts: Given[], run: 
     if (!loadedBySeed.has(seed)) loadedBySeed.set(seed, loadFile(file));
     const loaded = await (loadedBySeed.get(seed) as Promise<LoadedClaim>);
     const facts = randomFacts(g);
-    const run = randomRun(g, loaded.claim.needs);
+    const run = randomRun(g, (loaded.claim as SetClaim).needs);
     try {
       check(g, loaded, facts, run);
     } catch (error) {
@@ -162,7 +162,7 @@ describe('what the judge guarantees for set claims (ALGORITHMS A6)', () => {
   it('3. persistence: a fail of every or none, and a pass of some, stay when facts are added', async () => {
     await forAll((g, loaded, facts, run) => {
       const before = judge(loaded, run, place(facts));
-      const q = loaded.claim.quantifier;
+      const q = (loaded.claim as SetClaim).quantifier;
       const settled = ((q === 'every' || q === 'none') && before.verdict === 'fail') || (q === 'some' && before.verdict === 'pass');
       if (!settled) return;
       const more = randomFacts(g);
@@ -180,7 +180,7 @@ describe('what the judge guarantees for set claims (ALGORITHMS A6)', () => {
     let seen = 0;
     await forAll((_g, loaded, facts, run) => {
       const v = judge(loaded, run, place(facts));
-      const q = loaded.claim.quantifier;
+      const q = (loaded.claim as SetClaim).quantifier;
       if ((q !== 'some' && v.verdict === 'pass') || (q === 'some' && v.verdict === 'fail')) {
         seen++;
         expect(v.coverage.met).toBe(true);
@@ -223,7 +223,7 @@ describe('what the judge guarantees for set claims (ALGORITHMS A6)', () => {
       const v = judge(loaded, run, place(facts));
       expect(v.verdict).not.toBe('pass');
       if (v.verdict === 'fail') {
-        expect(['every', 'none']).toContain(loaded.claim.quantifier);
+        expect(['every', 'none']).toContain((loaded.claim as SetClaim).quantifier);
         expect(v.shown.length).toBeGreaterThan(0);
       } else {
         expect(v.verdict).toBe('blocked');

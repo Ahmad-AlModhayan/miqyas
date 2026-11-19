@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadClaim } from '../../src/kernel/claim.js';
 import type { Fact, PlacedFact } from '../../src/kernel/fact.js';
-import { type JudgeInput, type Quantifier, REASONS, type Verdict, judgeSet } from '../../src/kernel/judge.js';
+import { type JudgeInput, type Quantifier, REASONS, type SetClaim, type Verdict, judgeClaim } from '../../src/kernel/judge.js';
 import type { Json } from '../../src/kernel/ledger.js';
 import { type Given, done, item, judge as judgeOver, loadFile, place, setClaimFile, sha256 } from '../kernel-helpers.js';
 
@@ -445,7 +445,7 @@ describe('reasons and what to add', () => {
 
   it("judges a claim's own examples with its needs for effect and kinds met", async () => {
     const loaded = await load('every', needs({ kinds: ['t.item'], effect: 'probe' }));
-    expect(loaded.claim.needs).toEqual({ kinds: ['t.item'], effect: 'probe' });
+    expect((loaded.claim as SetClaim).needs).toEqual({ kinds: ['t.item'], effect: 'probe' });
     // The inputs it needs are the examples' to give: without them its passing example is blocked, and it isn't loaded.
     const file = claimFile('every', needs({ kinds: ['t.item'], inputs: ['accounts'] }));
     const withoutInputs = { ...file, examples: file.examples.map(({ name, expect, facts }) => ({ name, expect, facts })) };
@@ -464,7 +464,7 @@ describe('the view, the read set, the depth and the kind of assurance', () => {
       { seq: 6, fact: { v: 1, run: 1, subject: 's', ...outsideItem(1) } as Fact },
     ];
     const loaded = await load('every', { where: 'item.w', view: { kinds: ['t.item', 'collection'], by: ['c@1'] } });
-    const v = judgeSet(loaded, { subject: 's', facts });
+    const v = judgeClaim(loaded, { subject: 's', facts });
     expect(v.read).toEqual([2, 6, 8]);
     expect(v.view).toEqual({ subject: 's', kinds: ['t.item', 'collection'], by: ['c@1'] });
     expect(row(v)).toEqual(pass());
@@ -473,7 +473,7 @@ describe('the view, the read set, the depth and the kind of assurance', () => {
 
   it('reads the facts of its view whatever kind they are, though it takes items only from its from', async () => {
     const loaded = await load('every', { view: { kinds: ['t.item', 't.note', 'collection'] } });
-    const v = judgeSet(loaded, { subject: 's', facts: place([item(9), { kind: 't.note', by: 'c@1', body: { v: 1 } }, done()]) });
+    const v = judgeClaim(loaded, { subject: 's', facts: place([item(9), { kind: 't.note', by: 'c@1', body: { v: 1 } }, done()]) });
     expect(v.read).toEqual([1, 2, 3]);
     expect(v.items.held).toBe(1);
     expect(row(v)).toEqual(pass());
@@ -485,7 +485,7 @@ describe('the view, the read set, the depth and the kind of assurance', () => {
 
   it('follows from back through every fact a fact it read was derived from, in or out of its view', async () => {
     const loaded = await load('every');
-    const depth = (...facts: PlacedFact[]) => judgeSet(loaded, { subject: 's', facts }).depth;
+    const depth = (...facts: PlacedFact[]) => judgeClaim(loaded, { subject: 's', facts }).depth;
     const at = (seq: number, g: Given): PlacedFact => ({ seq, fact: { v: 1, run: 1, subject: 's', ...g } as Fact });
     const source = (more: Partial<Given> = {}): Given => ({ kind: 't.source', by: 'r@1', body: {}, ...more });
     // The item was derived from 1, which was derived from 2, which withholds a field: the verdict rests on it.
