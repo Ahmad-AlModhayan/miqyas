@@ -106,18 +106,6 @@ export function withEncodedTerms(rules: ScrubRules): ScrubRules {
   return { ...rules, terms: [...rules.terms, ...more] };
 }
 
-/** A JSON value with every string in it scrubbed, the names of its fields too. */
-export function scrubJson<T>(value: T, rules: ScrubRules): T {
-  if (rules.terms.length === 0) return value;
-  const walk = (v: unknown): unknown => {
-    if (typeof v === 'string') return scrubText(v, rules);
-    if (Array.isArray(v)) return v.map(walk);
-    if (v !== null && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, item]) => [scrubText(k, rules), walk(item)]));
-    return v;
-  };
-  return walk(value) as T;
-}
-
 /** Whether a media type is text, so that a blob of it can be scrubbed as UTF-8 text. */
 export function isTextMediaType(mediaType: string): boolean {
   const type = mediaType.split(';')[0]!.trim().toLowerCase();

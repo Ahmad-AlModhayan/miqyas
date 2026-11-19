@@ -239,3 +239,64 @@ describe('the scrubber runs before every write', () => {
     expect(everything(store)).not.toContain(TERM);
   });
 });
+
+describe('scrubbing never breaks a fact or loses a value', () => {
+  // Two made-up organisation names, both scrubbed to the same placeholder.
+  const twoToOne = { terms: [{ from: 'acmezed', to: 'ORG' }, { from: 'betazed', to: 'ORG' }] };
+  async function scrubbing(rules: { terms: { from: string; to: string }[] }) {
+    const store = new MemoryStore();
+    const recorder = await openRecorder(store, sha256, { origin: 'test-run', open: { format: 1 }, now: () => new Date(Date.UTC(2026, 10, 19)), scrub: rules });
+    const ledger = async () => (await readLedger(store)).records.map((r) => r.body as Record<string, any>);
+    return { store, recorder, ledger };
+  }
+
+  it('keeps two list entries apart when scrubbing makes them equal, the same way whatever their order', async () => {
+    const { recorder, ledger } = await scrubbing(twoToOne);
+    const listedAs = async (paths: string[], run: number) => {
+      const fact = collectionFact({ by: 'lockfile-reader@1', run, subject: 'repository', setOut: 'the lockfiles', counts: { lockfiles: paths.length }, listed: { lockfiles: paths } });
+      await recorder.record('fact', fact);
+      return (await ledger()).at(-1)!.body.listed.lockfiles as string[];
+    };
+    const forward = await listedAs(['acmezed/package-lock.json', 'betazed/package-lock.json'], 1);
+    expect(forward).toEqual(['ORG/package-lock.json', 'ORG/package-lock.json~2']);
+    const backward = await listedAs(['betazed/package-lock.json', 'acmezed/package-lock.json'], 2);
+    expect(new Set(backward)).toEqual(new Set(forward));
+    expect(backward).toEqual(['ORG/package-lock.json~2', 'ORG/package-lock.json']);
+  });
+
+  it('keeps an entry that was a duplicate before scrubbing a duplicate after it', async () => {
+    const { recorder, ledger } = await scrubbing(twoToOne);
+    await recorder.record('fact', { kind: 'tool.run', v: 1, by: 't@1', run: 1, subject: 'repository', body: { tool: 'x', version: null, finished: true, command: ['acmezed', 'acmezed', 'betazed'] } });
+    expect((await ledger()).at(-1)!.body.command).toEqual(['ORG', 'ORG', 'ORG~2']);
+  });
+
+  it('keeps two object keys apart when scrubbing makes them equal, losing no value', async () => {
+    const { recorder, ledger } = await scrubbing(twoToOne);
+    const counts = { acmezed: 1, betazed: 2 };
+    await recorder.record('fact', collectionFact({ by: 'r@1', subject: 'repository', setOut: 'the lockfiles', counts }));
+    expect((await ledger()).at(-1)!.body.counts).toEqual({ ORG: 1, 'ORG~2': 2 });
+  });
+
+  it('does not scrub a digest, even when a secret is found inside it', async () => {
+    const store = new MemoryStore();
+    const plain = await openRecorder(store, sha256, { origin: 'test-run', open: { format: 1 }, now: () => new Date(Date.UTC(2026, 10, 19)) });
+    const ref = await plain.putBlob(new TextEncoder().encode('{"a":1}'), 'application/json');
+    // A six-character hex secret that happens to sit inside the blob's digest.
+    const secret = ref.digest.slice('sha256:'.length + 10, 'sha256:'.length + 16);
+    const { recorder, ledger } = await scrubbing({ terms: [{ from: secret, to: '${secret.HEX}' }] });
+    const asset = { kind: 'asset', v: 1, by: 'w@1', run: 1, subject: 'target', body: { from: 'served', name: 'a.json' }, blobs: { content: ref } };
+    await recorder.record('fact', asset);
+    const file = { kind: 'repo.file', v: 1, by: 'w@1', run: 1, subject: 'target', body: { path: 'a.json', digest: ref.digest } };
+    await recorder.record('fact', file);
+    const [, written, second] = await ledger();
+    expect(written!.blobs.content.digest).toBe(ref.digest);
+    expect(second!.body.digest).toBe(ref.digest);
+  });
+
+  it('does not scrub the fields that are structure: the kind and the collector', async () => {
+    const { recorder, ledger } = await scrubbing({ terms: [{ from: 'lockfile', to: 'X' }] });
+    await recorder.record('fact', { kind: 'repo.file', v: 1, by: 'lockfile-reader@1', run: 1, subject: 'repository', body: { path: 'a/lockfile.json', role: 'lockfile' } });
+    const [, written] = await ledger();
+    expect(written).toMatchObject({ kind: 'repo.file', by: 'lockfile-reader@1', body: { path: 'a/X.json', role: 'X' } });
+  });
+});

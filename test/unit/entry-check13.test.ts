@@ -139,6 +139,19 @@ describe('check 13: the new path gives the current path verdict', { timeout: 300
     expect(same.coverage.met).toBe(true);
   });
 
+  it('gives a verdict when scrubbing makes two lockfile paths equal: they are kept apart, and coverage still compares them', async () => {
+    const loaded = await loadClaim(new Uint8Array(readFileSync(CHECK_13_CLAIM)), sha256);
+    const scrub = { terms: [{ from: 'acmezed', to: 'ORG' }, { from: 'betazed', to: 'ORG' }] };
+    const recorder = await openRecorder(new MemoryStore(), sha256, { origin: 'test-run', open: { format: 1 }, now: () => new Date(Date.UTC(2026, 10, 19)), scrub });
+    const lockfiles = ['acmezed/package-lock.json', 'betazed/package-lock.json'];
+    const facts = await recordLockfiles(recorder, REPOSITORY_SUBJECT, { lockfiles });
+    const scan = { status: 'ok' as const, version: '2.7.0', lockfiles: [...lockfiles].reverse(), packageCount: 2, hits: [] };
+    facts.push(...(await recordOsvScan(recorder, REPOSITORY_SUBJECT, scan)));
+    const verdict = judgeSet(loaded, { subject: REPOSITORY_SUBJECT, facts });
+    expect(verdict.verdict).toBe('pass');
+    expect(verdict.coverage.met).toBe(true);
+  });
+
   it('records each lockfile by its path in the repository, so two in different folders are told apart', async () => {
     const repo = path.join(tmp, 'repos', 'two-folders');
     cpSync(path.join(FIXTURES, 'seed-osv-critical'), path.join(repo, 'apps', 'web'), { recursive: true });

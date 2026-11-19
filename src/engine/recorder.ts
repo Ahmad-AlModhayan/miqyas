@@ -11,9 +11,10 @@ import { type Head, toBase64 } from '../kernel/checkpoint.js';
 import { type Json, LedgerWriter, type RecordType } from '../kernel/ledger.js';
 import type { Fact } from '../kernel/fact.js';
 import type { Sha256, Store } from '../kernel/store.js';
-import { NO_SCRUB, type ScrubRules, findTerms, isTextMediaType, ruleHits, scrubJson, scrubText, withEncodedTerms } from '../scrub/scrub.js';
+import { NO_SCRUB, type ScrubRules, scrubText, withEncodedTerms } from '../scrub/scrub.js';
 import type { WithheldReason } from '../protocol/facts.js';
 import { assertFact } from './fact-check.js';
+import { scrubbed, scrubbedBlob } from './scrubbing.js';
 import { type KeyedHash, type WithheldValue, withhold } from './withhold.js';
 
 /** The record types a run appends as it goes: every type but the two that open and close the ledger. */
@@ -75,38 +76,6 @@ export interface RecorderOptions {
   keyedHash?: KeyedHash;
 }
 
-/** What a record or a blob still held of a scrub rule once it was scrubbed: never the text, only the rule. */
-export class ScrubRefused extends Error {
-  constructor(what: string, hits: readonly string[]) {
-    super(`${what} still holds what the scrub rules remove (${hits.join(', ')}), and is not written`);
-    this.name = 'ScrubRefused';
-  }
-}
-
-/** Scrubs a record's body, then re-scans it as it will be written. */
-function scrubbed(body: Json, rules: ScrubRules, what: string): Json {
-  if (rules.terms.length === 0) return body;
-  const out = scrubJson(body, rules);
-  const left = ruleHits(JSON.stringify(out), rules);
-  if (left.length > 0) throw new ScrubRefused(what, left);
-  return out;
-}
-
-/**
- * A blob's bytes as they may be stored. Text is scrubbed as UTF-8 and stored unchanged when nothing matched; bytes that
- * are not text can't be scrubbed without breaking them, so one that holds a term is refused.
- */
-function scrubbedBlob(bytes: Uint8Array, mediaType: string, rules: ScrubRules): Uint8Array {
-  if (rules.terms.length === 0) return bytes;
-  const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-  if (findTerms(text, rules).length === 0) return bytes;
-  if (!isTextMediaType(mediaType)) throw new ScrubRefused(`a blob of type ${mediaType}`, ruleHits(text, rules));
-  const out = scrubText(text, rules);
-  const left = ruleHits(out, rules);
-  if (left.length > 0) throw new ScrubRefused(`a blob of type ${mediaType}`, left);
-  return new TextEncoder().encode(out);
-}
-
 /** The version of the run.seal body this writes. */
 export const SEAL_FORMAT = 1;
 
@@ -135,7 +104,7 @@ export async function openRecorder(store: Store, sha256: Sha256, options: Record
     let undo = () => {};
     let body: Json;
     try {
-      body = scrubbed(given, rules, `a ${t} record`);
+      body = scrubbed(given, rules, `a ${t} record`, t === 'fact');
       if (t === 'fact') undo = collectorRuns.accept(body);
     } catch (error) {
       return Promise.reject(error);
