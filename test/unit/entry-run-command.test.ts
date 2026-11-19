@@ -161,6 +161,15 @@ describe('run with --proof-bundle never exits greener than the current path', ()
     expect(await runBundled({ ...bundled(out), printNote: () => {} }, { ...steps(), run: async () => checks })).toBe(3);
   });
 
+  it('a current path with a crawl and no plan has judged something; with no claim on the new path, its code stands', async () => {
+    // `run --crawl --url X --proof-bundle`, no plan, no --fail-on, no profile: the current path judged the crawl.
+    const out = path.join(tmp, 'out');
+    const notes: string[] = [];
+    const crawled = { exitCode: 0, report: { verdict: 'pass', plans: [], crawl: { screensVisited: 3 } } } as CurrentPathResult;
+    expect(await runBundled({ ...bundled(out), printNote: (l) => notes.push(l) }, { ...steps(), run: async () => crawled })).toBe(0);
+    expect(notes).toEqual([]);
+  });
+
   it('a current path that judged nothing, beside a claim on the new path: the fold decides', async () => {
     const nothing: CurrentPathResult = { exitCode: 0, report: { verdict: 'pass', plans: [] } };
     for (const [words, exit] of [[['pass'], 0], [['fail'], 1], [['blocked'], 3]] as const) {

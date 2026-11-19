@@ -32,7 +32,7 @@ export async function runPrintClose<D extends { close(): Promise<void> }, R>(ste
 /** What the current path gives, as much of it as the seal keeps beside the fold and the exit rule reads. */
 export interface CurrentPathResult {
   exitCode: number;
-  report: { verdict: string; plans: readonly { planId: string; verdict: string }[]; readiness?: unknown };
+  report: { verdict: string; plans: readonly { planId: string; verdict: string }[]; readiness?: unknown; crawl?: unknown };
 }
 
 export interface BundledRun {
@@ -54,13 +54,16 @@ export interface BundledExit {
 /**
  * The exit of a run with --proof-bundle, until plans and the other checks are judged on the new path: it is never
  * greener than the current path. 1 if the current path gave 1 or the fold fails; otherwise 3 if the fold is not known;
- * otherwise the current path's code, which is never turned into 0; and 2 only when neither path judged anything. The
+ * otherwise the current path's code, which is never turned into 0; and 2 only when neither path judged anything (the
+ * current path judged something when its report has a plan, a readiness section or a crawl section). The
  * seal's own exit stays the fold of the bundle's verdicts, which verify recomputes.
  */
 export function bundledExit(current: CurrentPathResult, sealed: SealResult): BundledExit {
   if (current.exitCode === 1 || sealed.verdict === 'fail') return { exit: 1 };
   if (sealed.verdicts > 0 && sealed.verdict === 'not_known') return { exit: 3 };
-  const currentJudged = current.report.plans.length > 0 || current.report.readiness !== undefined;
+  // A plan, the readiness checks (only under --profile grade-1), or a crawl: each is something the current path judged.
+  const { plans, readiness, crawl } = current.report;
+  const currentJudged = plans.length > 0 || readiness !== undefined || crawl !== undefined;
   if (sealed.verdicts === 0 && !currentJudged) {
     return { exit: 2, note: 'miqyas: nothing was judged: no plan or check on the current path, and no claim on the new path' };
   }
