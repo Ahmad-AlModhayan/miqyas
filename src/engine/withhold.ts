@@ -5,19 +5,12 @@
 // re-judging its bundle, and neither can be read. The keyed hash is handed in, with its key inside it: the key is made
 // for the run by the entry point and thrown away at its end, and nothing here holds a key, a clock or randomness.
 import type { Json } from '../kernel/ledger.js';
-import type { WithheldReason } from '../protocol/facts.js';
+import type { WithheldReason, WithheldValue } from '../protocol/facts.js';
+
+export type { WithheldValue };
 
 /** HMAC-SHA-256 of some bytes under the run's key. */
 export type KeyedHash = (bytes: Uint8Array) => Promise<Uint8Array>;
-
-/** A value withheld, as a fact's body holds it in place of the value. A body of bytes also says its size. */
-export type WithheldValue = {
-  why: WithheldReason;
-  shape: string;
-  count: number;
-  digest: string;
-  size?: number;
-};
 
 /** The value written the one way (docs/ALGORITHMS.md L2, `normalise`): JSON, the fields of each object in name order. */
 export function normalise(value: Json): string {

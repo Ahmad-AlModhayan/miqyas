@@ -106,11 +106,20 @@ export const WITHHELD_REASONS = ['row', 'owned-id', 'secret', 'body'] as const;
 export type WithheldReason = (typeof WITHHELD_REASONS)[number];
 
 /**
- * A value that must not be kept, as a fact holds it: why, its shape, its count and its keyed digest, so that two values
- * can be compared for equality without either being readable. A body of bytes also says its size.
+ * A value that must not be kept, as a fact holds it: why, its shape (types only, and field names only when they are a
+ * schema's), its count and its keyed digest, so that two values can be compared for equality without either being
+ * readable. A body of bytes also says its size, in bytes. The schema below and this type describe the same object.
  */
-const withheldValue = (size: 'size' | 'no size'): JsonSchema =>
-  object({ why: oneOf(...WITHHELD_REASONS), shape: str, count, digest: KEYED_DIGEST, ...(size === 'size' ? { size: count } : {}) });
+export type WithheldValue = {
+  why: WithheldReason;
+  shape: string;
+  count: number;
+  digest: string;
+  size?: number;
+};
+
+/** The schema of a body withheld, as an exchange holds it: a WithheldValue with its size. */
+const WITHHELD_BODY: JsonSchema = object({ why: oneOf(...WITHHELD_REASONS), shape: str, count, digest: KEYED_DIGEST, size: count });
 
 /** A field of the body, as `withheld` names it: its path from the body, the names joined by ".". */
 const BODY_FIELD: JsonSchema = { type: 'string', pattern: '^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*$' };
@@ -181,8 +190,8 @@ export const FACT_KINDS: readonly FactKind[] = [
       },
       {
         // The bodies are not kept: each is withheld, and the fact names it in `withheld`.
-        request: withheldValue('size'),
-        response: withheldValue('size'),
+        request: WITHHELD_BODY,
+        response: WITHHELD_BODY,
       },
     ),
   },

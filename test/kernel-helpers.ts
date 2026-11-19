@@ -16,6 +16,16 @@ export const text = (bytes: Uint8Array | undefined): string => new TextDecoder()
 /** A fact as a test gives it: what a rule reads, the rest taking the plainest value when it is placed. */
 export type Given = { kind: string; by: string; body: Json; from?: number[]; withheld?: string[]; subject?: string; run?: number };
 
+/** A `dep.advisory` fact as the osv adapter records it about the repository, its body whole and valid for its kind. */
+export const advisoryFact = (id: string, severity: string, more: { malicious?: boolean; name?: string } = {}): Fact => ({
+  kind: 'dep.advisory',
+  v: 1,
+  by: 'osv-adapter@1',
+  run: 1,
+  subject: 'repository',
+  body: { id, aliases: [], malicious: more.malicious ?? false, severity, package: { name: more.name ?? 'p', version: '1.0.0', ecosystem: 'npm' }, lockfile: 'package-lock.json', fixed: [] },
+});
+
 /** An item inside a test claim: `w` is what `where` reads, `u` what `usable` reads, `v` what `holds` reads. */
 export const item = (v: Json, more: { [k: string]: Json } = {}): Given => ({ kind: 't.item', by: 'c@1', body: { v, w: true, u: 1, ...more } });
 /** The `collection` fact of collector `c@1`, which a test claim's `covered` reads. */

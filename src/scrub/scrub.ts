@@ -113,11 +113,14 @@ export function withSecrets(rules: ScrubRules, names: string[], env: Record<stri
  * a query or a form is percent-encoded there. */
 export function withEncodedTerms(rules: ScrubRules): ScrubRules {
   const seen = new Set(rules.terms.map((t) => t.from));
-  const more = rules.terms.flatMap((t) =>
-    encodings(t.from)
-      .filter((from) => !seen.has(from) && (seen.add(from), true))
-      .map((from): ScrubTerm => ({ ...t, from })),
-  );
+  const more: ScrubTerm[] = [];
+  for (const t of rules.terms) {
+    for (const from of encodings(t.from)) {
+      if (seen.has(from)) continue;
+      seen.add(from);
+      more.push({ ...t, from });
+    }
+  }
   return { ...rules, terms: [...rules.terms, ...more] };
 }
 

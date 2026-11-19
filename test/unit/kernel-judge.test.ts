@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { ClaimRejection, loadClaim } from '../../src/kernel/claim.js';
 import type { Fact, PlacedFact } from '../../src/kernel/fact.js';
 import { fold, judgeSet, sealResult } from '../../src/kernel/judge.js';
-import { sha256 } from '../kernel-helpers.js';
+import { advisoryFact, sha256 } from '../kernel-helpers.js';
 
 const CLAIM_FILE = path.resolve(import.meta.dirname, '../../src/claims/readiness-13-dependencies.json');
 const bytes = () => new Uint8Array(readFileSync(CLAIM_FILE));
@@ -16,8 +16,7 @@ const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value
 const fact = (kind: string, by: string, body: Fact['body']): Fact => ({ kind, v: 1, by, run: 1, subject: 'repository', body });
 const reader = (lockfiles: number, status = 'complete') => fact('collection', 'lockfile-reader@1', { status, counts: { lockfiles }, listed: { lockfiles: lockfiles > 0 ? ['package-lock.json'] : [] } });
 const osv = (status = 'complete') => fact('collection', 'osv-adapter@1', { status, counts: { lockfiles: 1, advisories: 0 }, listed: { lockfiles: ['package-lock.json'] } });
-const advisory = (id: string, severity: string, malicious = false) =>
-  fact('dep.advisory', 'osv-adapter@1', { id, severity, malicious, package: { name: 'p', version: '1.0.0', ecosystem: 'npm' } });
+const advisory = (id: string, severity: string, malicious = false) => advisoryFact(id, severity, { malicious });
 const placed = (...facts: Fact[]): PlacedFact[] => facts.map((f, i) => ({ seq: i + 3, fact: f }));
 
 describe("check 13's claim", () => {

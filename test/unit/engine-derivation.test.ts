@@ -5,18 +5,9 @@
 import { describe, expect, it } from 'vitest';
 import { type Derivation, DerivationRefused, Derivations, runDerivation } from '../../src/engine/derivation.js';
 import type { PlacedFact } from '../../src/kernel/fact.js';
+import { advisoryFact } from '../kernel-helpers.js';
 
-const advisory = (seq: number, severity: string, name = `pkg-${seq}`): PlacedFact => ({
-  seq,
-  fact: {
-    kind: 'dep.advisory',
-    v: 1,
-    by: 'osv-adapter@1',
-    run: 1,
-    subject: 'repository',
-    body: { id: `GHSA-${seq}`, aliases: [], malicious: false, severity, package: { name, version: '1.0.0', ecosystem: 'npm' }, lockfile: 'package-lock.json', fixed: [] },
-  },
-});
+const advisory = (seq: number, severity: string, name = `pkg-${seq}`): PlacedFact => ({ seq, fact: advisoryFact(`GHSA-${seq}`, severity, { name }) });
 
 /** The finding `criticals` gives for the advisory at `seq`. */
 const findingOf = (seq: number) => ({

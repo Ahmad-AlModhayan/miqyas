@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The file-system side of a proof bundle (docs/FOUNDATION.md §5, §14): the kernel's Store over one folder, and SHA-256
-// from node:crypto. The kernel does no input or output of its own; this is what it is handed. A path is relative,
-// uses "/", and stays inside the folder: the store refuses anything else before it touches the disk.
+// The file-system side of a proof bundle (docs/FOUNDATION.md §5, §14): the kernel's Store over one folder, SHA-256
+// from node:crypto, and the run's key for withholding (runKey, HMAC-SHA-256 under 32 random bytes that are never
+// written). The kernel does no input or output of its own, and holds no key or randomness; this is what it is handed.
+// A path is relative, uses "/", and stays inside the folder: the store refuses anything else before it touches the disk.
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { appendFile, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';

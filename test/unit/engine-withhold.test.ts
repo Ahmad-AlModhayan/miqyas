@@ -12,11 +12,10 @@ import { openRecorder } from '../../src/engine/recorder.js';
 import { withhold } from '../../src/engine/withhold.js';
 import { runKey } from '../../src/entry/fs-store.js';
 import { runWithProofBundle } from '../../src/entry/proof-bundle.js';
-import { MemoryStore, collectionFact, sha256 } from '../kernel-helpers.js';
+import { MemoryStore, collectionFact, sha256, utf8 } from '../kernel-helpers.js';
 
 const KEY = new Uint8Array(32).fill(7);
 const hmac = async (bytes: Uint8Array) => new Uint8Array(createHmac('sha256', KEY).update(bytes).digest());
-const bytes = (s: string) => new TextEncoder().encode(s);
 
 describe('withholding a value', () => {
   it('records its shape, its count and its keyed digest, and nothing of the value', async () => {
@@ -53,7 +52,7 @@ describe('withholding a value', () => {
     expect((await withhold('same', 'secret', one.hmac)).digest).not.toBe((await withhold('same', 'secret', two.hmac)).digest);
     expect((await withhold('same', 'secret', one.hmac)).digest).toBe((await withhold('same', 'secret', one.hmac)).digest);
     one.discard();
-    await expect(one.hmac(bytes('after'))).rejects.toThrow(/discarded/);
+    await expect(one.hmac(utf8('after'))).rejects.toThrow(/discarded/);
   });
 
   it('counts what a value holds: characters, items, fields; and names the shape of a list by its items', async () => {
@@ -64,11 +63,11 @@ describe('withholding a value', () => {
   });
 
   it('withholds a body by its bytes: JSON by the value it holds, other bytes as bytes, and says its size', async () => {
-    const json = await withhold(bytes('{"b": [1, 2], "a": "x"}'), 'body', hmac);
+    const json = await withhold(utf8('{"b": [1, 2], "a": "x"}'), 'body', hmac);
     expect(json).toMatchObject({ shape: '{[integer],string}', count: 2, size: 23 });
-    expect(await withhold(bytes('{"b": [1, 2], "a": "x"}'), 'body', hmac, { fieldNames: 'schema' })).toMatchObject({ shape: '{a:string,b:[integer]}' });
+    expect(await withhold(utf8('{"b": [1, 2], "a": "x"}'), 'body', hmac, { fieldNames: 'schema' })).toMatchObject({ shape: '{a:string,b:[integer]}' });
     expect(json.digest).toBe((await withhold({ a: 'x', b: [1, 2] }, 'body', hmac)).digest);
-    expect(await withhold(bytes('not json'), 'body', hmac)).toMatchObject({ shape: 'bytes', count: 8, size: 8 });
+    expect(await withhold(utf8('not json'), 'body', hmac)).toMatchObject({ shape: 'bytes', count: 8, size: 8 });
   });
 
   it('is offered to collectors by the recorder, under the key it was handed, and refused without one', async () => {
@@ -105,9 +104,9 @@ describe('one run folder, searched end to end', () => {
     const scrub = { terms: [{ from: TERM, to: 'ORG' }] };
     const open = { format: 1, inputs: { url: `https://app.test/${TERM}/home` } };
     await runWithProofBundle({ dir, runId: 'r1', open, scrub, print: () => undefined }, async (recorder) => {
-      const response = await recorder.withhold(bytes(JSON.stringify([{ owner: SENTINEL, org: TERM }])), 'body');
+      const response = await recorder.withhold(utf8(JSON.stringify([{ owner: SENTINEL, org: TERM }])), 'body');
       // A body keyed by its own values: its keys must not reach the ledger as the shape's field names.
-      const request = await recorder.withhold(bytes(JSON.stringify({ [SENTINEL]: { paid: true } })), 'body');
+      const request = await recorder.withhold(utf8(JSON.stringify({ [SENTINEL]: { paid: true } })), 'body');
       await recorder.record('fact', {
         kind: 'http.exchange',
         v: 1,
@@ -118,7 +117,7 @@ describe('one run folder, searched end to end', () => {
         body: { method: 'GET', url: `https://app.test/${TERM}/rows`, route: null, status: 200, headers: { 'x-org': TERM }, as: null, request, response },
         withheld: ['request', 'response'],
       });
-      const snapshot = await recorder.putBlob(bytes(`<p>${TERM}</p>`), 'text/html');
+      const snapshot = await recorder.putBlob(utf8(`<p>${TERM}</p>`), 'text/html');
       await recorder.record('fact', { kind: 'asset', v: 1, by: 'test-worker@1', run: 1, subject: 'target', body: { from: 'served', name: 'page' }, blobs: { content: snapshot } });
       await recorder.record('fact', collectionFact({ by: 'test-worker@1', subject: 'target', setOut: `the pages of ${TERM}`, counts: { exchanges: 1 } }));
       return { result: undefined, fold: { note: TERM } };

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { FactRefused } from '../../src/engine/fact-check.js';
 import { openRecorder } from '../../src/engine/recorder.js';
 import { readLedger } from '../../src/kernel/ledger.js';
-import { MemoryStore, collectionFact, sha256 } from '../kernel-helpers.js';
+import { MemoryStore, collectionFact, sha256, utf8 } from '../kernel-helpers.js';
 
 async function recorderOverMemory() {
   const store = new MemoryStore();
@@ -194,7 +194,6 @@ describe('the scrubber runs before every write', () => {
   const TERM = 'Fictional-Org-Zeta';
   const TOKEN = 'tok_FAKE0000demo';
   const rules = { terms: [{ from: TERM, to: 'ORG' }, { from: TOKEN, to: '${secret.TOKEN}' }] };
-  const bytes = (s: string) => new TextEncoder().encode(s);
 
   async function scrubbingRecorder(open: Record<string, unknown> = { format: 1 }) {
     const store = new MemoryStore();
@@ -221,16 +220,16 @@ describe('the scrubber runs before every write', () => {
 
   it('scrubs a text blob before it is stored, and names it by the digest of what was stored', async () => {
     const { store, recorder } = await scrubbingRecorder();
-    const ref = await recorder.putBlob(bytes(`{"owner":"${TERM}"}`), 'application/json');
+    const ref = await recorder.putBlob(utf8(`{"owner":"${TERM}"}`), 'application/json');
     expect(new TextDecoder().decode(await recorder.getBlob(ref.digest))).toBe('{"owner":"ORG"}');
     expect(everything(store)).not.toContain(TERM);
   });
 
   it('refuses a binary blob that holds a term, which it cannot scrub without breaking it', async () => {
     const { store, recorder } = await scrubbingRecorder();
-    await expect(recorder.putBlob(bytes(`\u0089PNG ${TOKEN}`), 'image/png')).rejects.toThrow(/scrub/);
+    await expect(recorder.putBlob(utf8(`\u0089PNG ${TOKEN}`), 'image/png')).rejects.toThrow(/scrub/);
     expect(everything(store)).not.toContain(TOKEN);
-    await expect(recorder.putBlob(bytes('\u0089PNG clean'), 'image/png')).resolves.toMatchObject({ mediaType: 'image/png' });
+    await expect(recorder.putBlob(utf8('\u0089PNG clean'), 'image/png')).resolves.toMatchObject({ mediaType: 'image/png' });
   });
 
   it('scrubs records that are not facts too', async () => {
