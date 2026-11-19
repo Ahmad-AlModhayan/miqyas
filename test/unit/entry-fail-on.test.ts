@@ -115,7 +115,7 @@ describe('--fail-on through the run with --proof-bundle', () => {
   });
 
   const withFindings = (severity: Severity, facts: PlacedFact[]) => (recorder: Parameters<typeof runFailOn>[0]) =>
-    runFailOn(recorder, { severity, subject: TARGET_SUBJECT, facts, supplies: { kinds: ['finding'] } }).then((v) => [v]);
+    runFailOn(recorder, { severity, subject: TARGET_SUBJECT, facts, supplies: { kinds: ['finding'] } });
   const about = (given: Given[]) => place(given).map((p) => ({ ...p, fact: { ...p.fact, subject: TARGET_SUBJECT } }));
 
   it.each([
@@ -128,6 +128,32 @@ describe('--fail-on through the run with --proof-bundle', () => {
     const ledger = await records(out);
     expect(ledger.filter((r) => r.t === 'verdict').map((r) => r.body.verdict)).toEqual([verdict]);
     expect((await verifyBundle(out)).exitCode).toBe(0);
+  });
+
+  it('misses no confirmed finding at or above the severity, whichever subject it is on: one verdict per subject, all folded', async () => {
+    const out = path.join(tmp, 'another-subject');
+    // The run's own subject closed complete with no finding; a confirmed critical finding on another subject.
+    const facts = [...about([closed()]), ...place([{ ...finding('critical', 'confirmed'), subject: 'api' }, { ...closed(), subject: 'api' }], 2)];
+    expect(await runBundled(bundled(out, withFindings('high', facts)), steps)).toBe(1);
+    const ledger = await records(out);
+    expect(ledger.filter((r) => r.t === 'claim')).toHaveLength(1);
+    expect(ledger.filter((r) => r.t === 'verdict').map((r) => [r.body.view.subject, r.body.verdict])).toEqual([
+      [TARGET_SUBJECT, 'pass'],
+      ['api', 'fail'],
+    ]);
+    expect(ledger.at(-1).body.result).toMatchObject({ verdict: 'fail', verdicts: 2, exit: 1 });
+    expect((await verifyBundle(out)).exitCode).toBe(0);
+  });
+
+  it('a finding on another subject that settles nothing there still counts: an unconfirmed one with no closed collector is not known', async () => {
+    const out = path.join(tmp, 'another-unclosed');
+    const facts = [...about([closed()]), ...place([{ ...finding('high', 'unconfirmed'), subject: 'api' }], 2)];
+    expect(await runBundled(bundled(out, withFindings('high', facts)), steps)).toBe(3);
+    const ledger = await records(out);
+    expect(ledger.filter((r) => r.t === 'verdict').map((r) => [r.body.view.subject, r.body.verdict])).toEqual([
+      [TARGET_SUBJECT, 'pass'],
+      ['api', 'not_checked'],
+    ]);
   });
 
   it.todo('end to end: a finding recorded through the recorder fails `run --proof-bundle --fail-on high` (once the finding kind has its schema)');

@@ -53,22 +53,43 @@ export function failOnClaimFile(severity: Severity) {
 
 export interface FailOnOptions {
   severity: Severity;
+  /** The run's own subject. The claim is judged for it, and for every other subject a finding is about. */
   subject: string;
   /** The facts recorded so far that the claim may read. */
   facts: readonly PlacedFact[];
   supplies?: JudgeInput['supplies'];
 }
 
-/** Records the --fail-on claim through the recorder, judges it, records the verdict, and returns it. */
-export async function runFailOn(recorder: RunRecorder, options: FailOnOptions): Promise<Verdict> {
+/**
+ * The subjects the claim is judged for: the run's own, then each other subject a `finding` fact is about, in ledger
+ * order. A view has one subject (docs/FOUNDATION.md §4, "Views"), so a finding on any other subject is read only by a
+ * verdict of its own; with one per subject, no confirmed finding is missed.
+ */
+export function failOnSubjects(subject: string, facts: readonly PlacedFact[]): string[] {
+  const subjects = [subject];
+  for (const { fact } of [...facts].sort((a, b) => a.seq - b.seq)) {
+    if (fact.kind === 'finding' && !subjects.includes(fact.subject)) subjects.push(fact.subject);
+  }
+  return subjects;
+}
+
+/**
+ * Records the --fail-on claim through the recorder once, judges it for each of its subjects, records each verdict,
+ * and returns them; the fold takes them like any others.
+ */
+export async function runFailOn(recorder: RunRecorder, options: FailOnOptions): Promise<Verdict[]> {
   const file = JSON.stringify(failOnClaimFile(options.severity));
   const loaded = await loadClaim(new TextEncoder().encode(file), nodeSha256);
   await recorder.record('claim', { claim: claimRef(loaded.claim), rule: loaded.rule, file });
-  const verdict = judgeClaim(loaded, {
-    subject: options.subject,
-    facts: options.facts,
-    ...(options.supplies !== undefined ? { supplies: options.supplies } : {}),
-  });
-  await recorder.record('verdict', verdict);
-  return verdict;
+  const verdicts: Verdict[] = [];
+  for (const subject of failOnSubjects(options.subject, options.facts)) {
+    const verdict = judgeClaim(loaded, {
+      subject,
+      facts: options.facts,
+      ...(options.supplies !== undefined ? { supplies: options.supplies } : {}),
+    });
+    await recorder.record('verdict', verdict);
+    verdicts.push(verdict);
+  }
+  return verdicts;
 }

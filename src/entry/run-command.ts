@@ -80,7 +80,7 @@ export async function judgeNewPath(recorder: RunRecorder, settings: NewPathSetti
   const verdicts: Verdict[] = [];
   if (settings.profile === 'grade-1') verdicts.push(await runCheck13(recorder, settings.repoPath !== undefined ? { repoPath: settings.repoPath } : {}));
   if (settings.failOn !== undefined && settings.failOn !== 'none') {
-    verdicts.push(await runFailOn(recorder, { severity: settings.failOn, subject: TARGET_SUBJECT, facts: [] }));
+    verdicts.push(...(await runFailOn(recorder, { severity: settings.failOn, subject: TARGET_SUBJECT, facts: [] })));
   }
   return verdicts;
 }
