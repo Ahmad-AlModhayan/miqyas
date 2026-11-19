@@ -5,7 +5,7 @@
 // real judge over the real CEL.
 import { describe, expect, it } from 'vitest';
 import { ClaimRejection } from '../../src/kernel/claim.js';
-import { type JudgeInput, type Quantifier, type Verdict } from '../../src/kernel/judge.js';
+import { type JudgeInput, type Quantifier, type Unmatched, type Verdict } from '../../src/kernel/judge.js';
 import { type Given, done, judge as judgeOver, leftItem, loadFile, pairClaimFile, place, rightItem } from '../kernel-helpers.js';
 
 type PairQuantifier = Exclude<Quantifier, 'count'>;
@@ -145,6 +145,76 @@ describe('unmatched: an item with no partner', () => {
     const empty = await judge('every', [leftItem(1, 1), rightItem(2, 1), done()], { unmatched: 'ignore' });
     expect(row(empty)).toEqual(notChecked('nothing to check'));
     expect(empty.vacuous).toBe(true);
+  });
+});
+
+describe('unmatched: every quantifier against every mode, with a left item with no partner and without', () => {
+  // A pair that decides nothing for its quantifier: one that holds for `every`, one that does not for `some` and `none`.
+  const neutral: Record<PairQuantifier, Given[]> = {
+    every: [leftItem(1, 1), rightItem(1, 1)],
+    some: [leftItem(1, 1), rightItem(1, 2)],
+    none: [leftItem(1, 1), rightItem(1, 2)],
+  };
+  type Row = [PairQuantifier, Unmatched, 'absent' | 'present' | 'alone', ReturnType<typeof row>];
+  // `present` adds the left item at position 3; `alone` is that item with no pair beside it, at position 1.
+  const TABLE: Row[] = [
+    ['every', 'uncovered', 'absent', pass()],
+    ['every', 'fail', 'absent', pass()],
+    ['every', 'ignore', 'absent', pass()],
+    ['every', 'uncovered', 'present', notChecked(COVERAGE)],
+    ['every', 'fail', 'present', fail([3])],
+    ['every', 'ignore', 'present', pass()],
+    ['every', 'uncovered', 'alone', notChecked(COVERAGE)],
+    ['every', 'fail', 'alone', fail([1])],
+    ['every', 'ignore', 'alone', notChecked('nothing to check')],
+    ['some', 'uncovered', 'absent', fail()],
+    ['some', 'fail', 'absent', fail()],
+    ['some', 'ignore', 'absent', fail()],
+    ['some', 'uncovered', 'present', notChecked(COVERAGE)],
+    ['some', 'fail', 'present', fail()],
+    ['some', 'ignore', 'present', fail()],
+    ['some', 'uncovered', 'alone', notChecked(COVERAGE)],
+    ['some', 'fail', 'alone', fail()],
+    ['some', 'ignore', 'alone', fail()],
+    ['none', 'uncovered', 'absent', pass()],
+    ['none', 'fail', 'absent', pass()],
+    ['none', 'ignore', 'absent', pass()],
+    ['none', 'uncovered', 'present', notChecked(COVERAGE)],
+    ['none', 'fail', 'present', fail([3])],
+    ['none', 'ignore', 'present', pass()],
+    ['none', 'uncovered', 'alone', notChecked(COVERAGE)],
+    ['none', 'fail', 'alone', fail([1])],
+    ['none', 'ignore', 'alone', notChecked('nothing to check')],
+  ];
+  const factsFor = (q: PairQuantifier, present: Row[2]): Given[] =>
+    present === 'absent' ? [...neutral[q], done()] : present === 'present' ? [...neutral[q], leftItem(2, 1), done()] : [leftItem(2, 1), done()];
+
+  for (const [q, mode, present, expected] of TABLE) {
+    it(`${q}, unmatched ${mode}, the left item ${present}: ${expected.verdict}${expected.reason ? ` (${expected.reason})` : ''}`, async () => {
+      const v = await judge(q, factsFor(q, present), { unmatched: mode });
+      expect(row(v)).toEqual(expected);
+      expect(v.items.unmatched).toBe(present === 'absent' ? 0 : 1);
+    });
+  }
+
+  it('none, fail: an unmatched item is a counterexample, so a pass is never left standing beside one', async () => {
+    // A pair that does not hold, which a none claim reads as fine, beside a left item with no partner.
+    const v = await judge('none', [leftItem(1, 1), rightItem(1, 2), leftItem(2, 1), done()], { unmatched: 'fail' });
+    expect(row(v)).toEqual(fail([3]));
+    expect(v.items).toMatchObject({ held: 1, failed: 1, unmatched: 1 });
+  });
+
+  it('some, fail, over only unmatched items: a fail with nothing shown, as any some claim that finds no witness; the record counts each as failed and unmatched', async () => {
+    const v = await judge('some', [leftItem(1, 1), leftItem(2, 1), done()], { unmatched: 'fail' });
+    expect(row(v)).toEqual(fail());
+    expect(v.items).toEqual({ held: 0, failed: 2, outside: 0, uncertain: 0, unmatched: 2 });
+    // Not covered, the same facts settle nothing.
+    expect(row(await judge('some', [leftItem(1, 1), leftItem(2, 1), done('failed')], { unmatched: 'fail' }))).toEqual(notChecked(COVERAGE));
+  });
+
+  it('none, fail: an unmatched item is uncertain, not a counterexample, while an item on the right is uncertain', async () => {
+    const v = await judge('none', [leftItem(1, 1), rightItem(1, 2), leftItem(2, 1), { ...rightItem(2, 1), body: { v: 1 } }, done()], { unmatched: 'fail' });
+    expect(row(v)).toEqual(notChecked(ERRORED));
   });
 });
 

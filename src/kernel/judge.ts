@@ -359,8 +359,8 @@ type Keyed = { seq: number; body: Json; key: string };
 /**
  * Judges a `pair` claim over the facts in its view (docs/ALGORITHMS.md A2): the sides joined on their keys, each
  * pair sorted as A1 sorts an item, then A1's table over the pairs. An item with no partner, on either side, is
- * unmatched: under `uncovered` it means coverage is not met, under `fail` it is a counterexample, under `ignore` it is
- * left out. Under `fail`, an unmatched item is uncertain instead while an item on the other side is uncertain, since
+ * unmatched: under `uncovered` it means coverage is not met, under `fail` it is a counterexample (counted as held for
+ * a `none` claim, as failed for the others), under `ignore` it is left out. Under `fail`, an unmatched item is uncertain instead while an item on the other side is uncertain, since
  * that item could be its partner: an error never makes a fail.
  */
 export function judgePair(loaded: LoadedPairClaim, input: JudgeInput): Verdict {
@@ -413,9 +413,13 @@ export function judgePair(loaded: LoadedPairClaim, input: JudgeInput): Verdict {
 
   const policy = claim.unmatched ?? 'uncovered';
   if (policy === 'fail') {
+    // A counterexample goes where A1's table looks for one: among the pairs that hold for a `none` claim, among those
+    // that fail for an `every` claim. A `some` claim has no counterexample; an unmatched item is one more that is not a
+    // witness, so it counts as failed, and the claim fails, covered, with nothing shown, as any `some` that finds none.
+    const against = claim.quantifier === 'none' ? groups.yes : groups.no;
     for (const u of unmatched) {
       if (u.otherUncertain) groups.errored++;
-      else groups.no.push([u.seq]);
+      else against.push([u.seq]);
     }
   }
   const ctx = { collections: collections(inView), inputs: input.inputs ?? {} };
