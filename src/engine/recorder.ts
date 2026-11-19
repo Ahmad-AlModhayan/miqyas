@@ -12,7 +12,9 @@ import { type Json, LedgerWriter, type RecordType } from '../kernel/ledger.js';
 import type { Fact } from '../kernel/fact.js';
 import type { Sha256, Store } from '../kernel/store.js';
 import { NO_SCRUB, type ScrubRules, findTerms, isTextMediaType, ruleHits, scrubJson, scrubText, withEncodedTerms } from '../scrub/scrub.js';
+import type { WithheldReason } from '../protocol/facts.js';
 import { assertFact } from './fact-check.js';
+import { type KeyedHash, type WithheldValue, withhold } from './withhold.js';
 
 /** The record types a run appends as it goes: every type but the two that open and close the ledger. */
 export type AppendableType = Exclude<RecordType, 'run.open' | 'run.seal'>;
@@ -34,6 +36,11 @@ export interface RunRecorder {
   getBlob(digest: string): Promise<Uint8Array>;
   /** The size and root of the ledger as written so far. */
   head(): Promise<Head>;
+  /**
+   * A value that must not be kept, as a fact holds it in its place: its shape, its count and its digest under the run's
+   * key (docs/FOUNDATION.md §3, "Safe to keep"). The fact names the field in `withheld`.
+   */
+  withhold(value: Json | Uint8Array, why: WithheldReason): Promise<WithheldValue>;
 }
 
 /** What closes a run: the seal, written once, and the head that fixes the ledger. */
@@ -64,6 +71,8 @@ export interface RecorderOptions {
    * is written, each term also as a URL carries it. None by default.
    */
   scrub?: ScrubRules;
+  /** HMAC-SHA-256 under the run's key, made for this run and thrown away at its end. Without it nothing is withheld. */
+  keyedHash?: KeyedHash;
 }
 
 /** What a record or a blob still held of a scrub rule once it was scrubbed: never the text, only the rule. */
@@ -151,6 +160,10 @@ export async function openRecorder(store: Store, sha256: Sha256, options: Record
     putBlob: async (bytes, mediaType) => ({ ...(await blobs.put(scrubbedBlob(bytes, mediaType, rules), mediaType)) }),
     getBlob: (digest) => blobs.get(digest),
     head: () => writer.head(),
+    withhold: async (value, why) => {
+      if (options.keyedHash === undefined) throw new Error('this run was given no key, so it cannot withhold a value');
+      return withhold(value, why, options.keyedHash);
+    },
     async seal(result) {
       sealing = true;
       // Every record asked for before the seal settles first, so a fact the writer refused is out of its run's count.

@@ -155,7 +155,7 @@ describe('a run with a proof bundle', () => {
   it('the recorder the run is handed can append, store and read a blob, and cannot seal', async () => {
     tick = 0;
     await runWithProofBundle({ dir, runId: RUN, open: OPEN, now: clock, print: () => undefined }, async (recorder) => {
-      expect(Object.keys(recorder).sort()).toEqual(['getBlob', 'head', 'putBlob', 'record']);
+      expect(Object.keys(recorder).sort()).toEqual(['getBlob', 'head', 'putBlob', 'record', 'withhold']);
       const ref = await recorder.putBlob(utf8('abc'), 'text/plain');
       expect(ref).toEqual({
         digest: 'sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',

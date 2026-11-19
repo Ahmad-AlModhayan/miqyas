@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { type RunRecorder, formatHead, openRecorder } from '../engine/recorder.js';
 import type { Json } from '../kernel/ledger.js';
 import type { ScrubRules } from '../scrub/scrub.js';
-import { FsStore, nodeSha256 } from './fs-store.js';
+import { FsStore, nodeSha256, runKey } from './fs-store.js';
 
 /** The version of the run.open body this writes. */
 export const OPEN_FORMAT = 1;
@@ -38,21 +38,29 @@ export interface RunOutcome<T> {
  * ledger stays as the crash left it, with no seal, and verify says so.
  */
 export async function runWithProofBundle<T>(options: ProofBundleRun, run: (recorder: RunRecorder) => Promise<RunOutcome<T>>): Promise<T> {
-  const recorder = await openRecorder(new FsStore(options.dir), nodeSha256, {
-    origin: options.runId,
-    open: options.open,
-    now: options.now ?? (() => new Date()),
-    ...(options.scrub !== undefined ? { scrub: options.scrub } : {}),
-  });
-  const { result, fold } = await run({
-    record: (t, body) => recorder.record(t, body),
-    putBlob: (bytes, mediaType) => recorder.putBlob(bytes, mediaType),
-    getBlob: (digest) => recorder.getBlob(digest),
-    head: () => recorder.head(),
-  });
-  const sealed = await recorder.seal(fold);
-  options.print(`proof bundle head: ${formatHead(sealed.head)}`);
-  return result;
+  // The run's key is made here and thrown away when the run ends, sealed or not (docs/ALGORITHMS.md L2).
+  const key = runKey();
+  try {
+    const recorder = await openRecorder(new FsStore(options.dir), nodeSha256, {
+      origin: options.runId,
+      open: options.open,
+      now: options.now ?? (() => new Date()),
+      keyedHash: key.hmac,
+      ...(options.scrub !== undefined ? { scrub: options.scrub } : {}),
+    });
+    const { result, fold } = await run({
+      record: (t, body) => recorder.record(t, body),
+      putBlob: (bytes, mediaType) => recorder.putBlob(bytes, mediaType),
+      getBlob: (digest) => recorder.getBlob(digest),
+      head: () => recorder.head(),
+      withhold: (value, why) => recorder.withhold(value, why),
+    });
+    const sealed = await recorder.seal(fold);
+    options.print(`proof bundle head: ${formatHead(sealed.head)}`);
+    return result;
+  } finally {
+    key.discard();
+  }
 }
 
 /** What the run knows when it starts, as the CLI holds it. Anything else the CLI holds, such as a token, stays out. */

@@ -26,7 +26,7 @@ const VALID: Record<string, Record<string, unknown>> = {
       route: '/api/items/{id}',
       status: 200,
       headers: { 'content-type': 'application/json' },
-      response: { shape: 'object', size: 120, digest: 'k1' },
+      response: { why: 'body', shape: '{id:integer,name:string}', count: 2, size: 120, digest: `hmac-sha256:${'cd'.repeat(32)}` },
       as: { account: 'owner', role: 'admin' },
     },
   },
@@ -369,6 +369,27 @@ describe('a finding', () => {
       expect(refusal(withBody('finding', (b) => (b[field] = 'fail')))).toMatchObject({ kind: 'finding', field: `body.${field}` });
     }
     expect(refusal(fact('finding', { verdict: 'fail' }))).toMatchObject({ kind: 'finding', field: 'verdict' });
+  });
+});
+
+describe('a value that must not be kept', () => {
+  it('is held by an exchange as shape, count, size and a keyed digest, never a plain one', () => {
+    const response = (change: Record<string, unknown>) =>
+      withBody('http.exchange', (b) => Object.assign(b.response as Record<string, unknown>, change));
+    expect(refusal(response({ digest: 'k1' }))).toMatchObject({ kind: 'http.exchange', field: 'body.response.digest' });
+    expect(refusal(response({ digest: DIGEST }))).toMatchObject({ field: 'body.response.digest' });
+    expect(refusal(response({ value: 'row 1' }))).toMatchObject({ field: 'body.response.value' });
+    expect(refusal(response({ why: 'because' }))).toMatchObject({ field: 'body.response.why' });
+    for (const field of ['why', 'shape', 'count', 'size', 'digest']) {
+      expect(refusal(withBody('http.exchange', (b) => delete (b.response as Record<string, unknown>)[field]))).toMatchObject({ field: `body.response.${field}` });
+    }
+  });
+
+  it('is named in withheld by the path of its field in the body', () => {
+    expect(checkFact(fact('http.exchange', { withheld: ['response'] }))).toEqual({ ok: true });
+    expect(checkFact(fact('http.exchange', { withheld: ['as.account'] }))).toEqual({ ok: true });
+    expect(refusal(fact('http.exchange', { withheld: ['the response'] }))).toMatchObject({ kind: 'http.exchange', field: 'withheld.0' });
+    expect(refusal(fact('http.exchange', { withheld: ['response', 'response'] }))).toMatchObject({ field: 'withheld' });
   });
 });
 

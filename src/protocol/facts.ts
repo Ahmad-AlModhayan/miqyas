@@ -95,6 +95,26 @@ const BLOB_REF: JsonSchema = object({ digest: SHA256_DIGEST, size: count, mediaT
 
 const http = (): JsonSchema => int(100, 599);
 
+/** A keyed digest (docs/ALGORITHMS.md L2): HMAC-SHA-256 under the run's key, which is thrown away at its end. */
+const KEYED_DIGEST: JsonSchema = { type: 'string', pattern: '^hmac-sha256:[0-9a-f]{64}$' };
+
+/**
+ * Why a value was not kept (docs/FOUNDATION.md §3, "Safe to keep"): a row's contents, an id a test account owns, a
+ * secret, or a request's or a response's body, which may hold any of them.
+ */
+export const WITHHELD_REASONS = ['row', 'owned-id', 'secret', 'body'] as const;
+export type WithheldReason = (typeof WITHHELD_REASONS)[number];
+
+/**
+ * A value that must not be kept, as a fact holds it: why, its shape, its count and its keyed digest, so that two values
+ * can be compared for equality without either being readable. A body of bytes also says its size.
+ */
+const withheldValue = (size: 'size' | 'no size'): JsonSchema =>
+  object({ why: oneOf(...WITHHELD_REASONS), shape: str, count, digest: KEYED_DIGEST, ...(size === 'size' ? { size: count } : {}) });
+
+/** A field of the body, as `withheld` names it: its path from the body, the names joined by ".". */
+const BODY_FIELD: JsonSchema = { type: 'string', pattern: '^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*$' };
+
 export const FACT_KINDS: readonly FactKind[] = [
   {
     kind: 'ui.snapshot',
@@ -160,8 +180,9 @@ export const FACT_KINDS: readonly FactKind[] = [
         as: nullable(object({ account: str, role: str })),
       },
       {
-        request: object({ shape: str, size: count, digest: str }),
-        response: object({ shape: str, size: count, digest: str }),
+        // The bodies are not kept: each is withheld, and the fact names it in `withheld`.
+        request: withheldValue('size'),
+        response: withheldValue('size'),
       },
     ),
   },
@@ -384,7 +405,8 @@ export function factSchema(k: FactKind): JsonSchema {
                 .map(([name]) => name),
               additionalProperties: false,
             },
-      withheld: { type: 'array', items: str, uniqueItems: true },
+      // The fields of the body that hold a value withheld, or rest on one the collector did not keep.
+      withheld: { type: 'array', items: BODY_FIELD, uniqueItems: true },
     },
     required,
     additionalProperties: false,
