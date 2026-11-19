@@ -98,10 +98,25 @@ export function collectionFact(close: {
   status?: 'complete' | 'partial' | 'failed';
   reason?: string;
   dropped?: number;
-}): { kind: string; v: number; by: string; run: number; subject: string; body: { [field: string]: string | number | { [name: string]: number } } } {
-  const { by, run = 1, subject, setOut, counts, status = 'complete', dropped = 0 } = close;
+  listed?: { [name: string]: string[] };
+}): {
+  kind: string;
+  v: number;
+  by: string;
+  run: number;
+  subject: string;
+  body: { [field: string]: string | number | { [name: string]: number } | { [name: string]: string[] } };
+} {
+  const { by, run = 1, subject, setOut, counts, status = 'complete', dropped = 0, listed } = close;
   const reason = close.reason ?? (status === 'complete' ? undefined : 'stopped');
-  return { kind: 'collection', v: 1, by, run, subject, body: { setOut, status, ...(reason === undefined ? {} : { reason }), counts, dropped } };
+  return {
+    kind: 'collection',
+    v: 1,
+    by,
+    run,
+    subject,
+    body: { setOut, status, ...(reason === undefined ? {} : { reason }), counts, ...(listed === undefined ? {} : { listed }), dropped },
+  };
 }
 
 /** A store held in memory. Every path is kept under `root`, as a folder on disk would keep it. */

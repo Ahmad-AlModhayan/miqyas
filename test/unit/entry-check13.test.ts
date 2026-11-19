@@ -6,11 +6,15 @@ import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runCheck13 } from '../../src/entry/check13.js';
+import { recordLockfiles, recordOsvScan } from '../../src/collectors/dependencies.js';
+import { openRecorder } from '../../src/engine/recorder.js';
+import { CHECK_13_CLAIM, REPOSITORY_SUBJECT, runCheck13 } from '../../src/entry/check13.js';
 import { runWithProofBundle } from '../../src/entry/proof-bundle.js';
 import { verifyBundle } from '../../src/entry/verify.js';
-import { sealResult } from '../../src/kernel/judge.js';
+import { loadClaim } from '../../src/kernel/claim.js';
+import { judgeSet, sealResult } from '../../src/kernel/judge.js';
 import { evaluateCheck13Dependencies } from '../../src/proof-core/readiness.js';
+import { MemoryStore, sha256 } from '../kernel-helpers.js';
 import { envWithBin, writeScannerShim } from '../scanner-shim.js';
 
 const FIXTURES = path.resolve(import.meta.dirname, '../../corpus/fixtures/grade1-checks');
@@ -113,6 +117,26 @@ describe('check 13: the new path gives the current path verdict', { timeout: 300
     const verdict = records.find((r) => r.t === 'verdict')!;
     expect(verdict.body.verdict).toBe('not_checked');
     expect(verdict.body.reason).toBe('coverage not met');
+  });
+
+  it('is not known when the scan saw as many lockfiles as the reader but not the same ones: coverage compares the lists', async () => {
+    // Between the reader's look and the scan's, one lockfile went and another came: the counts match, the files don't.
+    const loaded = await loadClaim(new Uint8Array(readFileSync(CHECK_13_CLAIM)), sha256);
+    const judged = async (scanned: string[]) => {
+      const recorder = await openRecorder(new MemoryStore(), sha256, { origin: 'test-run', open: { format: 1 }, now: () => new Date(Date.UTC(2026, 10, 19)) });
+      const facts = await recordLockfiles(recorder, REPOSITORY_SUBJECT, { lockfiles: ['apps/api/package-lock.json', 'apps/web/package-lock.json'] });
+      const scan = { status: 'ok' as const, version: '2.7.0', lockfiles: scanned, packageCount: 2, hits: [] };
+      facts.push(...(await recordOsvScan(recorder, REPOSITORY_SUBJECT, scan)));
+      return judgeSet(loaded, { subject: REPOSITORY_SUBJECT, facts });
+    };
+    const swapped = await judged(['apps/api/package-lock.json', 'apps/new/package-lock.json']);
+    expect(swapped.verdict).toBe('not_checked');
+    expect(swapped.reason).toBe('coverage not met');
+    expect(swapped.coverage.met).toBe(false);
+    // The same files, in another order, are covered.
+    const same = await judged(['apps/web/package-lock.json', 'apps/api/package-lock.json']);
+    expect(same.verdict).toBe('pass');
+    expect(same.coverage.met).toBe(true);
   });
 
   it('records each lockfile by its path in the repository, so two in different folders are told apart', async () => {

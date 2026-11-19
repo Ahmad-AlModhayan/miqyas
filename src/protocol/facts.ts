@@ -321,7 +321,12 @@ export const FACT_KINDS: readonly FactKind[] = [
     traffic: false,
     identity: ['setOut'],
     body: {
-      ...object({ setOut: str, status: oneOf(...COLLECTION_STATUSES), counts: objectOf(count), dropped: count }, { reason: str }),
+      // `listed` names what was counted, under the name of its count, each name once: a claim's coverage can then
+      // compare what two collectors saw, and not only how many (two looks with one file swapped have equal counts).
+      ...object(
+        { setOut: str, status: oneOf(...COLLECTION_STATUSES), counts: objectOf(count), dropped: count },
+        { reason: str, listed: objectOf({ ...list(str), uniqueItems: true }) },
+      ),
       allOf: [
         // A run that didn't finish says why it stopped.
         {

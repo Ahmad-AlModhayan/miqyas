@@ -334,6 +334,17 @@ describe('a collection fact', () => {
     expect(refusal(withBody('collection', (b) => (b.dropped = 2)))).toMatchObject({ kind: 'collection', field: 'body.status' });
     expect(checkFact(withBody('collection', (b) => Object.assign(b, { dropped: 2, status: 'partial', reason: 'shed under load' })))).toEqual({ ok: true });
   });
+
+  it('may list what it counted, by name, each name once, so that a claim can compare two lists and not only two counts', () => {
+    const listed = (value: unknown) => withBody('collection', (b) => (b.listed = value));
+    expect(checkFact(listed({ lockfiles: ['apps/web/package-lock.json', 'package-lock.json'] }))).toEqual({ ok: true });
+    expect(checkFact(listed({ lockfiles: [] }))).toEqual({ ok: true });
+    expect(refusal(listed({ lockfiles: ['package-lock.json', 'package-lock.json'] }))).toMatchObject({ kind: 'collection', field: 'body.listed.lockfiles' });
+    expect(refusal(listed({ lockfiles: 'package-lock.json' }))).toMatchObject({ kind: 'collection', field: 'body.listed.lockfiles' });
+    for (const name of ['', 1, null]) {
+      expect(refusal(listed({ lockfiles: [name] }))).toMatchObject({ kind: 'collection', field: expect.stringMatching(/^body\.listed\.lockfiles/) });
+    }
+  });
 });
 
 describe('a finding', () => {

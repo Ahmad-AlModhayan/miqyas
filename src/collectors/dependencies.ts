@@ -73,6 +73,12 @@ function repositoryPath(p: string): string {
   return parts.join('/');
 }
 
+/**
+ * The lockfiles a run saw, as its `collection` fact lists them: each once, in code-unit order (never by locale), so
+ * that two collectors that saw the same files record the same list, and a claim can compare the two lists as sets.
+ */
+const listedOf = (paths: readonly string[]): string[] => [...new Set(paths)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
 /** Records one `repo.file` fact per lockfile found, then the reader's `collection` fact. */
 export async function recordLockfiles(recorder: RunRecorder, subject: string, found: LockfilesFound): Promise<PlacedFact[]> {
   const out: PlacedFact[] = [];
@@ -88,6 +94,7 @@ export async function recordLockfiles(recorder: RunRecorder, subject: string, fo
         status: 'failed' in found ? 'failed' : 'complete',
         ...('failed' in found ? { reason: found.failed } : {}),
         counts: { lockfiles: lockfiles.length },
+        listed: { lockfiles: listedOf(lockfiles) },
         dropped: 0,
       }),
     ),
@@ -106,12 +113,15 @@ export async function recordOsvScan(recorder: RunRecorder, subject: string, scan
       status: 'failed',
       reason: scan.failed,
       counts: { lockfiles: 0, packages: 0, advisories: 0 },
+      listed: { lockfiles: [] },
       dropped: 0,
     });
     return out;
   }
   const hits = scan.status === 'ok' ? scan.hits : [];
-  const lockfiles = hits.map((hit) => repositoryPath(hit.sourcePath)); // refused before anything of the scan is recorded
+  // Both are refused before anything of the scan is recorded.
+  const lockfiles = hits.map((hit) => repositoryPath(hit.sourcePath));
+  const scanned = listedOf(scan.lockfiles.map(repositoryPath));
   if (scan.status !== 'no_lockfiles') {
     await add('tool.run', { tool: 'osv-scanner', version: scan.version, finished: scan.status === 'ok', outcome: scan.status });
   }
@@ -138,6 +148,8 @@ export async function recordOsvScan(recorder: RunRecorder, subject: string, scan
       packages: scan.packageCount,
       advisories: hits.length,
     },
+    // Which lockfiles the scan's own look found, so that coverage compares them with the reader's, file by file.
+    listed: { lockfiles: scanned },
     dropped: 0,
   });
   return out;

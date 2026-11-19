@@ -92,7 +92,9 @@ Rules every collector follows:
 - **Its own traffic is marked.** Every exchange carries its `cause`. A 503 that Miqyas's own probing caused is not the
   target's page failing, and a claim about pages reads only what pages caused.
 - **It closes.** Every collector run ends with a `collection` fact: what it set out to cover, whether it finished
-  (`complete`, `partial`, `failed`), why it stopped, its counts, and how many facts it dropped. The engine writes
+  (`complete`, `partial`, `failed`), why it stopped, its counts, and how many facts it dropped. Where a claim must
+  compare what two collectors saw, not only how many, it also lists what it counted by name (`listed`, each name
+  once, in code-unit order), so that one file swapped for another between two looks is seen. The engine writes
   `failed` for a collector that died. After a run's `collection` fact, no further fact from that run is accepted.
 - **Identity.** Each kind's schema names the fields that identify one item. Two collectors that record the same thing
   record two facts; a claim says which collector it reads (§4, "Views").
