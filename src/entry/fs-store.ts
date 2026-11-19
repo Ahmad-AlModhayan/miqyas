@@ -1,13 +1,33 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The file-system side of a proof bundle (docs/FOUNDATION.md §5, §14): the kernel's Store over one folder, and SHA-256
-// from node:crypto. The kernel does no input or output of its own; this is what it is handed. A path is relative,
-// uses "/", and stays inside the folder: the store refuses anything else before it touches the disk.
-import { createHash, randomBytes } from 'node:crypto';
+// The file-system side of a proof bundle (docs/FOUNDATION.md §5, §14): the kernel's Store over one folder, SHA-256
+// from node:crypto, and the run's key for withholding (runKey, HMAC-SHA-256 under 32 random bytes that are never
+// written). The kernel does no input or output of its own, and holds no key or randomness; this is what it is handed.
+// A path is relative, uses "/", and stays inside the folder: the store refuses anything else before it touches the disk.
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { appendFile, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { KeyedHash } from '../engine/withhold.js';
 import type { Sha256, Store } from '../kernel/store.js';
 
 export const nodeSha256: Sha256 = async (bytes) => new Uint8Array(createHash('sha256').update(bytes).digest());
+
+/**
+ * The key of one run (docs/ALGORITHMS.md L2): 32 random bytes, held only inside `hmac`, never written. `discard`
+ * overwrites it at the run's end; after that `hmac` refuses.
+ */
+export function runKey(): { hmac: KeyedHash; discard: () => void } {
+  let key: Buffer | undefined = randomBytes(32);
+  return {
+    hmac: async (bytes) => {
+      if (key === undefined) throw new Error("the run's key has been discarded");
+      return new Uint8Array(createHmac('sha256', key).update(bytes).digest());
+    },
+    discard: () => {
+      key?.fill(0);
+      key = undefined;
+    },
+  };
+}
 
 /** A path that is not one this store will touch: it is absolute, or has a drive, a backslash, a "..", or an empty part. */
 export class StorePathError extends Error {}

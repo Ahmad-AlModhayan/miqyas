@@ -3,14 +3,19 @@
 // records and store blobs through a RunRecorder and never touch the store or the ledger writer themselves. The
 // recorder holds no input or output of its own: it is built over a kernel Store and Sha256 it is handed, and over a
 // clock, because the kernel has none and a record's time comes from the caller. It is also where the rules every
-// collector follows are enforced (docs/FOUNDATION.md §3): a fact must match the schema of its kind, and no fact of a
-// collector run is accepted after that run's collection fact.
+// collector follows are enforced (docs/FOUNDATION.md §3): the scrubber runs before every record and every blob is
+// written, a fact must match the schema of its kind, and no fact of a collector run is accepted after that run's
+// collection fact.
 import { type BlobRef, BlobStore } from '../kernel/blobs.js';
 import { type Head, toBase64 } from '../kernel/checkpoint.js';
 import { type Json, LedgerWriter, type RecordType } from '../kernel/ledger.js';
 import type { Fact } from '../kernel/fact.js';
 import type { Sha256, Store } from '../kernel/store.js';
+import { NO_SCRUB, type ScrubRules, scrubText, withEncodedTerms } from '../scrub/scrub.js';
+import type { WithheldReason } from '../protocol/facts.js';
 import { assertFact } from './fact-check.js';
+import { scrubbed, scrubbedBlob } from './scrubbing.js';
+import { type KeyedHash, type WithheldValue, type WithholdOptions, withhold } from './withhold.js';
 
 /** The record types a run appends as it goes: every type but the two that open and close the ledger. */
 export type AppendableType = Exclude<RecordType, 'run.open' | 'run.seal'>;
@@ -32,6 +37,12 @@ export interface RunRecorder {
   getBlob(digest: string): Promise<Uint8Array>;
   /** The size and root of the ledger as written so far. */
   head(): Promise<Head>;
+  /**
+   * A value that must not be kept, as a fact holds it in its place: its shape, its count and its digest under the run's
+   * key (docs/FOUNDATION.md §3, "Safe to keep"). The fact names the field in `withheld`. The shape keeps field names
+   * only when `options` says they are a schema's.
+   */
+  withhold(value: Json | Uint8Array, why: WithheldReason, options?: WithholdOptions): Promise<WithheldValue>;
 }
 
 /** What closes a run: the seal, written once, and the head that fixes the ledger. */
@@ -57,6 +68,13 @@ export interface RecorderOptions {
   /** The time of each record. */
   now: () => Date;
   checkpointEvery?: number;
+  /**
+   * The scrub rules: every record, run.open and the seal among them, and every blob, is scrubbed with them before it
+   * is written, each term also as a URL carries it. None by default.
+   */
+  scrub?: ScrubRules;
+  /** HMAC-SHA-256 under the run's key, made for this run and thrown away at its end. Without it nothing is withheld. */
+  keyedHash?: KeyedHash;
 }
 
 /** The version of the run.seal body this writes. */
@@ -64,10 +82,11 @@ export const SEAL_FORMAT = 1;
 
 export async function openRecorder(store: Store, sha256: Sha256, options: RecorderOptions): Promise<OpenRunRecorder> {
   const at = () => options.now().toISOString();
+  const rules = withEncodedTerms(options.scrub ?? NO_SCRUB);
   const writer = await LedgerWriter.open(store, sha256, {
-    origin: options.origin,
+    origin: scrubText(options.origin, rules),
     at: at(),
-    body: options.open,
+    body: scrubbed(options.open, rules, 'run.open'),
     ...(options.checkpointEvery !== undefined ? { checkpointEvery: options.checkpointEvery } : {}),
   });
   const blobs = new BlobStore(store, sha256);
@@ -78,12 +97,15 @@ export async function openRecorder(store: Store, sha256: Sha256, options: Record
   // closes the ones still open, and every run in the sealed ledger ends with its collection fact.
   let sealing = false;
 
-  const append = (t: AppendableType, body: Json): Promise<number> => {
-    // Checked, counted and its run's state changed when asked, not when written: so a seal asked for right after
-    // counts every record before it, and a fact asked for after its run's collection fact is refused even while that
-    // fact is still being written. A refusal by the writer takes the count and the run's change back.
+  const append = (t: AppendableType, given: Json): Promise<number> => {
+    // Scrubbed first, so that the schema checks what will be written. Checked, counted and its run's state changed
+    // when asked, not when written: so a seal asked for right after counts every record before it, and a fact asked
+    // for after its run's collection fact is refused even while that fact is still being written. A refusal by the
+    // writer takes the count and the run's change back.
     let undo = () => {};
+    let body: Json;
     try {
+      body = scrubbed(given, rules, `a ${t} record`, t === 'fact');
       if (t === 'fact') undo = collectorRuns.accept(body);
     } catch (error) {
       return Promise.reject(error);
@@ -105,9 +127,13 @@ export async function openRecorder(store: Store, sha256: Sha256, options: Record
 
   return {
     record,
-    putBlob: async (bytes, mediaType) => ({ ...(await blobs.put(bytes, mediaType)) }),
+    putBlob: async (bytes, mediaType) => ({ ...(await blobs.put(scrubbedBlob(bytes, mediaType, rules), mediaType)) }),
     getBlob: (digest) => blobs.get(digest),
     head: () => writer.head(),
+    withhold: async (value, why, how) => {
+      if (options.keyedHash === undefined) throw new Error('this run was given no key, so it cannot withhold a value');
+      return withhold(value, why, options.keyedHash, how);
+    },
     async seal(result) {
       sealing = true;
       // Every record asked for before the seal settles first, so a fact the writer refused is out of its run's count.
@@ -119,7 +145,7 @@ export async function openRecorder(store: Store, sha256: Sha256, options: Record
       const all = [...counts, ['run.seal', 1] as const].filter(([, n]) => n > 0);
       for (const [t, n] of all.sort(([a], [b]) => (a < b ? -1 : 1))) byType[t] = n;
       const records = all.reduce((sum, [, n]) => sum + n, 0);
-      const seq = await writer.seal({ format: SEAL_FORMAT, counts: { records, byType }, result }, at());
+      const seq = await writer.seal({ format: SEAL_FORMAT, counts: { records, byType }, result: scrubbed(result, rules, 'run.seal') }, at());
       return { seq, head: await writer.head() };
     },
   };
@@ -132,10 +158,10 @@ export async function openRecorder(store: Store, sha256: Sha256, options: Record
 interface CollectorRun {
   by: string;
   run: number;
-  /** The subject of its last fact. */
-  subject: string;
-  /** Its facts accepted and not refused by the writer since, the collection fact aside. */
-  facts: number;
+  /** The subject of its first fact, for a run all of whose facts the writer then refused. */
+  firstSubject: string;
+  /** Its facts accepted and not refused by the writer since, the collection fact aside, in the order accepted. */
+  accepted: { subject: string }[];
   /** Its collection fact has been accepted. */
   closed: boolean;
 }
@@ -155,23 +181,20 @@ class CollectorRuns {
     assertFact(body);
     const fact = body as unknown as Fact;
     const key = JSON.stringify([fact.by, fact.run]);
-    const run = this.runs.get(key) ?? { by: fact.by, run: fact.run, subject: fact.subject, facts: 0, closed: false };
+    const run = this.runs.get(key) ?? { by: fact.by, run: fact.run, firstSubject: fact.subject, accepted: [], closed: false };
     if (run.closed) {
       throw new Error(`a fact of ${fact.by} run ${fact.run} came after that run's collection fact, and the run is closed`);
     }
     this.runs.set(key, run);
-    if (fact.kind === 'collection') {
-      run.closed = true;
-    } else {
-      run.facts += 1;
-      run.subject = fact.subject;
-    }
-    // Takes back only what this fact changed, whatever was accepted since: the run's count stays the number of its
-    // facts that are in the ledger, and a run left with no fact and no closing is forgotten.
+    const mine = { subject: fact.subject };
+    if (fact.kind === 'collection') run.closed = true;
+    else run.accepted.push(mine);
+    // Takes back only what this fact changed, whatever was accepted since: the run's facts stay those in the ledger,
+    // its subject that of the last of them, and a run left with no fact and no closing is forgotten.
     return () => {
       if (fact.kind === 'collection') run.closed = false;
-      else run.facts -= 1;
-      if (run.facts === 0 && !run.closed && this.runs.get(key) === run) this.runs.delete(key);
+      else run.accepted.splice(run.accepted.indexOf(mine), 1);
+      if (run.accepted.length === 0 && !run.closed && this.runs.get(key) === run) this.runs.delete(key);
     };
   }
 
@@ -188,12 +211,12 @@ function engineClosing(open: OpenCollectorRun): Json {
     v: 1,
     by: open.by,
     run: open.run,
-    subject: open.subject,
+    subject: open.accepted.at(-1)?.subject ?? open.firstSubject,
     body: {
       setOut: 'not stated: the collector did not close its run',
       status: 'failed',
       reason: 'the run ended before the collector recorded its collection fact',
-      counts: { facts: open.facts },
+      counts: { facts: open.accepted.length },
       dropped: 0,
     },
   };

@@ -616,6 +616,21 @@ export async function executePlans(plans: Plan[], opts: ExecutePlansOptions): Pr
   return results;
 }
 
+/**
+ * A run's full scrub rules: the configured terms, the secret values its plans name, and the test accounts'
+ * credentials. Local evidence masks only the secrets; a proof bundle is scrubbed with all of them.
+ */
+export function runScrubRules(
+  scrub: ScrubRules,
+  plans: readonly Plan[],
+  env: Record<string, string | undefined> = process.env,
+  accounts: readonly TestAccountSpec[] = resolveTestAccountsFromEnv(env),
+): ScrubRules {
+  const names = [...new Set(plans.flatMap((p) => p.steps.flatMap((s) => secretNames(s.text))))];
+  const credentials = collectCredentialSecrets(env, accounts);
+  return withSecrets(withSecrets(scrub, names, env), credentials.names, credentials.env);
+}
+
 function collectCredentialSecrets(
   runEnv: Record<string, string | undefined>,
   accounts: readonly TestAccountSpec[],

@@ -54,7 +54,16 @@ describe("check 13's collectors", () => {
     const records = (await readLedger(store)).records.slice(1);
     expect(records.map((r) => [r.t, r.body])).toEqual([
       ['fact', { kind: 'repo.file', v: 1, by: 'lockfile-reader@1', run: 1, subject: 'repository', body: { path: 'package-lock.json', role: 'lockfile' } }],
-      ['fact', collectionFact({ by: 'lockfile-reader@1', subject: 'repository', setOut: 'every supported lockfile in the repository', counts: { lockfiles: 1 } })],
+      [
+        'fact',
+        collectionFact({
+          by: 'lockfile-reader@1',
+          subject: 'repository',
+          setOut: 'every supported lockfile in the repository',
+          counts: { lockfiles: 1 },
+          listed: { lockfiles: ['package-lock.json'] },
+        }),
+      ],
     ]);
   });
 
@@ -81,6 +90,7 @@ describe("check 13's collectors", () => {
         setOut: 'every lockfile found, against the offline vulnerability database',
         status: 'complete',
         counts: { lockfiles: 1, packages: 1, advisories: 1 },
+        listed: { lockfiles: ['package-lock.json'] },
         dropped: 0,
       },
     ]);
@@ -103,6 +113,7 @@ describe("check 13's collectors", () => {
           status: 'failed',
           reason: 'the offline vulnerability database is not present',
           counts: { lockfiles: 1, packages: 0, advisories: 0 },
+          listed: { lockfiles: ['package-lock.json'] },
           dropped: 0,
         },
       ],
@@ -115,6 +126,23 @@ describe("check 13's collectors", () => {
     expect(placed.slice(0, 3).map((p) => (p.fact.body as { path: string }).path)).toEqual(['apps/web/yarn.lock', 'apps/api/yarn.lock', 'package-lock.json']);
     const scan = await recordOsvScan(recorder, 'repository', { ...criticalScan([]), hits: [{ ...criticalScan([]).hits[0]!, sourcePath: 'apps\\web\\package-lock.json' }] });
     expect((scan[1]!.fact.body as { lockfile: string }).lockfile).toBe('apps/web/package-lock.json');
+  });
+
+  it('both collectors list the lockfiles they saw by the same paths in the same order, so equal sets give equal lists', async () => {
+    // Two looks at one repository, the files given in different orders and with either slash: the lists recorded match.
+    const looks = [
+      ['apps\\web\\yarn.lock', 'package-lock.json', 'apps/api/yarn.lock', 'Zed/pnpm-lock.yaml'],
+      ['Zed\\pnpm-lock.yaml', 'apps/api/yarn.lock', 'package-lock.json', 'apps/web/yarn.lock'],
+    ];
+    const expected = ['Zed/pnpm-lock.yaml', 'apps/api/yarn.lock', 'apps/web/yarn.lock', 'package-lock.json']; // by code unit, not by locale
+    const listed = (placed: PlacedFact[]) => (placed.at(-1)!.fact.body as { listed: { lockfiles: string[] } }).listed.lockfiles;
+    for (const lockfiles of looks) {
+      expect(listed(await recordLockfiles((await recorderOverMemory()).recorder, 'repository', { lockfiles }))).toEqual(expected);
+      expect(listed(await recordOsvScan((await recorderOverMemory()).recorder, 'repository', { ...criticalScan(lockfiles), hits: [] }))).toEqual(expected);
+    }
+    // A run that found nothing, or could not look, lists nothing.
+    expect(listed(await recordLockfiles((await recorderOverMemory()).recorder, 'repository', { failed: 'the repository folder does not exist' }))).toEqual([]);
+    expect(listed(await recordOsvScan((await recorderOverMemory()).recorder, 'repository', { failed: 'there was no repository to scan' }))).toEqual([]);
   });
 
   it('on every way a scan can end, each run records facts that match their kinds and ends with its collection fact', async () => {
@@ -145,6 +173,7 @@ describe("check 13's collectors", () => {
       await expect(recordOsvScan(recorder, 'repository', { ...criticalScan([]), hits: [{ ...criticalScan([]).hits[0]!, sourcePath: bad }] })).rejects.toThrow(
         /is not a path relative to the repository/,
       );
+      await expect(recordOsvScan(recorder, 'repository', { ...criticalScan([bad]), hits: [] })).rejects.toThrow(/is not a path relative to the repository/);
       expect(store.textOf('ledger.jsonl')).not.toContain('package-lock');
       expect(store.textOf('ledger.jsonl')).not.toContain('yarn');
     }

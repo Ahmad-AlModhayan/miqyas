@@ -45,7 +45,7 @@ import { CorpusError, lintCorpus, loadCorpusFromPath, resolveContainedCorpusPath
 import { parseFailOn, type FailOnThreshold, type Finding } from '../proof-core/findings.js';
 import { isDryRunStatus, reportPath, type PlanResult } from '../proof-core/ledger.js';
 import { applyMutation, BuildChangedError, classify, parsePreset, summarize, type Mutation, type MutationPreset, type MutationResult } from '../proof-core/mutate.js';
-import { executePlans, runMutations, runVerification, type RunResult } from '../proof-core/orchestrator.js';
+import { executePlans, runMutations, runScrubRules, runVerification, type RunResult } from '../proof-core/orchestrator.js';
 import { lintPlan, loadPlanFile, loadPlans, PlanError, resolvePlanFiles, serializePlan, type Plan } from '../proof-core/plan.js';
 import { parseReadinessProfile, type ReadinessProfile } from '../proof-core/readiness.js';
 import { renderHuman, type Method, type RunReport } from '../proof-core/report.js';
@@ -537,6 +537,7 @@ async function cmdRun(args: string[], o: Opts, inject: Injected, quiet = false):
           runId: id,
           open: await buildRunOpen({ url, plans, settings, ...(exec.quote ? { quote: exec.quote } : {}) }),
           now: inject.now ?? (() => new Date()),
+          scrub: runScrubRules(scrub, plans),
         },
         judge: (recorder) => judgeNewPath(recorder, { ...(profile ? { profile } : {}), ...(repoPath !== undefined ? { repoPath } : {}), failOn }),
         printHead: (line) => (o.json ? process.stderr : process.stdout).write(line + '\n'),

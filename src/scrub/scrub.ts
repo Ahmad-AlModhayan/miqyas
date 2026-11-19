@@ -39,27 +39,42 @@ function pattern(t: ScrubTerm, ignoreCase: boolean): RegExp {
   return new RegExp(source(t), ignoreCase ? 'giu' : 'gu');
 }
 
-export function scrubText(text: string, rules: ScrubRules): string {
-  if (rules.terms.length === 0) return text;
+function replaceTerms(text: string, rules: ScrubRules): string {
   let out = text;
   for (const t of ordered(rules)) out = out.replace(pattern(t, rules.ignoreCase ?? true), () => t.to);
   return out;
 }
 
-/** Every remaining occurrence of a term (the re-scan; it must find nothing). */
+/** The text, and its NFC form when that differs: a term is NFC, and text written decomposed (NFD) must match it too. */
+const forms = (text: string): string[] => {
+  const nfc = text.normalize('NFC');
+  return nfc === text ? [text] : [text, nfc];
+};
+
+/** Replaces each term. Text that still holds one once composed (NFC) is composed and scrubbed again; other text is left
+ * as it was written. */
+export function scrubText(text: string, rules: ScrubRules): string {
+  if (rules.terms.length === 0) return text;
+  const out = replaceTerms(text, rules);
+  const nfc = out.normalize('NFC');
+  return nfc !== out && rules.terms.some((t) => pattern(t, rules.ignoreCase ?? true).test(nfc)) ? replaceTerms(nfc, rules) : out;
+}
+
+/** Every remaining occurrence of a term (the re-scan; it must find nothing), as written or once composed. */
 export function findTerms(text: string, rules: ScrubRules): { term: string; count: number }[] {
   const hits: { term: string; count: number }[] = [];
   for (const t of rules.terms) {
-    const n = text.match(pattern(t, rules.ignoreCase ?? true))?.length ?? 0;
+    const n = Math.max(...forms(text).map((f) => f.match(pattern(t, rules.ignoreCase ?? true))?.length ?? 0));
     if (n > 0) hits.push({ term: t.from, count: n });
   }
   return hits;
 }
 
-/** The re-scan before text leaves the machine: each rule that still matches, named by number and replacement, never
- * by the matched text (a secret's rule is named by its placeholder). */
+/** The re-scan before text leaves the machine: each rule that still matches, as written or once composed, named by
+ * number and replacement, never by the matched text (a secret's rule is named by its placeholder). */
 export function ruleHits(text: string, rules: ScrubRules): string[] {
-  return rules.terms.flatMap((t, i) => (pattern(t, rules.ignoreCase ?? true).test(text) ? [`rule ${i + 1} (to "${t.to}")`] : []));
+  const all = forms(text);
+  return rules.terms.flatMap((t, i) => (all.some((f) => pattern(t, rules.ignoreCase ?? true).test(f)) ? [`rule ${i + 1} (to "${t.to}")`] : []));
 }
 
 /** One pattern for every term, matched as `scrubText` matches them; used to find secret values on the page. */
@@ -74,12 +89,12 @@ export function jsonQuote(s: string): string {
   return JSON.stringify(s).replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
-/** A value as typed, as a URL carries it (percent-encoded, and form-encoded: a GET form, spaces as +), and as the
- * snapshot quotes it. */
+/** A value as typed, as a URL carries it (percent-encoded as a component, as a whole URL with its "/" and "?" kept,
+ * and form-encoded: a GET form, spaces as +), and as the snapshot quotes it. */
 function encodings(v: string): string[] {
   const uri = encodeURIComponent(v);
   const form = uri.replace(/[!'()~]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`).replace(/%20/g, '+');
-  return [...new Set([v, uri, form, jsonQuote(v).slice(1, -1)])];
+  return [...new Set([v, uri, encodeURI(v), form, jsonQuote(v).slice(1, -1)])];
 }
 
 /** One plan's rules: the configured terms, plus each secret's value (also URL-encoded) scrubbed back to its
@@ -92,6 +107,27 @@ export function withSecrets(rules: ScrubRules, names: string[], env: Record<stri
     return v ? encodings(v).map((from): ScrubTerm => ({ from, to: `\${secret.${name}}`, ...(whole ? { whole } : {}) })) : [];
   });
   return { ...rules, terms: [...rules.terms, ...secrets] };
+}
+
+/** The rules with each term also as a URL carries it, scrubbed to the same replacement: a term in a path segment,
+ * a query or a form is percent-encoded there. */
+export function withEncodedTerms(rules: ScrubRules): ScrubRules {
+  const seen = new Set(rules.terms.map((t) => t.from));
+  const more: ScrubTerm[] = [];
+  for (const t of rules.terms) {
+    for (const from of encodings(t.from)) {
+      if (seen.has(from)) continue;
+      seen.add(from);
+      more.push({ ...t, from });
+    }
+  }
+  return { ...rules, terms: [...rules.terms, ...more] };
+}
+
+/** Whether a media type is text, so that a blob of it can be scrubbed as UTF-8 text. */
+export function isTextMediaType(mediaType: string): boolean {
+  const type = mediaType.split(';')[0]!.trim().toLowerCase();
+  return type.startsWith('text/') || /^application\/([\w.-]+\+)?(json|xml|javascript|ecmascript|x-ndjson|jsonl?)$/.test(type) || type.endsWith('+json') || type.endsWith('+xml') || type === 'image/svg+xml';
 }
 
 export function parseScrubRules(raw: unknown, where = 'scrub rules'): ScrubRules {

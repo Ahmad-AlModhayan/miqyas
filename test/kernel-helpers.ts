@@ -16,6 +16,16 @@ export const text = (bytes: Uint8Array | undefined): string => new TextDecoder()
 /** A fact as a test gives it: what a rule reads, the rest taking the plainest value when it is placed. */
 export type Given = { kind: string; by: string; body: Json; from?: number[]; withheld?: string[]; subject?: string; run?: number };
 
+/** A `dep.advisory` fact as the osv adapter records it about the repository, its body whole and valid for its kind. */
+export const advisoryFact = (id: string, severity: string, more: { malicious?: boolean; name?: string } = {}): Fact => ({
+  kind: 'dep.advisory',
+  v: 1,
+  by: 'osv-adapter@1',
+  run: 1,
+  subject: 'repository',
+  body: { id, aliases: [], malicious: more.malicious ?? false, severity, package: { name: more.name ?? 'p', version: '1.0.0', ecosystem: 'npm' }, lockfile: 'package-lock.json', fixed: [] },
+});
+
 /** An item inside a test claim: `w` is what `where` reads, `u` what `usable` reads, `v` what `holds` reads. */
 export const item = (v: Json, more: { [k: string]: Json } = {}): Given => ({ kind: 't.item', by: 'c@1', body: { v, w: true, u: 1, ...more } });
 /** The `collection` fact of collector `c@1`, or of another, which a test claim's `covered` reads. */
@@ -138,10 +148,25 @@ export function collectionFact(close: {
   status?: 'complete' | 'partial' | 'failed';
   reason?: string;
   dropped?: number;
-}): { kind: string; v: number; by: string; run: number; subject: string; body: { [field: string]: string | number | { [name: string]: number } } } {
-  const { by, run = 1, subject, setOut, counts, status = 'complete', dropped = 0 } = close;
+  listed?: { [name: string]: string[] };
+}): {
+  kind: string;
+  v: number;
+  by: string;
+  run: number;
+  subject: string;
+  body: { [field: string]: string | number | { [name: string]: number } | { [name: string]: string[] } };
+} {
+  const { by, run = 1, subject, setOut, counts, status = 'complete', dropped = 0, listed } = close;
   const reason = close.reason ?? (status === 'complete' ? undefined : 'stopped');
-  return { kind: 'collection', v: 1, by, run, subject, body: { setOut, status, ...(reason === undefined ? {} : { reason }), counts, dropped } };
+  return {
+    kind: 'collection',
+    v: 1,
+    by,
+    run,
+    subject,
+    body: { setOut, status, ...(reason === undefined ? {} : { reason }), counts, ...(listed === undefined ? {} : { listed }), dropped },
+  };
 }
 
 /** A store held in memory. Every path is kept under `root`, as a folder on disk would keep it. */

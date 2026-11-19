@@ -191,7 +191,7 @@ type Outcome = { verdict: VerdictValue; reason?: Reason; shown: number[] };
 export function judgeClaim(loaded: LoadedClaim, input: JudgeInput): Verdict {
   if ('parts' in loaded) return judgeCombined(loaded, input);
   if (loaded.claim.shape === 'pair') return judgePair(loaded as LoadedPairClaim, input);
-  return judgeSet(loaded as LoadedSetClaim, input);
+  return judgeSet(loaded, input);
 }
 
 /**
@@ -298,9 +298,13 @@ function verdictRecord(
   };
 }
 
-/** Judges a `set` claim over the facts in its view (docs/ALGORITHMS.md A1). */
-export function judgeSet(loaded: LoadedSetClaim, input: JudgeInput): Verdict {
-  const { claim, compiled } = loaded;
+/**
+ * Judges a `set` claim over the facts in its view (docs/ALGORITHMS.md A1). It takes what `loadClaim` gives and
+ * refuses any other shape, which `judgeClaim` routes.
+ */
+export function judgeSet(loaded: LoadedClaim, input: JudgeInput): Verdict {
+  if ('parts' in loaded || loaded.claim.shape !== 'set') throw new TypeError(`judgeSet judges a set claim, not ${claimRef(loaded.claim)}`);
+  const { claim, compiled } = loaded as LoadedSetClaim;
   const inView = factsInView(claim.view, input);
 
   // Each item goes to one of four groups, named as in ALGORITHMS A1: `yes` (it holds, or for `count` it is inside the
