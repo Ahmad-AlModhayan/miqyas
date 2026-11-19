@@ -49,6 +49,10 @@ export function checkFact(fact: unknown): FactCheck {
   if (typeof kind !== 'string' || !isKnownKind(kind)) return refused(String(kind), 'kind', 'no schema is known for this kind');
   const k = typeof v === 'number' ? factKind(kind, v) : undefined;
   if (k === undefined) return refused(kind, 'v', `no schema is known for version ${JSON.stringify(v)} of this kind`);
+  // A schema reads a field through the prototype, and a record writes only the object's own fields: an object that is
+  // not a plain one is refused here, so that the refusal names the kind and the field and not the ledger writer.
+  const notPlain = notPlainAt(fact, []);
+  if (notPlain !== undefined) return refused(kind, notPlain, 'must be a plain object or array, as JSON holds it');
   const validate = compiled.get(`${k.kind}@${k.v}`) as ValidateFunction;
   if (!validate(fact)) {
     const error = (validate.errors ?? [])[0];
@@ -57,7 +61,52 @@ export function checkFact(fact: unknown): FactCheck {
   }
   const minusZero = minusZeroAt(fact, []);
   if (minusZero !== undefined) return refused(kind, minusZero, 'must not be minus zero, which a record cannot hold');
+  const unsaid = withheldProblem(fact as { body: unknown; withheld?: readonly string[] });
+  if (unsaid !== undefined) return refused(kind, unsaid.field, unsaid.why);
   return { ok: true };
+}
+
+/** A value a fact holds in place of one that must not be kept (docs/FOUNDATION.md §3): it says why, and its digest is keyed. */
+function isWithheldValue(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { why, digest } = value as { why?: unknown; digest?: unknown };
+  return typeof why === 'string' && typeof digest === 'string' && digest.startsWith('hmac-sha256:');
+}
+
+/** The dotted path from the body of each withheld value it holds. A list adds no name: its items share its path. */
+function withheldValuesAt(value: unknown, path: readonly string[], out: string[]): string[] {
+  if (isWithheldValue(value)) out.push(path.join('.'));
+  else if (Array.isArray(value)) for (const item of value) withheldValuesAt(item, path, out);
+  else if (value !== null && typeof value === 'object') for (const [key, item] of Object.entries(value)) withheldValuesAt(item, [...path, key], out);
+  return out;
+}
+
+/** Whether the body holds a field at a dotted path, reading through lists. */
+function holdsField(body: unknown, path: string): boolean {
+  let here: unknown[] = [body];
+  for (const name of path.split('.')) {
+    here = here
+      .flatMap((v) => (Array.isArray(v) ? v : [v]))
+      .filter((v): v is Record<string, unknown> => v !== null && typeof v === 'object' && Object.hasOwn(v, name))
+      .map((v) => v[name]);
+    if (here.length === 0) return false;
+  }
+  return true;
+}
+
+/**
+ * What `withheld` fails to say: a withheld value at a path it does not name, or a path it names that the body does not
+ * hold. A path it names may hold a plain value, which rests on one the collector did not keep (check 13's severity).
+ */
+function withheldProblem(fact: { body: unknown; withheld?: readonly string[] }): { field: string; why: string } | undefined {
+  const named = fact.withheld ?? [];
+  for (const at of withheldValuesAt(fact.body, [], [])) {
+    if (!named.includes(at)) return { field: `body.${at}`, why: `holds a withheld value, and withheld does not name ${JSON.stringify(at)}` };
+  }
+  for (const at of named) {
+    if (!holdsField(fact.body, at)) return { field: 'withheld', why: `names ${JSON.stringify(at)}, a field the body does not hold` };
+  }
+  return undefined;
 }
 
 /**
@@ -69,6 +118,18 @@ function minusZeroAt(value: unknown, path: string[]): string | undefined {
   if (value === null || typeof value !== 'object') return undefined;
   for (const [key, item] of Object.entries(value)) {
     const found = minusZeroAt(item, [...path, key]);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/** The first object that is neither a plain object nor an array, as a dotted path, or undefined. */
+function notPlainAt(value: unknown, path: string[]): string | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const proto = Object.getPrototypeOf(value) as unknown;
+  if (Array.isArray(value) ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return path.join('.');
+  for (const [key, item] of Object.entries(value)) {
+    const found = notPlainAt(item, [...path, key]);
     if (found !== undefined) return found;
   }
   return undefined;

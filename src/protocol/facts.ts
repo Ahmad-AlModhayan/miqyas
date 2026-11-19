@@ -5,7 +5,8 @@
 // also says whether its content may ever go to a model, whether it records traffic (and so must carry its `cause`),
 // which fields identify one item, and which blobs it holds.
 //
-// The kinds that derivations, extractors and the experiment engine record, and `finding`, come with their own tickets.
+// The kinds that derivations, extractors and the experiment engine record come with their own tickets. `finding` is
+// here: derivations, adapters and agents all record it.
 
 /** A JSON Schema, as plain data. */
 export type JsonSchema = { readonly [keyword: string]: unknown };
@@ -26,6 +27,14 @@ export type FactCause = (typeof FACT_CAUSES)[number];
 /** How a collector run ended (docs/FOUNDATION.md §3, "It closes"). */
 const COLLECTION_STATUSES = ['complete', 'partial', 'failed'] as const;
 
+/** How severe a finding is (docs/FOUNDATION.md §3), from least to most. */
+export const FINDING_SEVERITIES = ['info', 'low', 'medium', 'high', 'critical'] as const;
+export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
+/** Whether a derivation, an experiment or a second look has backed a finding. */
+export const FINDING_STATES = ['confirmed', 'unconfirmed'] as const;
+/** Where a finding came from (CONTEXT.md, "Source"): `by` names which one. */
+export const FINDING_SOURCES = ['derivation', 'adapter', 'agent'] as const;
+
 export interface FactKind {
   kind: string;
   /** The version of this schema. A fact names it in `v`. */
@@ -37,6 +46,8 @@ export interface FactKind {
   identity: readonly string[];
   /** The blobs a fact of this kind may name, and whether it must. A kind with none may name no blob. */
   blobs?: { readonly [name: string]: { required: boolean } };
+  /** A fact of it rests on other facts: it must name at least one in `from`. */
+  restsOn?: boolean;
   body: BodySchema;
 }
 
@@ -83,6 +94,35 @@ const SHA256_DIGEST: JsonSchema = { type: 'string', pattern: '^sha256:[0-9a-f]{6
 const BLOB_REF: JsonSchema = object({ digest: SHA256_DIGEST, size: count, mediaType: str });
 
 const http = (): JsonSchema => int(100, 599);
+
+/** A keyed digest (docs/ALGORITHMS.md L2): HMAC-SHA-256 under the run's key, which is thrown away at its end. */
+const KEYED_DIGEST: JsonSchema = { type: 'string', pattern: '^hmac-sha256:[0-9a-f]{64}$' };
+
+/**
+ * Why a value was not kept (docs/FOUNDATION.md §3, "Safe to keep"): a row's contents, an id a test account owns, a
+ * secret, or a request's or a response's body, which may hold any of them.
+ */
+export const WITHHELD_REASONS = ['row', 'owned-id', 'secret', 'body'] as const;
+export type WithheldReason = (typeof WITHHELD_REASONS)[number];
+
+/**
+ * A value that must not be kept, as a fact holds it: why, its shape (types only, and field names only when they are a
+ * schema's), its count and its keyed digest, so that two values can be compared for equality without either being
+ * readable. A body of bytes also says its size, in bytes. The schema below and this type describe the same object.
+ */
+export type WithheldValue = {
+  why: WithheldReason;
+  shape: string;
+  count: number;
+  digest: string;
+  size?: number;
+};
+
+/** The schema of a body withheld, as an exchange holds it: a WithheldValue with its size. */
+const WITHHELD_BODY: JsonSchema = object({ why: oneOf(...WITHHELD_REASONS), shape: str, count, digest: KEYED_DIGEST, size: count });
+
+/** A field of the body, as `withheld` names it: its path from the body, the names joined by ".". */
+const BODY_FIELD: JsonSchema = { type: 'string', pattern: '^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*$' };
 
 export const FACT_KINDS: readonly FactKind[] = [
   {
@@ -149,8 +189,9 @@ export const FACT_KINDS: readonly FactKind[] = [
         as: nullable(object({ account: str, role: str })),
       },
       {
-        request: object({ shape: str, size: count, digest: str }),
-        response: object({ shape: str, size: count, digest: str }),
+        // The bodies are not kept: each is withheld, and the fact names it in `withheld`.
+        request: WITHHELD_BODY,
+        response: WITHHELD_BODY,
       },
     ),
   },
@@ -289,7 +330,12 @@ export const FACT_KINDS: readonly FactKind[] = [
     traffic: false,
     identity: ['setOut'],
     body: {
-      ...object({ setOut: str, status: oneOf(...COLLECTION_STATUSES), counts: objectOf(count), dropped: count }, { reason: str }),
+      // `listed` names what was counted, under the name of its count, each name once: a claim's coverage can then
+      // compare what two collectors saw, and not only how many (two looks with one file swapped have equal counts).
+      ...object(
+        { setOut: str, status: oneOf(...COLLECTION_STATUSES), counts: objectOf(count), dropped: count },
+        { reason: str, listed: objectOf({ ...list(str), uniqueItems: true }) },
+      ),
       allOf: [
         // A run that didn't finish says why it stopped.
         {
@@ -302,6 +348,23 @@ export const FACT_KINDS: readonly FactKind[] = [
           then: { type: 'object', properties: { status: { enum: ['partial', 'failed'] } } },
         },
       ],
+    },
+  },
+  {
+    // A problem no claim asked about (docs/FOUNDATION.md §3). The facts it rests on are its `from`. It holds no
+    // verdict: no field of it can say pass or fail.
+    kind: 'finding',
+    v: 1,
+    model: 'scrubbed',
+    traffic: false,
+    identity: ['id'],
+    restsOn: true,
+    body: {
+      ...object({ id: str, title: str, severity: oneOf(...FINDING_SEVERITIES), state: oneOf(...FINDING_STATES), source: oneOf(...FINDING_SOURCES) }),
+      // A finding an agent proposed is unconfirmed: what backs it is a derivation's or an experiment's finding of its
+      // own, which rests on it.
+      if: { type: 'object', required: ['source'], properties: { source: { const: 'agent' } } },
+      then: { type: 'object', properties: { state: { const: 'unconfirmed' } } },
     },
   },
 ];
@@ -324,6 +387,7 @@ export function factSchema(k: FactKind): JsonSchema {
   const blobs = k.blobs;
   const required = ['kind', 'v', 'by', 'run', 'subject', 'body'];
   if (k.traffic) required.push('cause');
+  if (k.restsOn) required.push('from');
   if (blobs && Object.values(blobs).some((b) => b.required)) required.push('blobs');
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -342,7 +406,7 @@ export function factSchema(k: FactKind): JsonSchema {
       place: objectOf(str),
       effect: int(1),
       cause: oneOf(...FACT_CAUSES),
-      from: list(int(1)),
+      from: k.restsOn ? { ...list(int(1)), minItems: 1 } : list(int(1)),
       body: k.body,
       blobs:
         blobs === undefined
@@ -355,7 +419,8 @@ export function factSchema(k: FactKind): JsonSchema {
                 .map(([name]) => name),
               additionalProperties: false,
             },
-      withheld: { type: 'array', items: str, uniqueItems: true },
+      // The fields of the body that hold a value withheld, or rest on one the collector did not keep.
+      withheld: { type: 'array', items: BODY_FIELD, uniqueItems: true },
     },
     required,
     additionalProperties: false,

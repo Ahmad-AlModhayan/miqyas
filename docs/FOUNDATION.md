@@ -87,21 +87,46 @@ Rules every collector follows:
 - **Safe to keep.** The scrubber runs before a fact is recorded, not only before a model call. A value that must not
   be kept (a row's contents, an id a test account owns, a secret) is recorded as shape, count and a keyed digest, so
   that two values can still be compared for equality without either being readable.
+  - *What is scrubbed.* Every record and every text blob, with the run's full rules: the `--scrub` terms, each secret
+    value a plan names and the test accounts' credentials, each also as a URL carries it (percent-encoded as a
+    component and as `encodeURI` writes it, form-encoded) and matched in text written decomposed (NFD). Content is
+    scrubbed: every string value and object key. Structure is not: a fact's `kind`, `v`, `by`, `run`, `from`,
+    `effect`, `cause`, `blobs` and `withheld`, and anywhere a string that is a whole `sha256:` or `hmac-sha256:`
+    digest. Two strings of one list, or two keys of one object, that scrubbing makes equal are kept apart by `~2`,
+    `~3`… in code-unit order of the originals, so no value is lost and a list stays a list of distinct names.
+  - *A withheld value* is `{why, shape, count, digest}`, and a body of bytes adds `size`. `why` is `row`, `owned-id`,
+    `secret` or `body`; `digest` is HMAC-SHA-256 under the run's key; `count` is the characters of a text, the items of
+    a list, the fields of an object. The `shape` gives types only (an object as its fields' shapes in code-unit order),
+    and keeps field names only when the collector says they are a schema's names, since a row keyed by its own values
+    would otherwise put them in the ledger.
+  - *`withheld`* lists body fields by dotted path (`response`, `as.account`; a list adds no name). A fact whose body
+    holds a withheld value at a path it does not name is refused, and so is a path it names that the body does not
+    hold. A named field may hold a plain value that rests on one not kept, as check 13's `severity` does.
 - **Miqyas enumerates; a tool only judges items.** The list of files, screens, tables or tests a claim covers comes
   from Miqyas's own enumeration, recorded as facts, and never from a tool's report.
 - **Its own traffic is marked.** Every exchange carries its `cause`. A 503 that Miqyas's own probing caused is not the
   target's page failing, and a claim about pages reads only what pages caused.
 - **It closes.** Every collector run ends with a `collection` fact: what it set out to cover, whether it finished
-  (`complete`, `partial`, `failed`), why it stopped, its counts, and how many facts it dropped. The engine writes
+  (`complete`, `partial`, `failed`), why it stopped, its counts, and how many facts it dropped. Where a claim must
+  compare what two collectors saw, not only how many, it also lists what it counted by name (`listed`, each name
+  once, in code-unit order), so that one file swapped for another between two looks is seen. The engine writes
   `failed` for a collector that died. After a run's `collection` fact, no further fact from that run is accepted.
+  Limit today: check 13's claim reads both lockfile lists as kernel input, which is capped at 10,000 units (1 plus
+  the length of each string), so a repository with more than about 170 lockfiles gives `not_checked` on this path.
 - **Identity.** Each kind's schema names the fields that identify one item. Two collectors that record the same thing
   record two facts; a claim says which collector it reads (§4, "Views").
 - **Model policy.** Each kind declares whether its content may ever go to a model. Repository content never does
   (ADR 0003).
 
 A **finding** is a fact of kind `finding`: a problem no claim asked about, with a source (a derivation, an adapter or
-an agent), a severity and the facts it rests on. A model-proposed finding is `unconfirmed` until a derivation or an
-experiment backs it. Findings are recorded in the ledger and never carry a verdict.
+an agent), a severity and the facts it rests on. Its body is `id`, `title`, `severity` (`info`, `low`, `medium`,
+`high`, `critical`), `state` (`confirmed`, `unconfirmed`) and `source` (`derivation`, `adapter`, `agent`), and its
+`from` is required, with at least one position. A model-proposed finding is `unconfirmed` until a derivation or an
+experiment backs it; one whose source is `agent` can't be `confirmed`. Findings are recorded in the ledger and never
+carry a verdict.
+
+A derivation's examples each state the facts it gives, in order and without `by` and `run`; it is registered only
+when it gives exactly those, so one that gives as many facts but the wrong ones is refused.
 
 ### Kinds in the foundation
 
@@ -110,7 +135,7 @@ experiment backs it. Findings are recorded in the ledger and never carry a verdi
 | `ui.snapshot` | web worker; later mobile and desktop | URL, title, language, direction, viewport, whether it was truncated, whether the page had settled; the rendered nodes (role, name, state, text, box in whole pixels, whether rendered) as a JSON blob, and the screenshot as a blob |
 | `ui.event` | web worker | a page error, a console error, a dialog |
 | `ui.control` | crawl | one control tried: its label, what changed (URL, nodes, requests), or why it wasn't tried |
-| `http.exchange` | web worker, API worker | method, URL and its route template, status, selected headers, body shape and keyed digest, its cause, and as whom it was sent (nobody, or a named account with its role) |
+| `http.exchange` | web worker, API worker | method, URL and its route template (or null), status (or null), selected headers, the request and response bodies each as a withheld value (shape, count, size, keyed digest) and named in `withheld`, its cause, and as whom it was sent (nobody, or a named account with its role) |
 | `asset` | web worker | one served file (bundle, source map) or storage entry, as a blob |
 | `code.coverage` | web worker | which functions and blocks of the served scripts ran, per session |
 | `a11y.violation` | axe adapter | rule, impact, the node |

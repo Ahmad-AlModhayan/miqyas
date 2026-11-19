@@ -19,6 +19,7 @@ const VALID: Record<string, Record<string, unknown>> = {
   'ui.control': { cause: 'crawl', body: { label: 'Save', tried: true, changed: { url: false, nodes: 3, requests: 1 } } },
   'http.exchange': {
     cause: 'page',
+    withheld: ['response'],
     origin: 'https://app.test',
     body: {
       method: 'GET',
@@ -26,7 +27,7 @@ const VALID: Record<string, Record<string, unknown>> = {
       route: '/api/items/{id}',
       status: 200,
       headers: { 'content-type': 'application/json' },
-      response: { shape: 'object', size: 120, digest: 'k1' },
+      response: { why: 'body', shape: '{id:integer,name:string}', count: 2, size: 120, digest: `hmac-sha256:${'cd'.repeat(32)}` },
       as: { account: 'owner', role: 'admin' },
     },
   },
@@ -55,13 +56,17 @@ const VALID: Record<string, Record<string, unknown>> = {
   'step.done': { cause: 'plan', body: { plan: 'checkout', step: 3, outcome: 'done' } },
   sample: { body: { name: 'first paint', value: 812, unit: 'ms' } },
   collection: { body: { setOut: 'every supported lockfile in the repository', status: 'complete', counts: { lockfiles: 1 }, dropped: 0 } },
+  finding: {
+    from: [4, 7],
+    body: { id: 'source-map-served', title: 'The served bundle exposes its source map', severity: 'medium', state: 'confirmed', source: 'derivation' },
+  },
 };
 
-/** The kinds of the §3 table that a worker, an adapter or a reader records. */
+/** The kinds of the §3 table that a worker, an adapter or a reader records, and `finding`. */
 const COLLECTED = Object.keys(VALID);
 
-/** The kinds of the §3 table that are not this ticket's: derivations, extractors, the experiment engine, findings. */
-const NOT_SCHEMED_HERE = ['model.state', 'model.edge', 'entity', 'property', 'capsule', 'fidelity', 'experiment', 'footprint', 'finding'];
+/** The kinds of the §3 table that are not this ticket's: derivations, extractors, the experiment engine. */
+const NOT_SCHEMED_HERE = ['model.state', 'model.edge', 'entity', 'property', 'capsule', 'fidelity', 'experiment', 'footprint'];
 
 const fact = (kind: string, extra: Record<string, unknown> = {}) => ({ kind, v: 1, by: 'test-collector@1', run: 1, subject: 'repository', ...VALID[kind], ...extra });
 
@@ -149,7 +154,7 @@ describe('checking a fact against its schema', () => {
 
   it('refuses a fact of a kind with no schema, naming the kind and the field', () => {
     expect(refusal(fact('collection', { kind: 'page' }))).toMatchObject({ kind: 'page', field: 'kind' });
-    expect(refusal(fact('collection', { kind: 'finding' }))).toMatchObject({ kind: 'finding', field: 'kind' });
+    expect(refusal(fact('collection', { kind: 'footprint' }))).toMatchObject({ kind: 'footprint', field: 'kind' });
   });
 
   it('refuses a version of a kind that has no schema', () => {
@@ -329,5 +334,99 @@ describe('a collection fact', () => {
   it('cannot say it finished when it dropped facts', () => {
     expect(refusal(withBody('collection', (b) => (b.dropped = 2)))).toMatchObject({ kind: 'collection', field: 'body.status' });
     expect(checkFact(withBody('collection', (b) => Object.assign(b, { dropped: 2, status: 'partial', reason: 'shed under load' })))).toEqual({ ok: true });
+  });
+
+  it('may list what it counted, by name, each name once, so that a claim can compare two lists and not only two counts', () => {
+    const listed = (value: unknown) => withBody('collection', (b) => (b.listed = value));
+    expect(checkFact(listed({ lockfiles: ['apps/web/package-lock.json', 'package-lock.json'] }))).toEqual({ ok: true });
+    expect(checkFact(listed({ lockfiles: [] }))).toEqual({ ok: true });
+    expect(refusal(listed({ lockfiles: ['package-lock.json', 'package-lock.json'] }))).toMatchObject({ kind: 'collection', field: 'body.listed.lockfiles' });
+    expect(refusal(listed({ lockfiles: 'package-lock.json' }))).toMatchObject({ kind: 'collection', field: 'body.listed.lockfiles' });
+    for (const name of ['', 1, null]) {
+      expect(refusal(listed({ lockfiles: [name] }))).toMatchObject({ kind: 'collection', field: expect.stringMatching(/^body\.listed\.lockfiles/) });
+    }
+  });
+});
+
+describe('a finding', () => {
+  it('has a source, a severity, a state and the facts it rests on', () => {
+    for (const field of ['id', 'title', 'severity', 'state', 'source']) {
+      expect(refusal(withBody('finding', (b) => delete b[field]))).toMatchObject({ kind: 'finding', field: `body.${field}` });
+    }
+    const without: Record<string, unknown> = fact('finding');
+    delete without.from;
+    expect(refusal(without)).toMatchObject({ kind: 'finding', field: 'from' });
+    expect(refusal(fact('finding', { from: [] }))).toMatchObject({ kind: 'finding', field: 'from' });
+  });
+
+  it('takes the severities and states agreed, and nothing else', () => {
+    for (const severity of ['info', 'low', 'medium', 'high', 'critical']) {
+      expect(checkFact(withBody('finding', (b) => (b.severity = severity)))).toEqual({ ok: true });
+    }
+    expect(refusal(withBody('finding', (b) => (b.severity = 'blocker')))).toMatchObject({ kind: 'finding', field: 'body.severity' });
+    expect(checkFact(withBody('finding', (b) => (b.state = 'unconfirmed')))).toEqual({ ok: true });
+    expect(refusal(withBody('finding', (b) => (b.state = 'suspected')))).toMatchObject({ field: 'body.state' });
+    for (const source of ['derivation', 'adapter', 'agent']) {
+      expect(checkFact(withBody('finding', (b) => Object.assign(b, { source, state: 'unconfirmed' })))).toEqual({ ok: true });
+    }
+    expect(refusal(withBody('finding', (b) => (b.source = 'model')))).toMatchObject({ field: 'body.source' });
+  });
+
+  it('is unconfirmed when a model proposed it: a derivation or an experiment backs it with a finding of its own', () => {
+    expect(refusal(withBody('finding', (b) => Object.assign(b, { source: 'agent', state: 'confirmed' })))).toMatchObject({ kind: 'finding', field: 'body.state' });
+  });
+
+  it('never carries a verdict', () => {
+    for (const field of ['verdict', 'pass', 'status']) {
+      expect(refusal(withBody('finding', (b) => (b[field] = 'fail')))).toMatchObject({ kind: 'finding', field: `body.${field}` });
+    }
+    expect(refusal(fact('finding', { verdict: 'fail' }))).toMatchObject({ kind: 'finding', field: 'verdict' });
+  });
+});
+
+describe('a value that must not be kept', () => {
+  it('is held by an exchange as shape, count, size and a keyed digest, never a plain one', () => {
+    const response = (change: Record<string, unknown>) =>
+      withBody('http.exchange', (b) => Object.assign(b.response as Record<string, unknown>, change));
+    expect(refusal(response({ digest: 'k1' }))).toMatchObject({ kind: 'http.exchange', field: 'body.response.digest' });
+    expect(refusal(response({ digest: DIGEST }))).toMatchObject({ field: 'body.response.digest' });
+    expect(refusal(response({ value: 'row 1' }))).toMatchObject({ field: 'body.response.value' });
+    expect(refusal(response({ why: 'because' }))).toMatchObject({ field: 'body.response.why' });
+    for (const field of ['why', 'shape', 'count', 'size', 'digest']) {
+      expect(refusal(withBody('http.exchange', (b) => delete (b.response as Record<string, unknown>)[field]))).toMatchObject({ field: `body.response.${field}` });
+    }
+  });
+
+  it('is refused unless withheld names its field, naming the kind and the field', () => {
+    const { withheld: _named, ...unnamed } = fact('http.exchange') as Record<string, unknown>;
+    expect(refusal(unnamed)).toMatchObject({ kind: 'http.exchange', field: 'body.response' });
+    expect(refusal(unnamed).message).toMatch(/withheld/);
+    expect(refusal(fact('http.exchange', { withheld: ['as.account'] }))).toMatchObject({ kind: 'http.exchange', field: 'body.response' });
+    const both = withBody('http.exchange', (b) => (b.request = { ...(b.response as object) }));
+    expect(refusal(both)).toMatchObject({ field: 'body.request' });
+    expect(checkFact({ ...both, withheld: ['request', 'response'] })).toEqual({ ok: true });
+  });
+
+  it('is refused when withheld names a field the body does not hold', () => {
+    expect(refusal(fact('http.exchange', { withheld: ['response', 'request'] }))).toMatchObject({ kind: 'http.exchange', field: 'withheld' });
+    expect(refusal(fact('dep.advisory', { withheld: ['score'] }))).toMatchObject({ kind: 'dep.advisory', field: 'withheld' });
+    // A field that rests on a value the collector did not keep holds a plain value: check 13's severity.
+    expect(checkFact(fact('dep.advisory'))).toEqual({ ok: true });
+  });
+
+  it('is named in withheld by the path of its field in the body', () => {
+    expect(checkFact(fact('http.exchange', { withheld: ['response'] }))).toEqual({ ok: true });
+    expect(checkFact(fact('http.exchange', { withheld: ['response', 'as.account'] }))).toEqual({ ok: true });
+    expect(refusal(fact('http.exchange', { withheld: ['the response'] }))).toMatchObject({ kind: 'http.exchange', field: 'withheld.0' });
+    expect(refusal(fact('http.exchange', { withheld: ['response', 'response'] }))).toMatchObject({ field: 'withheld' });
+  });
+});
+
+describe('a body only JSON can hold', () => {
+  it('refuses fields that sit on a prototype and not on the object, naming the kind and the field', () => {
+    const body = Object.create({ path: 'package-lock.json' }) as Record<string, unknown>;
+    expect(refusal(fact('repo.file', { body }))).toMatchObject({ kind: 'repo.file', field: 'body' });
+    const viewport = Object.create({ width: 1, height: 2 }) as Record<string, unknown>;
+    expect(refusal(withBody('ui.snapshot', (b) => (b.viewport = viewport)))).toMatchObject({ kind: 'ui.snapshot', field: 'body.viewport' });
   });
 });

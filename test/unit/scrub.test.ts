@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { anyTerm, findTerms, jsonQuote, loadScrubRules, NO_SCRUB, parseScrubRules, ruleHits, scrubDir, scrubText, withSecrets } from '../../src/scrub/scrub.js';
+import { anyTerm, findTerms, jsonQuote, loadScrubRules, NO_SCRUB, parseScrubRules, ruleHits, scrubDir, scrubText, withEncodedTerms, withSecrets } from '../../src/scrub/scrub.js';
 
 const rules = await loadScrubRules(new URL('../../presets/wasl-scrub.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 
@@ -68,5 +68,27 @@ describe('scrubber', () => {
   it('rejects malformed rules', () => {
     expect(() => parseScrubRules({ terms: [{ from: '', to: 'x' }] })).toThrow();
     expect(() => parseScrubRules({})).toThrow();
+  });
+
+  it('scrubs a term in text written decomposed (NFD), and the re-scan finds it there', () => {
+    const rules = { terms: [{ from: 'Café Zorvex', to: 'ORG' }] };
+    const nfd = 'at Café Zorvex today'.normalize('NFD');
+    expect(nfd).not.toContain('Café');
+    expect(ruleHits(nfd, rules)).toHaveLength(1);
+    expect(findTerms(nfd, rules)).toEqual([{ term: 'Café Zorvex', count: 1 }]);
+    expect(scrubText(nfd, rules)).toBe('at ORG today');
+    // Text without the term is left as it was, decomposed or not.
+    const other = 'résumé'.normalize('NFD');
+    expect(scrubText(other, rules)).toBe(other);
+  });
+
+  it('scrubs a term as encodeURI writes it, its "/" kept, once the rules carry each term as a URL does', () => {
+    const rules = withEncodedTerms({ terms: [{ from: 'zorvex/é team', to: 'ORG' }] });
+    const url = `https://app.test/${encodeURI('zorvex/é team')}/home`;
+    expect(url).toContain('zorvex/%C3%A9%20team');
+    expect(scrubText(url, rules)).toBe('https://app.test/ORG/home');
+    expect(ruleHits(scrubText(url, rules), rules)).toEqual([]);
+    const secret = withSecrets(NO_SCRUB, ['S'], { MIQYAS_SECRET_S: 'a/b c?d' });
+    expect(scrubText(`https://app.test/${encodeURI('a/b c?d')}`, secret)).toBe('https://app.test/${secret.S}');
   });
 });
