@@ -98,8 +98,9 @@ function follows(found: Follows): Answer {
   const { seal, recomputed, records, agree } = found;
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const lines = [
-    `the seal (record ${seal.seq}) says ${seal.verdict ?? '(nothing)'} over ${seal.verdicts === null ? 'an unstated number of verdicts' : plural(seal.verdicts, 'verdict')}; ` +
-      `the fold of the ${plural(recomputed.verdicts, 'verdict record')} gives ${recomputed.verdict}`,
+    `the seal (record ${seal.seq}) says ${seal.verdict ?? '(nothing)'} over ${seal.verdicts === null ? 'an unstated number of verdicts' : plural(seal.verdicts, 'verdict')}, ` +
+      `${seal.exit === null ? 'with no exit code' : `exit ${seal.exit}`}; ` +
+      `the fold of the ${plural(recomputed.verdicts, 'verdict record')} gives ${recomputed.verdict}, exit ${recomputed.exit}`,
   ];
   if (!agree) for (const r of records) lines.push(`record ${r.seq}: ${r.claim ?? '(no claim named)'} ${r.verdict ?? '(no verdict)'}`);
   return { ok: agree, lines };

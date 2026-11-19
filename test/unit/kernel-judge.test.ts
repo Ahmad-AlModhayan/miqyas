@@ -6,7 +6,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ClaimRejection, loadClaim } from '../../src/kernel/claim.js';
 import type { Fact, PlacedFact } from '../../src/kernel/fact.js';
-import { fold, judgeSet, sealResult } from '../../src/kernel/judge.js';
+import { type SetClaim, VERDICTS, combine, fold, judgeClaim, sealResult } from '../../src/kernel/judge.js';
 import { advisoryFact, sha256 } from '../kernel-helpers.js';
 
 const CLAIM_FILE = path.resolve(import.meta.dirname, '../../src/claims/readiness-13-dependencies.json');
@@ -30,7 +30,7 @@ describe("check 13's claim", () => {
   it('fails on a critical advisory, and its verdict lists the facts read, the advisory shown and the coverage it saw', async () => {
     const loaded = await loadClaim(bytes(), sha256);
     const facts = placed(reader(1), advisory('GHSA-crit-0001', 'critical'), advisory('GHSA-low-0003', 'low'), osv());
-    const verdict = judgeSet(loaded, { subject: 'repository', facts });
+    const verdict = judgeClaim(loaded, { subject: 'repository', facts });
     expect(verdict).toEqual({
       claim: 'readiness.13.dependencies@1',
       rule: loaded.rule,
@@ -40,7 +40,7 @@ describe("check 13's claim", () => {
       read: [3, 4, 5, 6],
       shown: [4],
       coverage: {
-        rule: loaded.claim.covered,
+        rule: (loaded.claim as SetClaim).covered,
         met: true,
         saw: {
           collections: {
@@ -60,7 +60,7 @@ describe("check 13's claim", () => {
   it('reads only the facts its view names', async () => {
     const loaded = await loadClaim(bytes(), sha256);
     const other = fact('dep.advisory', 'someone-else@1', { id: 'X', severity: 'critical', malicious: false });
-    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(reader(1), other, osv()) });
+    const verdict = judgeClaim(loaded, { subject: 'repository', facts: placed(reader(1), other, osv()) });
     expect(verdict.verdict).toBe('pass');
     expect(verdict.vacuous).toBe(true);
     expect(verdict.read).toEqual([3, 5]);
@@ -70,14 +70,14 @@ describe("check 13's claim", () => {
     const loaded = await loadClaim(bytes(), sha256);
     const of = (subject: string, f: Fact): Fact => ({ ...f, subject });
 
-    const coveredElsewhere = judgeSet(loaded, { subject: 'repository', facts: placed(of('other', reader(1)), of('other', osv())) });
+    const coveredElsewhere = judgeClaim(loaded, { subject: 'repository', facts: placed(of('other', reader(1)), of('other', osv())) });
     expect(coveredElsewhere.verdict).toBe('not_checked');
     expect(coveredElsewhere.reason).toBe('coverage not met');
     expect(coveredElsewhere.read).toEqual([]);
     expect(coveredElsewhere.coverage.saw).toEqual({ collections: {}, inputs: {} });
 
     const failsElsewhere = placed(reader(1), of('elsewhere', advisory('GHSA-crit-0001', 'critical')), of('other', advisory('GHSA-med-0002', 'medium')), osv());
-    const verdict = judgeSet(loaded, { subject: 'repository', facts: failsElsewhere });
+    const verdict = judgeClaim(loaded, { subject: 'repository', facts: failsElsewhere });
     expect(verdict.verdict).toBe('pass');
     expect(verdict.items).toEqual({ held: 0, failed: 0, outside: 0, uncertain: 0 });
     expect(verdict.read).toEqual([3, 6]);
@@ -91,7 +91,7 @@ describe("check 13's claim", () => {
       placed(reader(0), osv()),
       placed(reader(1)),
     ]) {
-      const verdict = judgeSet(loaded, { subject: 'repository', facts });
+      const verdict = judgeClaim(loaded, { subject: 'repository', facts });
       expect(verdict.verdict).toBe('not_checked');
       expect(verdict.reason).toBe('coverage not met');
       expect(verdict.coverage.met).toBe(false);
@@ -100,7 +100,7 @@ describe("check 13's claim", () => {
 
   it('a counterexample fails it at any coverage', async () => {
     const loaded = await loadClaim(bytes(), sha256);
-    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(reader(1), advisory('MAL-1', 'low', true), osv('failed')) });
+    const verdict = judgeClaim(loaded, { subject: 'repository', facts: placed(reader(1), advisory('MAL-1', 'low', true), osv('failed')) });
     expect(verdict.verdict).toBe('fail');
     expect(verdict.coverage.met).toBe(false);
   });
@@ -133,12 +133,12 @@ describe('the judge', () => {
   it('names in failed_on the example that gave fail, wherever it stands in the file', async () => {
     const loaded = await loadClaim(encode(scoreClaim([passingExample, unknownExample, failingExample])), sha256);
     expect(loaded.failedOn).toBe('nine fails');
-    expect(judgeSet(loaded, { subject: 'repository', facts: placed(complete()) }).failed_on).toBe('nine fails');
+    expect(judgeClaim(loaded, { subject: 'repository', facts: placed(complete()) }).failed_on).toBe('nine fails');
   });
 
   it('reads a rule that gives an error as uncertain, never as a pass', async () => {
     const loaded = await loadClaim(encode(scoreClaim()), sha256);
-    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(item('high'), complete()) });
+    const verdict = judgeClaim(loaded, { subject: 'repository', facts: placed(item('high'), complete()) });
     expect(verdict.verdict).toBe('not_checked');
     expect(verdict.reason).toBe('uncertain items: an expression gave an error');
     expect(verdict.items).toEqual({ held: 0, failed: 0, outside: 0, uncertain: 1 });
@@ -146,14 +146,14 @@ describe('the judge', () => {
 
   it('a counterexample fails it even beside an item whose rule gives an error', async () => {
     const loaded = await loadClaim(encode(scoreClaim()), sha256);
-    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(item('high'), item(9), complete()) });
+    const verdict = judgeClaim(loaded, { subject: 'repository', facts: placed(item('high'), item(9), complete()) });
     expect(verdict.verdict).toBe('fail');
     expect(verdict.shown).toEqual([4]);
   });
 
   it('with nothing to check, passes marked vacuous when the claim says vacuous: pass', async () => {
     const loaded = await loadClaim(encode(scoreClaim(allThree, undefined, { vacuous: 'pass' })), sha256);
-    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(complete()) });
+    const verdict = judgeClaim(loaded, { subject: 'repository', facts: placed(complete()) });
     expect(verdict.verdict).toBe('pass');
     expect(verdict.vacuous).toBe(true);
     expect(verdict.reason).toBeUndefined();
@@ -161,7 +161,7 @@ describe('the judge', () => {
 
   it('with nothing to check, is not known, marked vacuous, when the claim says vacuous: not_checked', async () => {
     const loaded = await loadClaim(encode(scoreClaim(allThree, undefined, { vacuous: 'not_checked' })), sha256);
-    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(complete()) });
+    const verdict = judgeClaim(loaded, { subject: 'repository', facts: placed(complete()) });
     expect(verdict.verdict).toBe('not_checked');
     expect(verdict.reason).toBe('nothing to check');
     expect(verdict.vacuous).toBe(true);
@@ -169,14 +169,14 @@ describe('the judge', () => {
 
   it('a pass over items checked is not vacuous', async () => {
     const loaded = await loadClaim(encode(scoreClaim(allThree, undefined, { vacuous: 'pass' })), sha256);
-    const verdict = judgeSet(loaded, { subject: 'repository', facts: placed(item(1), complete()) });
+    const verdict = judgeClaim(loaded, { subject: 'repository', facts: placed(item(1), complete()) });
     expect(verdict.verdict).toBe('pass');
     expect(verdict.vacuous).toBeUndefined();
   });
 
   it('gives depth measured when a fact it read withholds a field, derived when one was derived, facts otherwise', async () => {
     const loaded = await loadClaim(encode(scoreClaim()), sha256);
-    const depthOf = (...facts: Fact[]) => judgeSet(loaded, { subject: 'repository', facts: placed(...facts) }).depth;
+    const depthOf = (...facts: Fact[]) => judgeClaim(loaded, { subject: 'repository', facts: placed(...facts) }).depth;
     expect(depthOf(item(1, { withheld: ['score'] }), complete())).toBe('measured');
     expect(depthOf(item(1, { from: [4] }), complete())).toBe('derived'); // derived from the collection fact, at 4
     expect(depthOf(item(1, { from: [1] }), complete())).toBe('measured'); // nothing given at 1: an input it can't see
@@ -195,7 +195,7 @@ describe('the judge', () => {
       { seq: 10, fact: fact('collection', 'b@1', { status: 'complete' }) },
       { seq: 11, fact: { ...item(1), run: 2 } }, // an item of the same collector and run is not its collection
     ];
-    const verdict = judgeSet(loaded, { subject: 'repository', facts });
+    const verdict = judgeClaim(loaded, { subject: 'repository', facts });
     expect(verdict.read).toEqual([4, 7, 9, 10, 11]);
     expect(Object.keys(verdict.coverage.saw as { collections: object }).length).toBe(2);
     const saw = (verdict.coverage.saw as { collections: Record<string, unknown> }).collections;
@@ -204,7 +204,7 @@ describe('the judge', () => {
     expect(verdict.coverage.met).toBe(false);
 
     const sameRun = [{ seq: 1, fact: fact('collection', 'c@1', { status: 'failed' }) }, { seq: 2, fact: complete() }];
-    expect(judgeSet(loaded, { subject: 'repository', facts: sameRun }).coverage.met).toBe(true); // in one run, the later wins
+    expect(judgeClaim(loaded, { subject: 'repository', facts: sameRun }).coverage.met).toBe(true); // in one run, the later wins
   });
 
   it('folds: any fail fails, anything not known is not known, an empty set never passes', () => {
@@ -212,7 +212,26 @@ describe('the judge', () => {
     expect(fold(['pass'])).toBe('pass');
     expect(fold(['pass', 'not_checked'])).toBe('not_known');
     expect(fold(['blocked', 'fail', 'pass'])).toBe('fail');
-    expect(sealResult(['pass', 'not_checked'])).toEqual({ verdict: 'not_known', verdicts: 2 });
+    expect(fold(['unverified', 'pass'])).toBe('not_known');
+    // A word that is not a verdict is not a pass.
+    expect(fold(['pass', ''])).toBe('not_known');
+    expect(sealResult(['pass', 'not_checked'])).toEqual({ verdict: 'not_known', verdicts: 2, exit: 3 });
+  });
+
+  it('gives the exit codes of FOUNDATION §4: 0 every claim passes, 1 some fails, 3 something not known, 2 no claim at all', () => {
+    expect(sealResult(['pass', 'pass']).exit).toBe(0);
+    expect(sealResult(['pass', 'fail', 'blocked']).exit).toBe(1);
+    for (const word of ['not_checked', 'blocked', 'unverified']) expect(sealResult(['pass', word]).exit).toBe(3);
+    expect(sealResult([])).toEqual({ verdict: 'not_known', verdicts: 0, exit: 2 });
+  });
+
+  it('is one fold: all over the verdicts, the same function a combination uses', () => {
+    for (const a of VERDICTS) {
+      for (const b of VERDICTS) {
+        const all = combine('all', [a, b]);
+        expect(fold([a, b])).toBe(all === 'pass' || all === 'fail' ? all : 'not_known');
+      }
+    }
   });
 });
 
@@ -237,7 +256,9 @@ describe('a claim file that is refused', () => {
   });
 
   it('has a shape the judge does not judge yet', async () => {
-    await refused({ ...scoreClaim(), shape: 'pair' }).toThrow(/only "set" is judged so far/);
+    for (const shape of ['trace', 'sample', undefined]) {
+      await refused({ ...scoreClaim(), shape }).toThrow(/only "set" and "pair" are judged so far/);
+    }
   });
 
   it('has a quantifier the judge does not know, naming it and the ones it does', async () => {

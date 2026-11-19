@@ -10,7 +10,7 @@ import { type OsvExecOptions, findRepoLockfiles, runOsvScannerOffline } from '..
 import { type LockfilesFound, type OsvScan, recordLockfiles, recordOsvScan } from '../collectors/dependencies.js';
 import type { RunRecorder } from '../engine/recorder.js';
 import { loadClaim } from '../kernel/claim.js';
-import { type Verdict, claimRef, judgeSet } from '../kernel/judge.js';
+import { type Verdict, claimRef, judgeClaim } from '../kernel/judge.js';
 import { nodeSha256 } from './fs-store.js';
 
 /** The claim file, found from this module whether it runs from src/entry or from dist/entry. */
@@ -44,7 +44,7 @@ export async function runCheck13(recorder: RunRecorder, options: Check13Options)
   const scan: OsvScan = repo === undefined || 'failed' in found ? { failed: 'there was no repository to scan' } : await runOsvScannerOffline(repo, options.osv);
   facts.push(...(await recordOsvScan(recorder, REPOSITORY_SUBJECT, scan)));
 
-  const verdict = judgeSet(loaded, { subject: REPOSITORY_SUBJECT, facts });
+  const verdict = judgeClaim(loaded, { subject: REPOSITORY_SUBJECT, facts });
   await recorder.record('verdict', verdict);
   return verdict;
 }

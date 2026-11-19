@@ -317,10 +317,10 @@ describe('does the result follow? (verifyResult)', () => {
   }
 
   it('gives what it recomputed, what the seal holds, and that they agree', async () => {
-    const store = await run(['pass', 'pass'], { verdict: 'pass', verdicts: 2 });
+    const store = await run(['pass', 'pass'], { verdict: 'pass', verdicts: 2, exit: 0 });
     expect(await verifyResult(store)).toEqual({
-      seal: { seq: 3, verdict: 'pass', verdicts: 2 },
-      recomputed: { verdict: 'pass', verdicts: 2 },
+      seal: { seq: 3, verdict: 'pass', verdicts: 2, exit: 0 },
+      recomputed: { verdict: 'pass', verdicts: 2, exit: 0 },
       records: [
         { seq: 1, claim: 'c1@1', verdict: 'pass' },
         { seq: 2, claim: 'c2@1', verdict: 'pass' },
@@ -329,22 +329,28 @@ describe('does the result follow? (verifyResult)', () => {
     });
   });
 
-  it('does not agree when the seal says another conclusion, or another count', async () => {
-    expect(await verifyResult(await run(['pass', 'fail'], { verdict: 'pass', verdicts: 2 }))).toMatchObject({
-      recomputed: { verdict: 'fail', verdicts: 2 },
+  it('does not agree when the seal says another conclusion, another count, or another exit code', async () => {
+    expect(await verifyResult(await run(['pass', 'fail'], { verdict: 'pass', verdicts: 2, exit: 0 }))).toMatchObject({
+      recomputed: { verdict: 'fail', verdicts: 2, exit: 1 },
       agree: false,
     });
-    expect(await verifyResult(await run(['pass'], { verdict: 'pass', verdicts: 2 }))).toMatchObject({
-      seal: { seq: 2, verdict: 'pass', verdicts: 2 },
-      recomputed: { verdict: 'pass', verdicts: 1 },
+    expect(await verifyResult(await run(['pass'], { verdict: 'pass', verdicts: 2, exit: 0 }))).toMatchObject({
+      seal: { seq: 2, verdict: 'pass', verdicts: 2, exit: 0 },
+      recomputed: { verdict: 'pass', verdicts: 1, exit: 0 },
       agree: false,
     });
+    expect(await verifyResult(await run(['not_checked'], { verdict: 'not_known', verdicts: 1, exit: 1 }))).toMatchObject({
+      recomputed: { verdict: 'not_known', verdicts: 1, exit: 3 },
+      agree: false,
+    });
+    expect(await verifyResult(await run(['pass'], { verdict: 'pass', verdicts: 1 }))).toMatchObject({ seal: { exit: null }, agree: false });
+    expect(await verifyResult(await run([], { verdict: 'not_known', verdicts: 0, exit: 2 }))).toMatchObject({ agree: true });
   });
 
   it('gives null for what the seal or a verdict record does not state, which never agrees', async () => {
     expect(await verifyResult(await run([null], {}))).toEqual({
-      seal: { seq: 2, verdict: null, verdicts: null },
-      recomputed: { verdict: 'not_known', verdicts: 1 },
+      seal: { seq: 2, verdict: null, verdicts: null, exit: null },
+      recomputed: { verdict: 'not_known', verdicts: 1, exit: 3 },
       records: [{ seq: 1, claim: 'c1@1', verdict: null }],
       agree: false,
     });

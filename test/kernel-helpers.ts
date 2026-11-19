@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto';
 import { loadClaim } from '../src/kernel/claim.js';
 import type { Fact, PlacedFact } from '../src/kernel/fact.js';
-import { type JudgeInput, type LoadedClaim, type Quantifier, type Verdict, judgeSet } from '../src/kernel/judge.js';
+import { type JudgeInput, type LoadedClaim, type Quantifier, type Verdict, judgeClaim } from '../src/kernel/judge.js';
 import type { Json } from '../src/kernel/ledger.js';
 import type { Sha256, Store } from '../src/kernel/store.js';
 
@@ -28,8 +28,21 @@ export const advisoryFact = (id: string, severity: string, more: { malicious?: b
 
 /** An item inside a test claim: `w` is what `where` reads, `u` what `usable` reads, `v` what `holds` reads. */
 export const item = (v: Json, more: { [k: string]: Json } = {}): Given => ({ kind: 't.item', by: 'c@1', body: { v, w: true, u: 1, ...more } });
-/** The `collection` fact of collector `c@1`, which a test claim's `covered` reads. */
-export const done = (status = 'complete'): Given => ({ kind: 'collection', by: 'c@1', body: { status } });
+/** The `collection` fact of collector `c@1`, or of another, which a test claim's `covered` reads. */
+export const done = (status = 'complete', by = 'c@1'): Given => ({ kind: 'collection', by, body: { status } });
+/**
+ * A `finding` fact of collector `f@1`, its body whole and valid for its kind: an adapter's finding of this severity and
+ * state. The facts it rests on are its `from`, which the kind requires of a recorded fact.
+ */
+export const finding = (severity: string, state: string, from?: number[]): Given => ({
+  kind: 'finding',
+  by: 'f@1',
+  body: { id: `F-${severity}-${state}`, title: `a ${state} ${severity} finding`, severity, state, source: 'adapter' },
+  ...(from ? { from } : {}),
+});
+
+/** A verdict's rank in the order F < U < T, which the fold and the combinations keep. */
+export const rank = (v: string): number => (v === 'fail' ? 0 : v === 'pass' ? 2 : 1);
 
 /** Places facts at ledger positions `start`, `start + 1` and so on, about the subject `s`. */
 export const place = (given: readonly Given[], start = 1): PlacedFact[] =>
@@ -62,11 +75,46 @@ export function setClaimFile(quantifier: Quantifier, examples: { fail: Given[]; 
   };
 }
 
+/** An item on one side of a test pair claim: `k` is what the key reads, `v` what `holds` reads, `w` and `u` as above. */
+export const side = (kind: 't.left' | 't.right', k: Json, v: Json, more: { [k: string]: Json } = {}): Given => ({
+  kind,
+  by: 'c@1',
+  body: { k, v, w: true, u: 1, ...more },
+});
+export const leftItem = (k: Json, v: Json, more?: { [k: string]: Json }) => side('t.left', k, v, more);
+export const rightItem = (k: Json, v: Json, more?: { [k: string]: Json }) => side('t.right', k, v, more);
+
+/**
+ * A `pair` claim file joining `t.left` and `t.right` items on `k`, its `holds` being `left.v == right.v`, with the three
+ * examples every claim file must carry. `extra` adds or replaces keys.
+ */
+export function pairClaimFile(quantifier: Exclude<Quantifier, 'count'>, examples: { fail: Given[]; pass: Given[] }, extra: Record<string, unknown> = {}) {
+  return {
+    id: `test.pair.${quantifier}`,
+    version: 1,
+    title: `a ${quantifier} pair claim`,
+    view: { kinds: ['t.left', 't.right', 'collection'] },
+    shape: 'pair',
+    quantifier,
+    left: { from: 't.left' },
+    right: { from: 't.right' },
+    on: ['item.k', 'item.k'],
+    holds: 'left.v == right.v',
+    covered: 'ctx.collections["c@1"].status == "complete"',
+    examples: [
+      { name: 'fails', expect: 'fail', facts: [...examples.fail, done()] },
+      { name: 'passes', expect: 'pass', facts: [...examples.pass, done()] },
+      { name: 'not collected', expect: 'not_checked', facts: [done('failed')] },
+    ],
+    ...extra,
+  };
+}
+
 export const loadFile = (file: unknown): Promise<LoadedClaim> => loadClaim(utf8(JSON.stringify(file)), sha256);
 
 /** Judges a loaded claim over placed facts about the subject `s`. */
 export const judge = (loaded: LoadedClaim, facts: PlacedFact[], more: Partial<JudgeInput> = {}): Verdict =>
-  judgeSet(loaded, { subject: 's', facts, ...more });
+  judgeClaim(loaded, { subject: 's', facts, ...more });
 
 /**
  * The checkpoint text over a ledger's complete lines, computed here and not with the kernel: RFC 9162 section 2.1.1

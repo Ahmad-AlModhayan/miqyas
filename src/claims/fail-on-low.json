@@ -1,0 +1,52 @@
+{
+  "id": "fail-on.low",
+  "version": 1,
+  "title": "no confirmed finding at or above low",
+  "needs": { "kinds": ["finding"] },
+  "view": { "kinds": ["finding", "collection"] },
+  "shape": "set",
+  "quantifier": "none",
+  "from": "finding",
+  "where": "item.severity in [\"low\", \"medium\", \"high\", \"critical\"]",
+  "holds": "item.state == \"confirmed\"",
+  "covered": "ctx.inputs.finders.size() > 0 && ctx.inputs.finders.all(by, by in ctx.collections && ctx.collections[by].status == \"complete\")",
+  "vacuous": "pass",
+  "examples": [
+    {
+      "name": "a confirmed low finding",
+      "expect": "fail",
+      "inputs": { "finders": ["example"] },
+      "facts": [
+        { "kind": "finding", "by": "example", "body": { "severity": "low", "state": "confirmed" } },
+        { "kind": "collection", "by": "example", "body": { "status": "complete" } }
+      ]
+    },
+    {
+      "name": "an unconfirmed low finding, and a confirmed info one",
+      "expect": "pass",
+      "inputs": { "finders": ["example"] },
+      "facts": [
+        { "kind": "finding", "by": "example", "body": { "severity": "low", "state": "unconfirmed" } },
+        { "kind": "finding", "by": "example", "body": { "severity": "info", "state": "confirmed" } },
+        { "kind": "collection", "by": "example", "body": { "status": "complete" } }
+      ]
+    },
+    {
+      "name": "a collector that did not finish",
+      "expect": "not_checked",
+      "inputs": { "finders": ["example"] },
+      "facts": [
+        { "kind": "finding", "by": "example", "body": { "severity": "low", "state": "unconfirmed" } },
+        { "kind": "collection", "by": "example", "body": { "status": "failed" } }
+      ]
+    },
+    {
+      "name": "a second collector that records findings and never closed",
+      "expect": "not_checked",
+      "inputs": { "finders": ["example", "second"] },
+      "facts": [
+        { "kind": "collection", "by": "example", "body": { "status": "complete" } }
+      ]
+    }
+  ]
+}
