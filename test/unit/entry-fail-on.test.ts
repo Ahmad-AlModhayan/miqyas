@@ -10,13 +10,12 @@ import { TARGET_SUBJECT, failOnClaimPath, runFailOn } from '../../src/entry/fail
 import { type CurrentPathResult, judgeNewPath, runBundled } from '../../src/entry/run-command.js';
 import { verifyBundle } from '../../src/entry/verify.js';
 import type { PlacedFact } from '../../src/kernel/fact.js';
-import { sealResult } from '../../src/kernel/judge.js';
+import { sealResult } from '../../src/kernel/fold.js';
 import { type FindingSeverity, SEVERITY_RANK } from '../../src/proof-core/findings.js';
-import { type Given, judge, loadFile, place } from '../kernel-helpers.js';
+import { type Given, done, finding, judge, loadFile, place } from '../kernel-helpers.js';
 
-/** A finding as the agreed shape has it: its severity and state in the body, the facts it rests on in `from`. */
-const finding = (severity: string, state: string, from?: number[]): Given => ({ kind: 'finding', by: 'f@1', body: { severity, state }, ...(from ? { from } : {}) });
-const closed = (status = 'complete'): Given => ({ kind: 'collection', by: 'f@1', body: { status } });
+/** The `collection` fact of the collector that records the findings. */
+const closed = (status = 'complete'): Given => done(status, 'f@1');
 const supplied = { supplies: { kinds: ['finding'] } };
 
 /** The severities, least first, from the one list the findings keep. */

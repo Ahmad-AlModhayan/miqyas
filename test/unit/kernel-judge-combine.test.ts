@@ -2,11 +2,10 @@
 // Combinations (docs/FOUNDATION.md §4, docs/ALGORITHMS.md A5): `all` and `any` in three values, for every pair of part
 // values; an empty list refused when loaded; and a combination's record, judged by the real judge over real parts.
 import { describe, expect, it } from 'vitest';
-import { VERDICTS, type VerdictValue, combine } from '../../src/kernel/judge.js';
-import { done, item, judge, leftItem, loadFile, pairClaimFile, place, rightItem, setClaimFile } from '../kernel-helpers.js';
+import { VERDICTS, type VerdictValue, combine } from '../../src/kernel/fold.js';
+import { done, item, judge, leftItem, loadFile, pairClaimFile, place, rank, rightItem, setClaimFile } from '../kernel-helpers.js';
 
 /** Kleene's strong logic written here apart from the judge: F < U < T, `all` the least and `any` the greatest. */
-const rank = (v: VerdictValue) => (v === 'fail' ? 0 : v === 'pass' ? 2 : 1);
 const NOT_KNOWN: VerdictValue[] = ['blocked', 'not_checked', 'unverified'];
 function expected(how: 'all' | 'any', a: VerdictValue, b: VerdictValue): VerdictValue {
   const r = how === 'all' ? Math.min(rank(a), rank(b)) : Math.max(rank(a), rank(b));

@@ -18,8 +18,13 @@ export type Given = { kind: string; by: string; body: Json; from?: number[]; wit
 
 /** An item inside a test claim: `w` is what `where` reads, `u` what `usable` reads, `v` what `holds` reads. */
 export const item = (v: Json, more: { [k: string]: Json } = {}): Given => ({ kind: 't.item', by: 'c@1', body: { v, w: true, u: 1, ...more } });
-/** The `collection` fact of collector `c@1`, which a test claim's `covered` reads. */
-export const done = (status = 'complete'): Given => ({ kind: 'collection', by: 'c@1', body: { status } });
+/** The `collection` fact of collector `c@1`, or of another, which a test claim's `covered` reads. */
+export const done = (status = 'complete', by = 'c@1'): Given => ({ kind: 'collection', by, body: { status } });
+/** A `finding` fact of collector `f@1`: its severity and state in the body, the facts it rests on in `from`. */
+export const finding = (severity: string, state: string, from?: number[]): Given => ({ kind: 'finding', by: 'f@1', body: { severity, state }, ...(from ? { from } : {}) });
+
+/** A verdict's rank in the order F < U < T, which the fold and the combinations keep. */
+export const rank = (v: string): number => (v === 'fail' ? 0 : v === 'pass' ? 2 : 1);
 
 /** Places facts at ledger positions `start`, `start + 1` and so on, about the subject `s`. */
 export const place = (given: readonly Given[], start = 1): PlacedFact[] =>

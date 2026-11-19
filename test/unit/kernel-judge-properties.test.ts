@@ -15,11 +15,10 @@ import {
   VERDICTS,
   type Verdict,
   type VerdictValue,
-  combine,
-  fold,
 } from '../../src/kernel/judge.js';
+import { combine, fold } from '../../src/kernel/fold.js';
 import type { Json } from '../../src/kernel/ledger.js';
-import { type Given, done, item, judge as judgeOver, leftItem, loadFile, pairClaimFile, place, rightItem, setClaimFile } from '../kernel-helpers.js';
+import { type Given, done, item, judge as judgeOver, leftItem, loadFile, pairClaimFile, place, rank, rightItem, setClaimFile } from '../kernel-helpers.js';
 
 const RUNS = 300;
 
@@ -326,9 +325,9 @@ describe('what the judge guarantees for pair claims (ALGORITHMS A6)', () => {
     await forAllPairs((g, loaded, claim, facts) => {
       const before = judgeOver(loaded, place(facts), none);
       const q = claim.quantifier;
-      // Under `unmatched: 'fail'` a fail can rest on an item with no partner, which is an absence: a partner added later
-      // ends it. That is A2 as written; the view is closed before the judge runs, so no partner arrives late
-      // (FOUNDATION §4, "Views"). Those claims are left out here.
+      // Under `unmatched: 'fail'` a fail can rest on a left item with no partner, which is an absence: a partner added
+      // later ends it. That is the one exception A6.3 states; the view is closed before the judge runs, so no partner
+      // arrives late (FOUNDATION §4, "Views"). Those claims are left out here.
       const settled = claim.unmatched !== 'fail' && (((q === 'every' || q === 'none') && before.verdict === 'fail') || (q === 'some' && before.verdict === 'pass'));
       if (!settled) return;
       seen++;
@@ -386,7 +385,6 @@ describe('what the judge guarantees for pair claims (ALGORITHMS A6)', () => {
 });
 
 describe('6. monotone fold (ALGORITHMS A6): raising one verdict in the order F < U < T never lowers the result', () => {
-  const rank = (v: string) => (v === 'fail' ? 0 : v === 'pass' ? 2 : 1);
   it('for the fold, all and any, over generated lists of verdicts', () => {
     const g = generator(6);
     for (let i = 0; i < RUNS * 3; i++) {

@@ -3,7 +3,8 @@
 // driver, in that order on both paths, so a close that throws still leaves the report printed. With --proof-bundle the
 // same sequence runs inside the bundle, the claims on the new path are judged after it, and the head is printed last.
 import type { RunRecorder } from '../engine/recorder.js';
-import { type SealResult, type Verdict, sealResult } from '../kernel/judge.js';
+import { type SealResult, sealResult } from '../kernel/fold.js';
+import type { Verdict } from '../kernel/judge.js';
 import { runCheck13 } from './check13.js';
 import type { FailOnThreshold } from '../proof-core/findings.js';
 import { TARGET_SUBJECT, runFailOn } from './fail-on.js';

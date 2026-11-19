@@ -7,7 +7,7 @@ import { BlobError, BlobStore, blobPath, readBlobRefs } from './blobs.js';
 import { type Checkpoint, parseCheckpoint, toBase64 } from './checkpoint.js';
 import { type LedgerRecord, type Problem, readLedger } from './ledger.js';
 import { CHECKPOINT_PATH, LEDGER_PATH, type Sha256, type Store, equalBytes, fromUtf8, isPlainObject } from './store.js';
-import { type SealResult, sealResult } from './judge.js';
+import { type SealResult, sealResult } from './fold.js';
 import { treeRoot } from './tree.js';
 
 export interface Intact {
