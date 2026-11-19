@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type RunRecorder, formatHead, openRecorder } from '../engine/recorder.js';
 import type { Json } from '../kernel/ledger.js';
+import type { ScrubRules } from '../scrub/scrub.js';
 import { FsStore, nodeSha256 } from './fs-store.js';
 
 /** The version of the run.open body this writes. */
@@ -20,6 +21,8 @@ export interface ProofBundleRun {
   /** The body of run.open, from buildRunOpen. */
   open: Json;
   now?: () => Date;
+  /** The run's scrub rules: every record and blob of the bundle is scrubbed with them before it is written. */
+  scrub?: ScrubRules;
   /** Where the head goes when the run ends. */
   print: (line: string) => void;
 }
@@ -39,6 +42,7 @@ export async function runWithProofBundle<T>(options: ProofBundleRun, run: (recor
     origin: options.runId,
     open: options.open,
     now: options.now ?? (() => new Date()),
+    ...(options.scrub !== undefined ? { scrub: options.scrub } : {}),
   });
   const { result, fold } = await run({
     record: (t, body) => recorder.record(t, body),

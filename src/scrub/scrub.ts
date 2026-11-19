@@ -94,6 +94,36 @@ export function withSecrets(rules: ScrubRules, names: string[], env: Record<stri
   return { ...rules, terms: [...rules.terms, ...secrets] };
 }
 
+/** The rules with each term also as a URL carries it, scrubbed to the same replacement: a term in a path segment,
+ * a query or a form is percent-encoded there. */
+export function withEncodedTerms(rules: ScrubRules): ScrubRules {
+  const seen = new Set(rules.terms.map((t) => t.from));
+  const more = rules.terms.flatMap((t) =>
+    encodings(t.from)
+      .filter((from) => !seen.has(from) && (seen.add(from), true))
+      .map((from): ScrubTerm => ({ ...t, from })),
+  );
+  return { ...rules, terms: [...rules.terms, ...more] };
+}
+
+/** A JSON value with every string in it scrubbed, the names of its fields too. */
+export function scrubJson<T>(value: T, rules: ScrubRules): T {
+  if (rules.terms.length === 0) return value;
+  const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') return scrubText(v, rules);
+    if (Array.isArray(v)) return v.map(walk);
+    if (v !== null && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, item]) => [scrubText(k, rules), walk(item)]));
+    return v;
+  };
+  return walk(value) as T;
+}
+
+/** Whether a media type is text, so that a blob of it can be scrubbed as UTF-8 text. */
+export function isTextMediaType(mediaType: string): boolean {
+  const type = mediaType.split(';')[0]!.trim().toLowerCase();
+  return type.startsWith('text/') || /^application\/([\w.-]+\+)?(json|xml|javascript|ecmascript|x-ndjson|jsonl?)$/.test(type) || type.endsWith('+json') || type.endsWith('+xml') || type === 'image/svg+xml';
+}
+
 export function parseScrubRules(raw: unknown, where = 'scrub rules'): ScrubRules {
   const obj = raw as { terms?: unknown; ignoreCase?: unknown };
   if (typeof obj !== 'object' || obj === null || !Array.isArray(obj.terms)) throw new Error(`${where}: expected {"terms": [{"from", "to"}]}`);

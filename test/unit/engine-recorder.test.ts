@@ -178,4 +178,64 @@ describe('a collector run closes', () => {
     await recorder.seal(null);
     expect((await ledger()).map((r) => r.t)).toEqual(['run.open', 'run.seal']);
   });
+
+  it('closes a run under the subject of its last fact in the ledger, not of one the writer refused', async () => {
+    const { recorder, ledger } = await recorderOverMemory();
+    await recorder.record('fact', file('package-lock.json'));
+    const elsewhere = { ...file('a.lock'), subject: 'another-subject', origin: undefined } as unknown as Parameters<typeof recorder.record>[1];
+    await expect(recorder.record('fact', elsewhere)).rejects.toThrow(/undefined/);
+    await recorder.seal(null);
+    const facts = (await ledger()).filter((r) => r.t === 'fact').map((r) => r.body);
+    expect(facts.map((f) => f.subject)).toEqual(['repository', 'repository']);
+  });
+});
+
+describe('the scrubber runs before every write', () => {
+  const TERM = 'Fictional-Org-Zeta';
+  const TOKEN = 'tok_FAKE0000demo';
+  const rules = { terms: [{ from: TERM, to: 'ORG' }, { from: TOKEN, to: '${secret.TOKEN}' }] };
+  const bytes = (s: string) => new TextEncoder().encode(s);
+
+  async function scrubbingRecorder(open: Record<string, unknown> = { format: 1 }) {
+    const store = new MemoryStore();
+    const recorder = await openRecorder(store, sha256, { origin: 'test-run', open: open as never, now: () => new Date(Date.UTC(2026, 10, 18)), scrub: rules });
+    return { store, recorder };
+  }
+  const everything = (store: MemoryStore) => [...store.files.values()].map((b) => new TextDecoder().decode(b)).join('\n');
+
+  it('scrubs a fact before it is checked and written, in its values and its names', async () => {
+    const { store, recorder } = await scrubbingRecorder();
+    await recorder.record('fact', { ...file(`apps/${TERM.toLowerCase()}/package-lock.json`), place: { [TERM]: `by ${TERM}` } });
+    const text = everything(store);
+    expect(text).not.toMatch(new RegExp(TERM, 'i'));
+    expect(text).toContain('apps/ORG/package-lock.json');
+  });
+
+  it('scrubs a URL in run.open, a token in a path segment and its percent-encoded form too', async () => {
+    const { store, recorder } = await scrubbingRecorder({ format: 1, inputs: { url: `https://app.test/invite/${TOKEN}/accept`, other: `https://app.test/q/${encodeURIComponent(`${TOKEN} x`)}` } });
+    await recorder.seal({ note: `seen at /invite/${TOKEN}` });
+    const text = everything(store);
+    expect(text).not.toContain(TOKEN);
+    expect(text).toContain('https://app.test/invite/${secret.TOKEN}/accept');
+  });
+
+  it('scrubs a text blob before it is stored, and names it by the digest of what was stored', async () => {
+    const { store, recorder } = await scrubbingRecorder();
+    const ref = await recorder.putBlob(bytes(`{"owner":"${TERM}"}`), 'application/json');
+    expect(new TextDecoder().decode(await recorder.getBlob(ref.digest))).toBe('{"owner":"ORG"}');
+    expect(everything(store)).not.toContain(TERM);
+  });
+
+  it('refuses a binary blob that holds a term, which it cannot scrub without breaking it', async () => {
+    const { store, recorder } = await scrubbingRecorder();
+    await expect(recorder.putBlob(bytes(`\u0089PNG ${TOKEN}`), 'image/png')).rejects.toThrow(/scrub/);
+    expect(everything(store)).not.toContain(TOKEN);
+    await expect(recorder.putBlob(bytes('\u0089PNG clean'), 'image/png')).resolves.toMatchObject({ mediaType: 'image/png' });
+  });
+
+  it('scrubs records that are not facts too', async () => {
+    const { store, recorder } = await scrubbingRecorder();
+    await recorder.record('verdict', { claim: 'c1@1', note: TERM });
+    expect(everything(store)).not.toContain(TERM);
+  });
 });
