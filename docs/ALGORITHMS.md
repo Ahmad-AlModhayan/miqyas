@@ -176,7 +176,9 @@ These hold for every claim and every view, and are tested with generated claims 
 1. **Function.** The same claim and view give the same verdict. No clock, no randomness and no I/O take part.
 2. **Order.** Reordering the facts of a view never changes a `set` or `pair` verdict.
 3. **Persistence.** A fail of an `every` or `none` claim, and a pass of a `some` claim, stay as they are when facts
-   are added to the view. One counterexample or one witness is enough for ever.
+   are added to the view. One counterexample or one witness is enough for ever. The one exception is a fail of a
+   `pair` claim that rests on a left item with no partner under `unmatched: 'fail'`: that counterexample is an
+   absence, and a partner added later removes it; the view is closed before the judge runs, so none arrives late.
 4. **No uncovered absence.** A pass of an `every`, `none` or `count` claim, and a fail of a `some` claim, imply
    `covered` was true.
 5. **Errors never help.** Turning any item's result into an error, or marking it unusable, never produces a pass or
