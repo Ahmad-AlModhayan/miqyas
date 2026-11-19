@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Derivations (docs/FOUNDATION.md §3): pure, versioned functions from facts to facts, such as grouping requests into
-// routes or turning advisories into findings. One is registered as id@version and ships examples of its own, which it
-// must give before it is accepted. Running one hands it only the kinds it reads, frozen, runs it twice and refuses it
+// routes or turning advisories into findings. One is registered as id@version and ships examples of its own, each
+// stating the facts it gives, which it must give exactly before it is accepted. Running one hands it only the kinds it reads, frozen, runs it twice and refuses it
 // unless both runs give the same facts; each fact it produces is checked against its kind and must name in `from` the
 // facts it was computed from, all of them among those it was given. It records `by` as its id@version.
 import type { Fact, PlacedFact } from '../kernel/fact.js';
@@ -11,11 +11,14 @@ import { normalise } from './withhold.js';
 /** A fact as a derivation produces it: the runner adds `by` and `run`. */
 export type Derived = Omit<Fact, 'by' | 'run'>;
 
-/** An example a derivation ships: the facts it is given, and how many facts it gives for them. */
+/**
+ * An example a derivation ships: the facts it is given, and the facts it gives for them, in order, as it produces them
+ * (without `by` and `run`). A derivation that gives other facts, or as many but not the same, fails its example.
+ */
 export interface DerivationExample {
   name: string;
   facts: readonly PlacedFact[];
-  gives: number;
+  gives: readonly Derived[];
 }
 
 export interface Derivation {
@@ -82,8 +85,11 @@ export class Derivations {
     if (this.byName.has(name)) throw new DerivationRefused(`${name} is registered already`);
     if (d.examples.length === 0) throw new DerivationRefused(`${name} ships no example`);
     for (const example of d.examples) {
-      const got = runDerivation(d, example.facts).length;
-      if (got !== example.gives) throw new DerivationRefused(`${name}: example ${JSON.stringify(example.name)} gives ${got} facts, not ${example.gives}`);
+      const got = runDerivation(d, example.facts).map(({ by: _by, run: _run, ...derived }) => derived);
+      if (normalise(got as never) !== normalise(example.gives as never)) {
+        const which = got.length === example.gives.length ? 'other facts than' : `${got.length} facts, not the ${example.gives.length}`;
+        throw new DerivationRefused(`${name}: example ${JSON.stringify(example.name)} gives ${which} it states`);
+      }
     }
     this.byName.set(name, d);
   }

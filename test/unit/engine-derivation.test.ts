@@ -18,6 +18,15 @@ const advisory = (seq: number, severity: string, name = `pkg-${seq}`): PlacedFac
   },
 });
 
+/** The finding `criticals` gives for the advisory at `seq`. */
+const findingOf = (seq: number) => ({
+  kind: 'finding',
+  v: 1,
+  subject: 'repository',
+  from: [seq],
+  body: { id: 'critical-advisory', title: `critical advisory GHSA-${seq}`, severity: 'critical', state: 'confirmed', source: 'derivation' },
+});
+
 /** A finding for each critical advisory: a derivation as small as one can be. */
 const criticals: Derivation = {
   id: 'critical-advisories',
@@ -34,8 +43,8 @@ const criticals: Derivation = {
         body: { id: 'critical-advisory', title: `critical advisory ${(p.fact.body as { id: string }).id}`, severity: 'critical', state: 'confirmed', source: 'derivation' },
       })),
   examples: [
-    { name: 'one critical among two', facts: [advisory(1, 'critical'), advisory(2, 'low')], gives: 1 },
-    { name: 'none critical', facts: [advisory(1, 'low')], gives: 0 },
+    { name: 'one critical among two', facts: [advisory(1, 'critical'), advisory(2, 'low')], gives: [findingOf(1)] },
+    { name: 'none critical', facts: [advisory(1, 'low')], gives: [] },
   ],
 };
 
@@ -101,7 +110,29 @@ describe('the registry of derivations', () => {
   it('refuses a derivation that ships no example, or whose examples it does not give', () => {
     const registry = new Derivations();
     expect(() => registry.register({ ...criticals, examples: [] })).toThrow(/example/);
-    const wrong = { ...criticals, examples: [{ name: 'claims two', facts: [advisory(1, 'critical')], gives: 2 }] };
+    const wrong = { ...criticals, examples: [{ name: 'claims two', facts: [advisory(1, 'critical')], gives: [findingOf(1), findingOf(1)] }] };
     expect(() => registry.register(wrong)).toThrow(/claims two/);
+  });
+
+  it('refuses a derivation that gives as many facts as its example states, but not the facts it states', () => {
+    const registry = new Derivations();
+    // Right count, wrong fact: the severity is off.
+    const misjudging: Derivation = {
+      ...criticals,
+      id: 'misjudging',
+      derive: (facts) => criticals.derive(facts).map((f) => ({ ...f, body: { ...(f.body as object), severity: 'low' } })),
+    };
+    expect(() => registry.register(misjudging)).toThrow(/one critical among two/);
+    // Right facts, from the wrong position.
+    const misplaced: Derivation = { ...criticals, id: 'misplaced', examples: [{ name: 'from the low one', facts: [advisory(1, 'critical'), advisory(2, 'low')], gives: [findingOf(2)] }] };
+    expect(() => registry.register(misplaced)).toThrow(/from the low one/);
+    expect(registry.ids()).toEqual([]);
+  });
+
+  it('registers a derivation that gives exactly the facts its examples state, whatever the order of their fields', () => {
+    const registry = new Derivations();
+    const { body, ...rest } = findingOf(1);
+    registry.register({ ...criticals, examples: [{ name: 'reordered', facts: [advisory(1, 'critical')], gives: [{ body, ...rest }] }] });
+    expect(registry.ids()).toEqual(['critical-advisories@1']);
   });
 });
