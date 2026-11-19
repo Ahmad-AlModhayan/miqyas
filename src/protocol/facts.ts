@@ -5,7 +5,8 @@
 // also says whether its content may ever go to a model, whether it records traffic (and so must carry its `cause`),
 // which fields identify one item, and which blobs it holds.
 //
-// The kinds that derivations, extractors and the experiment engine record, and `finding`, come with their own tickets.
+// The kinds that derivations, extractors and the experiment engine record come with their own tickets. `finding` is
+// here: derivations, adapters and agents all record it.
 
 /** A JSON Schema, as plain data. */
 export type JsonSchema = { readonly [keyword: string]: unknown };
@@ -26,6 +27,14 @@ export type FactCause = (typeof FACT_CAUSES)[number];
 /** How a collector run ended (docs/FOUNDATION.md §3, "It closes"). */
 const COLLECTION_STATUSES = ['complete', 'partial', 'failed'] as const;
 
+/** How severe a finding is (docs/FOUNDATION.md §3), from least to most. */
+export const FINDING_SEVERITIES = ['info', 'low', 'medium', 'high', 'critical'] as const;
+export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
+/** Whether a derivation, an experiment or a second look has backed a finding. */
+export const FINDING_STATES = ['confirmed', 'unconfirmed'] as const;
+/** Where a finding came from (CONTEXT.md, "Source"): `by` names which one. */
+export const FINDING_SOURCES = ['derivation', 'adapter', 'agent'] as const;
+
 export interface FactKind {
   kind: string;
   /** The version of this schema. A fact names it in `v`. */
@@ -37,6 +46,8 @@ export interface FactKind {
   identity: readonly string[];
   /** The blobs a fact of this kind may name, and whether it must. A kind with none may name no blob. */
   blobs?: { readonly [name: string]: { required: boolean } };
+  /** A fact of it rests on other facts: it must name at least one in `from`. */
+  restsOn?: boolean;
   body: BodySchema;
 }
 
@@ -304,6 +315,23 @@ export const FACT_KINDS: readonly FactKind[] = [
       ],
     },
   },
+  {
+    // A problem no claim asked about (docs/FOUNDATION.md §3). The facts it rests on are its `from`. It holds no
+    // verdict: no field of it can say pass or fail.
+    kind: 'finding',
+    v: 1,
+    model: 'scrubbed',
+    traffic: false,
+    identity: ['id'],
+    restsOn: true,
+    body: {
+      ...object({ id: str, title: str, severity: oneOf(...FINDING_SEVERITIES), state: oneOf(...FINDING_STATES), source: oneOf(...FINDING_SOURCES) }),
+      // A finding an agent proposed is unconfirmed: what backs it is a derivation's or an experiment's finding of its
+      // own, which rests on it.
+      if: { type: 'object', required: ['source'], properties: { source: { const: 'agent' } } },
+      then: { type: 'object', properties: { state: { const: 'unconfirmed' } } },
+    },
+  },
 ];
 
 /** The schema of `kind` at version `v`, or undefined when there is none. */
@@ -324,6 +352,7 @@ export function factSchema(k: FactKind): JsonSchema {
   const blobs = k.blobs;
   const required = ['kind', 'v', 'by', 'run', 'subject', 'body'];
   if (k.traffic) required.push('cause');
+  if (k.restsOn) required.push('from');
   if (blobs && Object.values(blobs).some((b) => b.required)) required.push('blobs');
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -342,7 +371,7 @@ export function factSchema(k: FactKind): JsonSchema {
       place: objectOf(str),
       effect: int(1),
       cause: oneOf(...FACT_CAUSES),
-      from: list(int(1)),
+      from: k.restsOn ? { ...list(int(1)), minItems: 1 } : list(int(1)),
       body: k.body,
       blobs:
         blobs === undefined

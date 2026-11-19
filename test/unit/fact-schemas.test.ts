@@ -55,13 +55,17 @@ const VALID: Record<string, Record<string, unknown>> = {
   'step.done': { cause: 'plan', body: { plan: 'checkout', step: 3, outcome: 'done' } },
   sample: { body: { name: 'first paint', value: 812, unit: 'ms' } },
   collection: { body: { setOut: 'every supported lockfile in the repository', status: 'complete', counts: { lockfiles: 1 }, dropped: 0 } },
+  finding: {
+    from: [4, 7],
+    body: { id: 'source-map-served', title: 'The served bundle exposes its source map', severity: 'medium', state: 'confirmed', source: 'derivation' },
+  },
 };
 
-/** The kinds of the §3 table that a worker, an adapter or a reader records. */
+/** The kinds of the §3 table that a worker, an adapter or a reader records, and `finding`. */
 const COLLECTED = Object.keys(VALID);
 
-/** The kinds of the §3 table that are not this ticket's: derivations, extractors, the experiment engine, findings. */
-const NOT_SCHEMED_HERE = ['model.state', 'model.edge', 'entity', 'property', 'capsule', 'fidelity', 'experiment', 'footprint', 'finding'];
+/** The kinds of the §3 table that are not this ticket's: derivations, extractors, the experiment engine. */
+const NOT_SCHEMED_HERE = ['model.state', 'model.edge', 'entity', 'property', 'capsule', 'fidelity', 'experiment', 'footprint'];
 
 const fact = (kind: string, extra: Record<string, unknown> = {}) => ({ kind, v: 1, by: 'test-collector@1', run: 1, subject: 'repository', ...VALID[kind], ...extra });
 
@@ -149,7 +153,7 @@ describe('checking a fact against its schema', () => {
 
   it('refuses a fact of a kind with no schema, naming the kind and the field', () => {
     expect(refusal(fact('collection', { kind: 'page' }))).toMatchObject({ kind: 'page', field: 'kind' });
-    expect(refusal(fact('collection', { kind: 'finding' }))).toMatchObject({ kind: 'finding', field: 'kind' });
+    expect(refusal(fact('collection', { kind: 'footprint' }))).toMatchObject({ kind: 'footprint', field: 'kind' });
   });
 
   it('refuses a version of a kind that has no schema', () => {
@@ -329,5 +333,50 @@ describe('a collection fact', () => {
   it('cannot say it finished when it dropped facts', () => {
     expect(refusal(withBody('collection', (b) => (b.dropped = 2)))).toMatchObject({ kind: 'collection', field: 'body.status' });
     expect(checkFact(withBody('collection', (b) => Object.assign(b, { dropped: 2, status: 'partial', reason: 'shed under load' })))).toEqual({ ok: true });
+  });
+});
+
+describe('a finding', () => {
+  it('has a source, a severity, a state and the facts it rests on', () => {
+    for (const field of ['id', 'title', 'severity', 'state', 'source']) {
+      expect(refusal(withBody('finding', (b) => delete b[field]))).toMatchObject({ kind: 'finding', field: `body.${field}` });
+    }
+    const without: Record<string, unknown> = fact('finding');
+    delete without.from;
+    expect(refusal(without)).toMatchObject({ kind: 'finding', field: 'from' });
+    expect(refusal(fact('finding', { from: [] }))).toMatchObject({ kind: 'finding', field: 'from' });
+  });
+
+  it('takes the severities and states agreed, and nothing else', () => {
+    for (const severity of ['info', 'low', 'medium', 'high', 'critical']) {
+      expect(checkFact(withBody('finding', (b) => (b.severity = severity)))).toEqual({ ok: true });
+    }
+    expect(refusal(withBody('finding', (b) => (b.severity = 'blocker')))).toMatchObject({ kind: 'finding', field: 'body.severity' });
+    expect(checkFact(withBody('finding', (b) => (b.state = 'unconfirmed')))).toEqual({ ok: true });
+    expect(refusal(withBody('finding', (b) => (b.state = 'suspected')))).toMatchObject({ field: 'body.state' });
+    for (const source of ['derivation', 'adapter', 'agent']) {
+      expect(checkFact(withBody('finding', (b) => Object.assign(b, { source, state: 'unconfirmed' })))).toEqual({ ok: true });
+    }
+    expect(refusal(withBody('finding', (b) => (b.source = 'model')))).toMatchObject({ field: 'body.source' });
+  });
+
+  it('is unconfirmed when a model proposed it: a derivation or an experiment backs it with a finding of its own', () => {
+    expect(refusal(withBody('finding', (b) => Object.assign(b, { source: 'agent', state: 'confirmed' })))).toMatchObject({ kind: 'finding', field: 'body.state' });
+  });
+
+  it('never carries a verdict', () => {
+    for (const field of ['verdict', 'pass', 'status']) {
+      expect(refusal(withBody('finding', (b) => (b[field] = 'fail')))).toMatchObject({ kind: 'finding', field: `body.${field}` });
+    }
+    expect(refusal(fact('finding', { verdict: 'fail' }))).toMatchObject({ kind: 'finding', field: 'verdict' });
+  });
+});
+
+describe('a body only JSON can hold', () => {
+  it('refuses fields that sit on a prototype and not on the object, naming the kind and the field', () => {
+    const body = Object.create({ path: 'package-lock.json' }) as Record<string, unknown>;
+    expect(refusal(fact('repo.file', { body }))).toMatchObject({ kind: 'repo.file', field: 'body' });
+    const viewport = Object.create({ width: 1, height: 2 }) as Record<string, unknown>;
+    expect(refusal(withBody('ui.snapshot', (b) => (b.viewport = viewport)))).toMatchObject({ kind: 'ui.snapshot', field: 'body.viewport' });
   });
 });

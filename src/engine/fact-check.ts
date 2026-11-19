@@ -49,6 +49,10 @@ export function checkFact(fact: unknown): FactCheck {
   if (typeof kind !== 'string' || !isKnownKind(kind)) return refused(String(kind), 'kind', 'no schema is known for this kind');
   const k = typeof v === 'number' ? factKind(kind, v) : undefined;
   if (k === undefined) return refused(kind, 'v', `no schema is known for version ${JSON.stringify(v)} of this kind`);
+  // A schema reads a field through the prototype, and a record writes only the object's own fields: an object that is
+  // not a plain one is refused here, so that the refusal names the kind and the field and not the ledger writer.
+  const notPlain = notPlainAt(fact, []);
+  if (notPlain !== undefined) return refused(kind, notPlain, 'must be a plain object or array, as JSON holds it');
   const validate = compiled.get(`${k.kind}@${k.v}`) as ValidateFunction;
   if (!validate(fact)) {
     const error = (validate.errors ?? [])[0];
@@ -69,6 +73,18 @@ function minusZeroAt(value: unknown, path: string[]): string | undefined {
   if (value === null || typeof value !== 'object') return undefined;
   for (const [key, item] of Object.entries(value)) {
     const found = minusZeroAt(item, [...path, key]);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/** The first object that is neither a plain object nor an array, as a dotted path, or undefined. */
+function notPlainAt(value: unknown, path: string[]): string | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const proto = Object.getPrototypeOf(value) as unknown;
+  if (Array.isArray(value) ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return path.join('.');
+  for (const [key, item] of Object.entries(value)) {
+    const found = notPlainAt(item, [...path, key]);
     if (found !== undefined) return found;
   }
   return undefined;
