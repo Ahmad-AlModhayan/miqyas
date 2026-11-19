@@ -105,10 +105,15 @@ export interface NewPathSettings {
  * its collectors records it: so the claim never passes because nothing looked for findings, and no other collector's
  * closing stands in for theirs. The claim is told which collectors record findings, and is covered only once every
  * one has closed complete: one that never closed is not read as having found nothing. With no such collector, as in
- * a real run today, it is blocked.
+ * a real run today, it is blocked. Two collectors under the same `by` are refused before anything is run or recorded.
  */
 export async function judgeNewPath(recorder: BundleRecorder, settings: NewPathSettings): Promise<Verdict[]> {
   const collectors = settings.collectors ?? [];
+  const names = new Set<string>();
+  for (const { by } of collectors) {
+    if (names.has(by)) throw new RangeError(`duplicate collector name ${by}: a fact's \`by\` cannot tell two collectors apart, so the list is refused`);
+    names.add(by);
+  }
   for (const collector of collectors) await collector.collect(recorder);
   const verdicts: Verdict[] = [];
   if (settings.profile === 'grade-1') verdicts.push(await runCheck13(recorder, settings.repoPath !== undefined ? { repoPath: settings.repoPath } : {}));

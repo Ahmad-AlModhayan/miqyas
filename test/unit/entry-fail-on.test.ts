@@ -301,6 +301,35 @@ describe('--fail-on end to end: findings recorded through the recorder, the clai
       expect(verdicts.map((v) => [v.verdict, v.coverage.met])).toEqual([['pass', true]]);
     });
 
+    describe('two collectors under the same name are refused: a fact\'s `by` cannot tell them apart', () => {
+      /** A recorder that counts what is written to it: a refused list must write nothing. */
+      const counting = () => {
+        const calls: string[] = [];
+        const recorder = { record: async (t: string) => (calls.push(t), 1) } as unknown as Parameters<typeof judgeNewPath>[0];
+        return { calls, recorder };
+      };
+      const refuses = async (collectors: NewPathCollector[]) => {
+        const { calls, recorder } = counting();
+        await expect(judgeNewPath(recorder, { failOn: 'high', collectors })).rejects.toThrow(/duplicate.*finder@1/i);
+        expect(calls).toEqual([]);
+      };
+
+      it('refuses two collectors that both record findings, naming the name', async () => {
+        await refuses([clean, finder([{ subject: TARGET_SUBJECT, status: null }])]);
+      });
+
+      it('refuses the same name on a finder and on a collector that records another kind', async () => {
+        await refuses([clean, { ...other, by: FINDER }]);
+        await refuses([{ ...other, by: FINDER }, clean]);
+      });
+
+      it('accepts two collectors with different names, as before: exit 0', async () => {
+        const { exit, verdicts } = await runWith('two-distinct', [clean, other]);
+        expect(exit).toBe(0);
+        expect(verdicts.map((v) => v.verdict)).toEqual(['pass']);
+      });
+    });
+
     it('still fails on a confirmed finding at the threshold while the second has not closed: exit 1', async () => {
       const found = finder([{ subject: TARGET_SUBJECT, found: [{ severity: 'high', state: 'confirmed' }] }]);
       const { exit, verdicts } = await runWith('two-found', [found, finder([{ subject: TARGET_SUBJECT, status: null }], SECOND)]);
