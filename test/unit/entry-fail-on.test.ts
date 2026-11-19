@@ -323,6 +323,22 @@ describe('--fail-on end to end: findings recorded through the recorder, the clai
         await refuses([{ ...other, by: FINDER }, clean]);
       });
 
+      it('refuses the run when the first closes complete with no finding and the second never closes, and gives no verdict', async () => {
+        const out = path.join(tmp, 'same-name');
+        const sameName = [clean, finder([{ subject: TARGET_SUBJECT, status: null }])];
+        const run = runBundled(bundled(out, (recorder) => judgeNewPath(recorder, { failOn: 'high', collectors: sameName })), steps);
+        await expect(run).rejects.toThrow(/duplicate.*finder@1/i);
+        const ledger = await records(out).catch(() => []);
+        expect(ledger.filter((r) => r.t === 'verdict')).toEqual([]);
+        expect(ledger.some((r) => r.t === 'fact')).toBe(false);
+      });
+
+      it('accepts names that differ only by version, since a fact\'s `by` is the exact text: exit 0', async () => {
+        const { exit, verdicts } = await runWith('two-versions', [clean, finder([{ subject: TARGET_SUBJECT }], 'finder@2')]);
+        expect(exit).toBe(0);
+        expect(verdicts.map((v) => [v.verdict, v.coverage.met])).toEqual([['pass', true]]);
+      });
+
       it('accepts two collectors with different names, as before: exit 0', async () => {
         const { exit, verdicts } = await runWith('two-distinct', [clean, other]);
         expect(exit).toBe(0);
