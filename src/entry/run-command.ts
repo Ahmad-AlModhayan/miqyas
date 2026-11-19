@@ -4,6 +4,8 @@
 // same sequence runs inside the bundle, the claims on the new path are judged after it, and the head is printed last.
 import type { RunRecorder } from '../engine/recorder.js';
 import { type Verdict, sealResult } from '../kernel/judge.js';
+import { runCheck13 } from './check13.js';
+import { type Severity, TARGET_SUBJECT, runFailOn } from './fail-on.js';
 import { type ProofBundleRun, runWithProofBundle } from './proof-bundle.js';
 
 /** The parts of a run, as arguments: how to open the driver, how to run with it, how to print what the run gave. */
@@ -37,6 +39,26 @@ export interface BundledRun {
   judge: (recorder: RunRecorder) => Promise<Verdict[]>;
   /** Where the head goes, after everything else. */
   printHead: (line: string) => void;
+}
+
+/** What decides which claims the run judges on the new path. */
+export interface NewPathSettings {
+  profile?: string;
+  repoPath?: string;
+  failOn?: Severity | 'none';
+}
+
+/**
+ * The claims on the new path, each recorded with its verdict: check 13 under profile grade-1, and the --fail-on claim.
+ * Nothing on the new path records findings yet, so the --fail-on claim reads no fact.
+ */
+export async function judgeNewPath(recorder: RunRecorder, settings: NewPathSettings): Promise<Verdict[]> {
+  const verdicts: Verdict[] = [];
+  if (settings.profile === 'grade-1') verdicts.push(await runCheck13(recorder, settings.repoPath !== undefined ? { repoPath: settings.repoPath } : {}));
+  if (settings.failOn !== undefined && settings.failOn !== 'none') {
+    verdicts.push(await runFailOn(recorder, { severity: settings.failOn, subject: TARGET_SUBJECT, facts: [] }));
+  }
+  return verdicts;
 }
 
 /**

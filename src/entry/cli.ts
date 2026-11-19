@@ -61,9 +61,8 @@ import {
   type BenchRegression,
 } from '../proof-core/scoring.js';
 import { NO_SCRUB, parseScrubRules, scrubDir, scrubText, type ScrubRules } from '../scrub/scrub.js';
-import { runCheck13 } from './check13.js';
 import { buildRunOpen } from './proof-bundle.js';
-import { runBundled, runPrintClose, type RunSteps } from './run-command.js';
+import { judgeNewPath, runBundled, runPrintClose, type RunSteps } from './run-command.js';
 import { verifyBundle } from './verify.js';
 import { openWebSurfaceDriver } from '../surfaces/web/driver.js';
 import { DEFAULT_CRAWL_DEPTH, DEFAULT_CRAWL_MAX_SCREENS, DEFAULT_CRAWL_RPS } from '../surfaces/web/crawler.js';
@@ -527,8 +526,9 @@ async function cmdRun(args: string[], o: Opts, inject: Injected, quiet = false):
     },
   };
 
-  // --proof-bundle: the run also writes a proof bundle into its folder as it goes, and check 13 runs on the new path
-  // (docs/FOUNDATION.md §5, §15). Without it the run is exactly what it was.
+  // --proof-bundle: the run also writes a proof bundle into its folder as it goes, check 13 and the --fail-on claim are
+  // judged on the new path, and the run exits by their fold (docs/FOUNDATION.md §4, §5, §15). Without it the run is
+  // exactly what it was.
   if (o['proof-bundle']) {
     return await runBundled(
       {
@@ -538,7 +538,7 @@ async function cmdRun(args: string[], o: Opts, inject: Injected, quiet = false):
           open: await buildRunOpen({ url, plans, settings, ...(exec.quote ? { quote: exec.quote } : {}) }),
           now: inject.now ?? (() => new Date()),
         },
-        judge: async (recorder) => (profile === 'grade-1' ? [await runCheck13(recorder, repoPath !== undefined ? { repoPath } : {})] : []),
+        judge: (recorder) => judgeNewPath(recorder, { ...(profile ? { profile } : {}), ...(repoPath !== undefined ? { repoPath } : {}), failOn }),
         printHead: (line) => (o.json ? process.stderr : process.stdout).write(line + '\n'),
       },
       steps,
