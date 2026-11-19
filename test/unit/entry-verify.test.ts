@@ -24,7 +24,7 @@ async function makeBundle(at: string): Promise<void> {
     await recorder.record('fact', { ...fact, kind: 'asset', body: { from: 'served', name: 'https://app.test/alpha' }, blobs: { content: blob } });
     await recorder.record('verdict', { claim: 'c1@1', verdict: 'pass' });
     await recorder.record('fact', collectionFact({ by: fact.by, run: fact.run, subject: fact.subject, setOut: 'the page', counts: { assets: 1 } }));
-    return { result: 0, fold: { verdict: 'pass', verdicts: 1 } };
+    return { result: 0, fold: { verdict: 'pass', verdicts: 1, exit: 0 } };
   });
 }
 
@@ -75,7 +75,7 @@ describe('verify on an untouched bundle', () => {
   it('answers that the result follows: the fold of the verdict records is what the seal says', async () => {
     const r = await verifyBundle(dir);
     expect(r.lines).toContain('2. Does the result follow? yes');
-    expect(r.lines).toContain('   the seal (record 4) says pass over 1 verdict; the fold of the 1 verdict record gives pass');
+    expect(r.lines).toContain('   the seal (record 4) says pass over 1 verdict, exit 0; the fold of the 1 verdict record gives pass, exit 0');
   });
 
   it('still verifies when the folder is copied somewhere else', async () => {
@@ -89,7 +89,7 @@ describe('verify on an untouched bundle', () => {
 
 describe('verify on an intact bundle whose seal does not follow from its verdicts', () => {
   /** Written through the writer, so the bundle is intact and only the seal's result is wrong. */
-  async function sealWith(at: string, verdicts: string[], fold: { verdict: string; verdicts: number }): Promise<void> {
+  async function sealWith(at: string, verdicts: string[], fold: { verdict: string; verdicts: number; exit: number }): Promise<void> {
     tick = 0;
     await runWithProofBundle({ dir: at, runId: 'run-2', open: { format: 1 }, now: clock, print: () => undefined }, async (recorder) => {
       for (const [i, verdict] of verdicts.entries()) await recorder.record('verdict', { claim: `c${i + 1}@1`, verdict });
@@ -99,23 +99,23 @@ describe('verify on an intact bundle whose seal does not follow from its verdict
 
   it('answers no, naming the seal and the verdict record that disagree, while it is still intact', async () => {
     const at = path.join(tmp, 'wrong-fold');
-    await sealWith(at, ['pass', 'fail'], { verdict: 'pass', verdicts: 2 });
+    await sealWith(at, ['pass', 'fail'], { verdict: 'pass', verdicts: 2, exit: 0 });
     const r = await verifyBundle(at);
     expect(r.exitCode).toBe(1);
     expect(r.lines).toContain('1. Intact? yes');
     expect(r.lines).toContain('2. Does the result follow? NO');
-    expect(r.lines).toContain('   the seal (record 3) says pass over 2 verdicts; the fold of the 2 verdict records gives fail');
+    expect(r.lines).toContain('   the seal (record 3) says pass over 2 verdicts, exit 0; the fold of the 2 verdict records gives fail, exit 1');
     expect(r.lines).toContain('   record 2: c2@1 fail');
     await rm(at, { recursive: true, force: true });
   });
 
   it('answers no when the seal counts verdicts the ledger does not hold', async () => {
     const at = path.join(tmp, 'wrong-count');
-    await sealWith(at, ['pass'], { verdict: 'pass', verdicts: 2 });
+    await sealWith(at, ['pass'], { verdict: 'pass', verdicts: 2, exit: 0 });
     const r = await verifyBundle(at);
     expect(r.lines).toContain('1. Intact? yes');
     expect(r.lines).toContain('2. Does the result follow? NO');
-    expect(r.lines).toContain('   the seal (record 2) says pass over 2 verdicts; the fold of the 1 verdict record gives pass');
+    expect(r.lines).toContain('   the seal (record 2) says pass over 2 verdicts, exit 0; the fold of the 1 verdict record gives pass, exit 0');
     await rm(at, { recursive: true, force: true });
   });
 

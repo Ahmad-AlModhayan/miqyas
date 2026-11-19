@@ -6,7 +6,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ClaimRejection, loadClaim } from '../../src/kernel/claim.js';
 import type { Fact, PlacedFact } from '../../src/kernel/fact.js';
-import { type SetClaim, fold, judgeClaim, sealResult } from '../../src/kernel/judge.js';
+import { type SetClaim, VERDICTS, combine, fold, judgeClaim, sealResult } from '../../src/kernel/judge.js';
 import { sha256 } from '../kernel-helpers.js';
 
 const CLAIM_FILE = path.resolve(import.meta.dirname, '../../src/claims/readiness-13-dependencies.json');
@@ -213,7 +213,26 @@ describe('the judge', () => {
     expect(fold(['pass'])).toBe('pass');
     expect(fold(['pass', 'not_checked'])).toBe('not_known');
     expect(fold(['blocked', 'fail', 'pass'])).toBe('fail');
-    expect(sealResult(['pass', 'not_checked'])).toEqual({ verdict: 'not_known', verdicts: 2 });
+    expect(fold(['unverified', 'pass'])).toBe('not_known');
+    // A word that is not a verdict is not a pass.
+    expect(fold(['pass', ''])).toBe('not_known');
+    expect(sealResult(['pass', 'not_checked'])).toEqual({ verdict: 'not_known', verdicts: 2, exit: 3 });
+  });
+
+  it('gives the exit codes of FOUNDATION §4: 0 every claim passes, 1 some fails, 3 something not known, 2 no claim at all', () => {
+    expect(sealResult(['pass', 'pass']).exit).toBe(0);
+    expect(sealResult(['pass', 'fail', 'blocked']).exit).toBe(1);
+    for (const word of ['not_checked', 'blocked', 'unverified']) expect(sealResult(['pass', word]).exit).toBe(3);
+    expect(sealResult([])).toEqual({ verdict: 'not_known', verdicts: 0, exit: 2 });
+  });
+
+  it('is one fold: all over the verdicts, the same function a combination uses', () => {
+    for (const a of VERDICTS) {
+      for (const b of VERDICTS) {
+        const all = combine('all', [a, b]);
+        expect(fold([a, b])).toBe(all === 'pass' || all === 'fail' ? all : 'not_known');
+      }
+    }
   });
 });
 

@@ -41,8 +41,8 @@ export interface BundledRun {
 
 /**
  * The run with --proof-bundle. The current path runs as it does without the flag; then the claims on the new path are
- * judged. The seal holds the fold of the verdict records, and beside it, apart, what the current path concluded. The
- * exit code is still the current path's.
+ * judged. The seal holds the fold of the verdict records with its exit code, and beside it, apart, what the current
+ * path concluded. The run exits by the fold (docs/FOUNDATION.md §4): 0, 1 or 3, and 2 when no claim was judged.
  */
 export async function runBundled<D extends { close(): Promise<void> }, R extends CurrentPathResult>(
   bundled: BundledRun,
@@ -57,7 +57,8 @@ export async function runBundled<D extends { close(): Promise<void> }, R extends
       exitCode: result.exitCode,
       plans: result.report.plans.map((p) => ({ id: p.planId, verdict: p.verdict })),
     };
-    return { result: result.exitCode, fold: { ...sealResult(verdicts.map((v) => v.verdict)), currentPath } };
+    const sealed = sealResult(verdicts.map((v) => v.verdict));
+    return { result: sealed.exit, fold: { ...sealed, currentPath } };
   });
   for (const line of head) bundled.printHead(line);
   return exitCode;

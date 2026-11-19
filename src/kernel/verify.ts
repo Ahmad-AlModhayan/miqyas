@@ -117,8 +117,8 @@ async function checkBlobs(record: LedgerRecord, blobs: BlobStore, problems: Prob
 export type Follows =
   | { seal: null }
   | {
-      /** The seal's position, and the conclusion and count its result states, null where it states none. */
-      seal: { seq: number; verdict: string | null; verdicts: number | null };
+      /** The seal's position, and the conclusion, count and exit code its result states, null where it states none. */
+      seal: { seq: number; verdict: string | null; verdicts: number | null; exit: number | null };
       /** The fold of the verdict records. */
       recomputed: SealResult;
       /** Each verdict record: its position, the claim and the verdict it names, null where it names none. */
@@ -148,6 +148,8 @@ export async function verifyResult(store: Store): Promise<Follows> {
     seq: seal.seq,
     verdict: typeof result.verdict === 'string' ? result.verdict : null,
     verdicts: typeof result.verdicts === 'number' ? result.verdicts : null,
+    exit: typeof result.exit === 'number' ? result.exit : null,
   };
-  return { seal: said, recomputed, records: verdicts, agree: said.verdict === recomputed.verdict && said.verdicts === recomputed.verdicts };
+  const agree = said.verdict === recomputed.verdict && said.verdicts === recomputed.verdicts && said.exit === recomputed.exit;
+  return { seal: said, recomputed, records: verdicts, agree };
 }

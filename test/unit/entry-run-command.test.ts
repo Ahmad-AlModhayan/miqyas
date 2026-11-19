@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runCheck13 } from '../../src/entry/check13.js';
 import { type CurrentPathResult, type RunSteps, runBundled, runPrintClose } from '../../src/entry/run-command.js';
 import { verifyBundle } from '../../src/entry/verify.js';
+import type { Verdict } from '../../src/kernel/judge.js';
 
 let tmp: string;
 let events: string[];
@@ -73,16 +74,53 @@ describe('run without --proof-bundle', () => {
   });
 });
 
+describe('run without --proof-bundle keeps the exit code of the current path', () => {
+  it('gives back the result of the current path untouched, its exit code included', async () => {
+    const failing: CurrentPathResult = { exitCode: 1, report: { verdict: 'fail', plans: [] } };
+    const unknown: CurrentPathResult = { exitCode: 1, report: { verdict: 'not_checked', plans: [] } };
+    for (const result of [report, failing, unknown]) {
+      expect((await runPrintClose({ ...steps(), run: async () => result })).exitCode).toBe(result.exitCode);
+    }
+  });
+});
+
+describe('run with --proof-bundle exits by the fold of its verdicts (FOUNDATION §4)', () => {
+  /** A judge that records verdict records naming these words, as a claim on the new path would. */
+  const recording = (words: string[]) => async (recorder: Parameters<Parameters<typeof runBundled>[0]['judge']>[0]) => {
+    const verdicts = words.map((verdict, i) => ({ claim: `c${i + 1}@1`, verdict }) as unknown as Verdict);
+    for (const v of verdicts) await recorder.record('verdict', v as never);
+    return verdicts;
+  };
+
+  it.each([
+    [['pass'], 0],
+    [['pass', 'pass'], 0],
+    [['pass', 'fail'], 1],
+    [['fail', 'blocked'], 1],
+    [['pass', 'not_checked'], 3],
+    [['blocked'], 3],
+    [['unverified', 'pass'], 3],
+  ])('%j exits %i, whatever the current path gave, which the seal keeps apart', async (words, exit) => {
+    const out = path.join(tmp, 'out');
+    const failing: CurrentPathResult = { exitCode: 1, report: { verdict: 'fail', plans: [] } };
+    expect(await runBundled(bundled(out, recording(words)), { ...steps(), run: async () => failing })).toBe(exit);
+    const seal = (await ledger(out)).at(-1);
+    expect(seal.body.result).toMatchObject({ verdicts: words.length, exit, currentPath: { exitCode: 1 } });
+    expect((await verifyBundle(out)).exitCode).toBe(0);
+  });
+});
+
 describe('run with --proof-bundle', () => {
   it('runs the same sequence, then judges, then prints the head; seals the fold of its verdicts; the bundle verifies', async () => {
     const out = path.join(tmp, 'out');
-    expect(await runBundled(bundled(out), steps())).toBe(0);
+    // No claim at all on the new path: a usage error, exit 2, whatever the current path gave.
+    expect(await runBundled(bundled(out), steps())).toBe(2);
     expect(events).toEqual(['open', 'run', 'print pass', 'close', 'judge', 'proof bundle head']);
 
     const seal = (await ledger(out)).at(-1);
     expect(seal.t).toBe('run.seal');
     // No claim ran: the fold of no verdict is not known, never a pass.
-    expect(seal.body.result).toEqual({ verdict: 'not_known', verdicts: 0, currentPath: { verdict: 'pass', exitCode: 0, plans: [{ id: 'p', verdict: 'pass' }] } });
+    expect(seal.body.result).toEqual({ verdict: 'not_known', verdicts: 0, exit: 2, currentPath: { verdict: 'pass', exitCode: 0, plans: [{ id: 'p', verdict: 'pass' }] } });
     expect((await verifyBundle(out)).exitCode).toBe(0);
   });
 
@@ -95,10 +133,11 @@ describe('run with --proof-bundle', () => {
 
   it('seals check 13 on the new path; a copy of the bundle in another folder still verifies, and holds none of the paths it was given', async () => {
     const out = path.join(tmp, 'deep', 'run folder');
-    expect(await runBundled(bundled(out, async (recorder) => [await runCheck13(recorder, { repoPath: tmp })]), steps())).toBe(0);
+    // Check 13 is not_checked over a folder with no lockfile: nothing fails, something is not known, exit 3.
+    expect(await runBundled(bundled(out, async (recorder) => [await runCheck13(recorder, { repoPath: tmp })]), steps())).toBe(3);
     const records = await ledger(out);
     expect(records.filter((r) => r.t === 'verdict').map((r) => r.body.verdict)).toEqual(['not_checked']);
-    expect(records.at(-1).body.result).toMatchObject({ verdict: 'not_known', verdicts: 1 });
+    expect(records.at(-1).body.result).toMatchObject({ verdict: 'not_known', verdicts: 1, exit: 3, currentPath: { exitCode: 0 } });
 
     const text = await readFile(path.join(out, 'ledger.jsonl'), 'utf8');
     expect(text).not.toContain(tmp);
