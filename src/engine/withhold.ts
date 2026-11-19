@@ -30,16 +30,30 @@ export function normalise(value: Json): string {
 }
 
 /**
- * The shape of a value: its type, and for an object the names of its fields in order with the shape of each, for a list
- * the shapes of its items. A field's name is kept (a row is its columns in name order, ALGORITHMS L2); no value is.
+ * How a caller withholds a value. `fieldNames: 'schema'` says the names of its objects' fields are a schema's names,
+ * fixed by the code that reads them, and not values: only then does the shape keep them.
  */
-export function shapeOf(value: Json): string {
+export interface WithholdOptions {
+  fieldNames?: 'schema';
+}
+
+const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * The shape of a value: its type; for a list the shapes of its items, each once; for an object the shape of each field.
+ * No value is kept, and no field name unless the caller says the names are a schema's: a row keyed by its own values
+ * would put them in the shape. Without the names an object's shape is its fields' shapes in code-unit order, one per
+ * field; with them, each field as name:shape in name order (a row is its columns in name order, ALGORITHMS L2).
+ */
+export function shapeOf(value: Json, options: WithholdOptions = {}): string {
   if (value === null) return 'null';
-  if (Array.isArray(value)) return `[${[...new Set(value.map(shapeOf))].sort().join('|')}]`;
+  if (Array.isArray(value)) return `[${[...new Set(value.map((v) => shapeOf(v, options)))].sort(byCodeUnit).join('|')}]`;
   if (typeof value === 'object') {
-    return `{${Object.keys(value)
-      .sort()
-      .map((k) => `${k}:${shapeOf((value as { [k: string]: Json })[k] as Json)}`)
+    const fields = Object.entries(value).map(([k, v]) => [k, shapeOf(v as Json, options)] as const);
+    if (options.fieldNames !== 'schema') return `{${fields.map(([, s]) => s).sort(byCodeUnit).join(',')}}`;
+    return `{${fields
+      .sort(([a], [b]) => byCodeUnit(a, b))
+      .map(([k, s]) => `${k}:${s}`)
       .join(',')}}`;
   }
   if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'number';
@@ -70,10 +84,10 @@ function jsonIn(bytes: Uint8Array): { value: Json } | undefined {
  * Withholds a value: a JSON value, or a body of bytes. A body that is JSON is withheld as the value it holds, so that
  * two bodies that differ only in spacing or field order compare equal; other bytes as bytes, counted in bytes.
  */
-export async function withhold(value: Json | Uint8Array, why: WithheldReason, hmac: KeyedHash): Promise<WithheldValue> {
+export async function withhold(value: Json | Uint8Array, why: WithheldReason, hmac: KeyedHash, options: WithholdOptions = {}): Promise<WithheldValue> {
   const digest = async (bytes: Uint8Array) => `hmac-sha256:${hex(await hmac(bytes))}`;
-  if (!(value instanceof Uint8Array)) return { why, shape: shapeOf(value), count: countOf(value), digest: await digest(utf8(normalise(value))) };
+  if (!(value instanceof Uint8Array)) return { why, shape: shapeOf(value, options), count: countOf(value), digest: await digest(utf8(normalise(value))) };
   const json = jsonIn(value);
   if (json === undefined) return { why, shape: 'bytes', count: value.length, size: value.length, digest: await digest(value) };
-  return { why, shape: shapeOf(json.value), count: countOf(json.value), size: value.length, digest: await digest(utf8(normalise(json.value))) };
+  return { why, shape: shapeOf(json.value, options), count: countOf(json.value), size: value.length, digest: await digest(utf8(normalise(json.value))) };
 }

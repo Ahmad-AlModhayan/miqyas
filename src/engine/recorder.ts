@@ -15,7 +15,7 @@ import { NO_SCRUB, type ScrubRules, scrubText, withEncodedTerms } from '../scrub
 import type { WithheldReason } from '../protocol/facts.js';
 import { assertFact } from './fact-check.js';
 import { scrubbed, scrubbedBlob } from './scrubbing.js';
-import { type KeyedHash, type WithheldValue, withhold } from './withhold.js';
+import { type KeyedHash, type WithheldValue, type WithholdOptions, withhold } from './withhold.js';
 
 /** The record types a run appends as it goes: every type but the two that open and close the ledger. */
 export type AppendableType = Exclude<RecordType, 'run.open' | 'run.seal'>;
@@ -39,9 +39,10 @@ export interface RunRecorder {
   head(): Promise<Head>;
   /**
    * A value that must not be kept, as a fact holds it in its place: its shape, its count and its digest under the run's
-   * key (docs/FOUNDATION.md §3, "Safe to keep"). The fact names the field in `withheld`.
+   * key (docs/FOUNDATION.md §3, "Safe to keep"). The fact names the field in `withheld`. The shape keeps field names
+   * only when `options` says they are a schema's.
    */
-  withhold(value: Json | Uint8Array, why: WithheldReason): Promise<WithheldValue>;
+  withhold(value: Json | Uint8Array, why: WithheldReason, options?: WithholdOptions): Promise<WithheldValue>;
 }
 
 /** What closes a run: the seal, written once, and the head that fixes the ledger. */
@@ -129,9 +130,9 @@ export async function openRecorder(store: Store, sha256: Sha256, options: Record
     putBlob: async (bytes, mediaType) => ({ ...(await blobs.put(scrubbedBlob(bytes, mediaType, rules), mediaType)) }),
     getBlob: (digest) => blobs.get(digest),
     head: () => writer.head(),
-    withhold: async (value, why) => {
+    withhold: async (value, why, how) => {
       if (options.keyedHash === undefined) throw new Error('this run was given no key, so it cannot withhold a value');
-      return withhold(value, why, options.keyedHash);
+      return withhold(value, why, options.keyedHash, how);
     },
     async seal(result) {
       sealing = true;

@@ -53,7 +53,7 @@ export async function runWithProofBundle<T>(options: ProofBundleRun, run: (recor
       putBlob: (bytes, mediaType) => recorder.putBlob(bytes, mediaType),
       getBlob: (digest) => recorder.getBlob(digest),
       head: () => recorder.head(),
-      withhold: (value, why) => recorder.withhold(value, why),
+      withhold: (value, why, how) => recorder.withhold(value, why, how),
     });
     const sealed = await recorder.seal(fold);
     options.print(`proof bundle head: ${formatHead(sealed.head)}`);

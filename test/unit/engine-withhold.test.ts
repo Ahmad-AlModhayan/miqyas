@@ -22,8 +22,18 @@ describe('withholding a value', () => {
   it('records its shape, its count and its keyed digest, and nothing of the value', async () => {
     const row = { name: 'Row Owner', id: 41, paid: true };
     const kept = await withhold(row, 'row', hmac);
-    expect(kept).toEqual({ why: 'row', shape: '{id:integer,name:string,paid:boolean}', count: 3, digest: expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/) });
+    expect(kept).toEqual({ why: 'row', shape: '{boolean,integer,string}', count: 3, digest: expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/) });
     expect(JSON.stringify(kept)).not.toContain('Row Owner');
+  });
+
+  it('keeps no field name in the shape, unless the caller says the names are a schema’s', async () => {
+    const keyedByValue = await withhold({ 'ROW-SENTINEL-x': 1, 'ROW-SENTINEL-y': { 'ROW-SENTINEL-z': 'a' } }, 'row', hmac);
+    expect(keyedByValue).toMatchObject({ shape: '{integer,{string}}', count: 2 });
+    expect(JSON.stringify(keyedByValue)).not.toContain('SENTINEL');
+    const schemaNamed = await withhold({ name: 'Row Owner', id: 41, paid: true }, 'row', hmac, { fieldNames: 'schema' });
+    expect(schemaNamed).toMatchObject({ shape: '{id:integer,name:string,paid:boolean}', count: 3 });
+    // The digest is of the value, whatever the shape says.
+    expect(schemaNamed.digest).toBe((await withhold({ name: 'Row Owner', id: 41, paid: true }, 'row', hmac)).digest);
   });
 
   it('digests the value written the one way: its fields in name order', async () => {
@@ -55,7 +65,8 @@ describe('withholding a value', () => {
 
   it('withholds a body by its bytes: JSON by the value it holds, other bytes as bytes, and says its size', async () => {
     const json = await withhold(bytes('{"b": [1, 2], "a": "x"}'), 'body', hmac);
-    expect(json).toMatchObject({ shape: '{a:string,b:[integer]}', count: 2, size: 23 });
+    expect(json).toMatchObject({ shape: '{[integer],string}', count: 2, size: 23 });
+    expect(await withhold(bytes('{"b": [1, 2], "a": "x"}'), 'body', hmac, { fieldNames: 'schema' })).toMatchObject({ shape: '{a:string,b:[integer]}' });
     expect(json.digest).toBe((await withhold({ a: 'x', b: [1, 2] }, 'body', hmac)).digest);
     expect(await withhold(bytes('not json'), 'body', hmac)).toMatchObject({ shape: 'bytes', count: 8, size: 8 });
   });
@@ -95,6 +106,8 @@ describe('one run folder, searched end to end', () => {
     const open = { format: 1, inputs: { url: `https://app.test/${TERM}/home` } };
     await runWithProofBundle({ dir, runId: 'r1', open, scrub, print: () => undefined }, async (recorder) => {
       const response = await recorder.withhold(bytes(JSON.stringify([{ owner: SENTINEL, org: TERM }])), 'body');
+      // A body keyed by its own values: its keys must not reach the ledger as the shape's field names.
+      const request = await recorder.withhold(bytes(JSON.stringify({ [SENTINEL]: { paid: true } })), 'body');
       await recorder.record('fact', {
         kind: 'http.exchange',
         v: 1,
@@ -102,8 +115,8 @@ describe('one run folder, searched end to end', () => {
         run: 1,
         subject: 'target',
         cause: 'page',
-        body: { method: 'GET', url: `https://app.test/${TERM}/rows`, route: null, status: 200, headers: { 'x-org': TERM }, as: null, response },
-        withheld: ['response'],
+        body: { method: 'GET', url: `https://app.test/${TERM}/rows`, route: null, status: 200, headers: { 'x-org': TERM }, as: null, request, response },
+        withheld: ['request', 'response'],
       });
       const snapshot = await recorder.putBlob(bytes(`<p>${TERM}</p>`), 'text/html');
       await recorder.record('fact', { kind: 'asset', v: 1, by: 'test-worker@1', run: 1, subject: 'target', body: { from: 'served', name: 'page' }, blobs: { content: snapshot } });
