@@ -45,6 +45,29 @@ export function failOnSubjects(subject: string, facts: readonly PlacedFact[]): s
 }
 
 /**
+ * The facts the claim is handed from a bundle: every `finding` fact, whoever recorded it, so no confirmed finding is
+ * missed; and the `collection` facts of `finders`, the collectors that record findings, alone, so that the claim's
+ * coverage is theirs and another collector closing complete never stands in for a look for findings. The facts a
+ * finding rests on, through `from`, come too: the claim's view does not read them, but its depth is worked out from
+ * them, so a verdict on a derived finding is `derived` and not `measured`.
+ */
+export function failOnFacts(facts: readonly PlacedFact[], finders: readonly string[]): PlacedFact[] {
+  const bySeq = new Map(facts.map((p) => [p.seq, p]));
+  const kept = new Set<number>();
+  const otherClosing = ({ fact }: PlacedFact) => fact.kind === 'collection' && !finders.includes(fact.by);
+  const queue = facts.filter((p) => p.fact.kind === 'finding' || (p.fact.kind === 'collection' && !otherClosing(p))).map((p) => p.seq);
+  while (queue.length > 0) {
+    const seq = queue.pop() as number;
+    const placed = bySeq.get(seq);
+    // Another collector's closing never comes in, even through `from`: the view would read it as coverage.
+    if (kept.has(seq) || placed === undefined || otherClosing(placed)) continue;
+    kept.add(seq);
+    queue.push(...(placed.fact.from ?? []));
+  }
+  return facts.filter((p) => kept.has(p.seq));
+}
+
+/**
  * Records the --fail-on claim through the recorder once, judges it for each of its subjects, records each verdict,
  * and returns them; the fold takes them like any others.
  */

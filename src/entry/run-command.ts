@@ -3,11 +3,14 @@
 // driver, in that order on both paths, so a close that throws still leaves the report printed. With --proof-bundle the
 // same sequence runs inside the bundle, the claims on the new path are judged after it, and the head is printed last.
 import type { RunRecorder } from '../engine/recorder.js';
+import type { Fact, PlacedFact } from '../kernel/fact.js';
 import { type SealResult, sealResult } from '../kernel/fold.js';
 import type { Verdict } from '../kernel/judge.js';
+import { readLedger } from '../kernel/ledger.js';
 import { runCheck13 } from './check13.js';
 import type { FailOnThreshold } from '../proof-core/findings.js';
-import { TARGET_SUBJECT, runFailOn } from './fail-on.js';
+import { TARGET_SUBJECT, failOnFacts, runFailOn } from './fail-on.js';
+import { FsStore } from './fs-store.js';
 import { type ProofBundleRun, runWithProofBundle } from './proof-bundle.js';
 
 /** The parts of a run, as arguments: how to open the driver, how to run with it, how to print what the run gave. */
@@ -38,7 +41,7 @@ export interface CurrentPathResult {
 export interface BundledRun {
   bundle: Omit<ProofBundleRun, 'print'>;
   /** Judges the claims on the new path, after the current path has run and printed; each verdict is already recorded. */
-  judge: (recorder: RunRecorder) => Promise<Verdict[]>;
+  judge: (recorder: BundleRecorder) => Promise<Verdict[]>;
   /** Where the head goes, after everything else. */
   printHead: (line: string) => void;
   /** Where a note about the exit goes; standard error when not given. */
@@ -70,24 +73,57 @@ export function bundledExit(current: CurrentPathResult, sealed: SealResult): Bun
   return { exit: current.exitCode };
 }
 
+/** The recorder the new path is handed: it can also read back the facts the bundle holds so far, as written. */
+export interface BundleRecorder extends RunRecorder {
+  /** Every fact in the bundle's ledger so far, at its seq, as it was written (scrubbed). */
+  recorded(): Promise<PlacedFact[]>;
+}
+
+/**
+ * A collector the run starts on the new path: the name its facts carry in `by`, the kinds it records, and how it
+ * records them through the recorder. The run knows what each records before it runs (docs/FOUNDATION.md, the plan's "Match" step).
+ */
+export interface NewPathCollector {
+  by: string;
+  records: readonly string[];
+  collect: (recorder: RunRecorder) => Promise<void>;
+}
+
 /** What decides which claims the run judges on the new path. */
 export interface NewPathSettings {
   profile?: string;
   repoPath?: string;
   failOn?: FailOnThreshold;
+  /** The collectors the run starts on the new path before it judges. None records findings yet in a real run. */
+  collectors?: readonly NewPathCollector[];
 }
 
 /**
  * The claims on the new path, each recorded with its verdict: check 13 under profile grade-1, and the --fail-on claim.
- * Nothing on the new path records findings yet, so the --fail-on claim reads no fact.
+ * The collectors run first. The --fail-on claim reads the bundle's `finding` facts, whoever recorded them, and only the
+ * `collection` facts of the collectors that record findings, and the run supplies the `finding` kind only when one of
+ * its collectors records it: so the claim never passes because nothing looked for findings, and no other collector's
+ * closing stands in for theirs. With no such collector, as in a real run today, it is blocked.
  */
-export async function judgeNewPath(recorder: RunRecorder, settings: NewPathSettings): Promise<Verdict[]> {
+export async function judgeNewPath(recorder: BundleRecorder, settings: NewPathSettings): Promise<Verdict[]> {
+  const collectors = settings.collectors ?? [];
+  for (const collector of collectors) await collector.collect(recorder);
   const verdicts: Verdict[] = [];
   if (settings.profile === 'grade-1') verdicts.push(await runCheck13(recorder, settings.repoPath !== undefined ? { repoPath: settings.repoPath } : {}));
   if (settings.failOn !== undefined && settings.failOn !== 'none') {
-    verdicts.push(...(await runFailOn(recorder, { severity: settings.failOn, subject: TARGET_SUBJECT, facts: [] })));
+    const finders = collectors.filter((c) => c.records.includes('finding')).map((c) => c.by);
+    const facts = failOnFacts(await recorder.recorded(), finders);
+    const supplies = finders.length > 0 ? { supplies: { kinds: ['finding'] } } : {};
+    verdicts.push(...(await runFailOn(recorder, { severity: settings.failOn, subject: TARGET_SUBJECT, facts, ...supplies })));
   }
   return verdicts;
+}
+
+/** The facts in the bundle's ledger so far, once every record asked for has been written. */
+async function bundleFacts(recorder: RunRecorder, dir: string): Promise<PlacedFact[]> {
+  await recorder.head();
+  const { records } = await readLedger(new FsStore(dir));
+  return records.filter((r) => r.t === 'fact').map((r) => ({ seq: r.seq, fact: r.body as unknown as Fact }));
 }
 
 /**
@@ -103,7 +139,7 @@ export async function runBundled<D extends { close(): Promise<void> }, R extends
   let note: string | undefined;
   const exitCode = await runWithProofBundle({ ...bundled.bundle, print: (line) => head.push(line) }, async (recorder) => {
     const result = await runPrintClose(steps);
-    const verdicts = await bundled.judge(recorder);
+    const verdicts = await bundled.judge({ ...recorder, recorded: () => bundleFacts(recorder, bundled.bundle.dir) });
     const currentPath = {
       verdict: result.report.verdict,
       exitCode: result.exitCode,

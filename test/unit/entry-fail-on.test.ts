@@ -7,12 +7,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TARGET_SUBJECT, failOnClaimPath, runFailOn } from '../../src/entry/fail-on.js';
-import { type CurrentPathResult, judgeNewPath, runBundled } from '../../src/entry/run-command.js';
+import type { RunRecorder } from '../../src/engine/recorder.js';
+import { type CurrentPathResult, type NewPathCollector, judgeNewPath, runBundled } from '../../src/entry/run-command.js';
 import { verifyBundle } from '../../src/entry/verify.js';
 import type { PlacedFact } from '../../src/kernel/fact.js';
 import { sealResult } from '../../src/kernel/fold.js';
+import type { Json } from '../../src/kernel/ledger.js';
 import { type FindingSeverity, SEVERITY_RANK } from '../../src/proof-core/findings.js';
-import { type Given, done, finding, judge, loadFile, place } from '../kernel-helpers.js';
+import { type Given, advisoryFact, collectionFact, done, finding, judge, loadFile, place } from '../kernel-helpers.js';
 
 /** The `collection` fact of the collector that records the findings. */
 const closed = (status = 'complete'): Given => done(status, 'f@1');
@@ -111,7 +113,7 @@ const bundled = (dir: string, judgeWith: Parameters<typeof runBundled>[0]['judge
 const records = async (dir: string) => (await readFile(path.join(dir, 'ledger.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
 
 describe('--fail-on through the run with --proof-bundle', () => {
-  it('adds the claim; today nothing on the new path records findings, so it is blocked and the run exits 3', async () => {
+  it('adds the claim; on a clean run as the CLI starts it no collector on the new path looks for findings, so it is blocked and the run exits 3', async () => {
     const out = path.join(tmp, 'today');
     expect(await runBundled(bundled(out, (recorder) => judgeNewPath(recorder, { failOn: 'high' })), steps)).toBe(3);
     const ledger = await records(out);
@@ -171,5 +173,96 @@ describe('--fail-on through the run with --proof-bundle', () => {
     ]);
   });
 
-  it.todo('end to end: a finding recorded through the recorder fails `run --proof-bundle --fail-on high` (once the finding kind has its schema)');
+});
+
+describe('--fail-on end to end: findings recorded through the recorder, the claim judged over what the bundle holds', () => {
+  const FINDER = 'finder@1';
+  type Found = { severity: FindingSeverity; state: 'confirmed' | 'unconfirmed' };
+  /** How a collector looks at one subject: in a run of its own, the findings it records, then how it closes (null: it doesn't). */
+  type Look = { subject: string; found?: Found[]; status?: 'complete' | 'failed' | null };
+  const fact = (recorder: RunRecorder, body: unknown) => recorder.record('fact', body as Json);
+
+  /** A collector that looks for findings: each one rests on the advisory it read, as the `finding` kind requires. */
+  const finder = (looks: Look[]): NewPathCollector => ({
+    by: FINDER,
+    records: ['dep.advisory', 'finding'],
+    collect: async (recorder) => {
+      for (const [i, look] of looks.entries()) {
+        const envelope = { v: 1, by: FINDER, run: i + 1, subject: look.subject };
+        for (const [j, f] of (look.found ?? []).entries()) {
+          const read = await fact(recorder, { ...advisoryFact(`GHSA-${i}-${j}`, f.severity), ...envelope });
+          await fact(recorder, { ...finding(f.severity, f.state, [read]), ...envelope });
+        }
+        if (look.status === null) continue;
+        const counts = { findings: look.found?.length ?? 0 };
+        await fact(recorder, collectionFact({ ...envelope, setOut: 'findings about the subject', counts, status: look.status ?? 'complete' }));
+      }
+    },
+  });
+  /** A collector that records no finding, and closes complete about the run's subject. */
+  const other: NewPathCollector = {
+    by: 'other@1',
+    records: ['repo.tree'],
+    collect: async (recorder) => {
+      await fact(recorder, collectionFact({ by: 'other@1', subject: TARGET_SUBJECT, setOut: 'the tree', counts: { files: 0 } }));
+    },
+  };
+
+  const runWith = async (name: string, collectors: NewPathCollector[]) => {
+    const out = path.join(tmp, name);
+    const exit = await runBundled(bundled(out, (recorder) => judgeNewPath(recorder, { failOn: 'high', collectors })), steps);
+    const ledger = await records(out);
+    expect((await verifyBundle(out)).exitCode).toBe(0);
+    const verdicts = ledger.filter((r) => r.t === 'verdict').map((r) => r.body);
+    return { exit, ledger, verdicts, bySubject: verdicts.map((v) => [v.view.subject, v.verdict]) };
+  };
+  const seqsOf = (ledger: { seq: number; t: string; body: { kind?: string } }[], kind: string) =>
+    ledger.filter((r) => r.t === 'fact' && r.body.kind === kind).map((r) => r.seq);
+
+  it('fails on a confirmed finding at the threshold, and shows the finding as the bundle holds it: exit 1', async () => {
+    const { exit, ledger, verdicts } = await runWith('at', [finder([{ subject: TARGET_SUBJECT, found: [{ severity: 'high', state: 'confirmed' }] }])]);
+    expect(exit).toBe(1);
+    expect(verdicts.map((v) => v.verdict)).toEqual(['fail']);
+    expect(verdicts[0].shown).toEqual(seqsOf(ledger, 'finding'));
+    expect(verdicts[0].depth).toBe('derived');
+    expect(ledger.at(-1).body.result).toMatchObject({ verdict: 'fail', verdicts: 1, exit: 1 });
+  });
+
+  it.each([
+    ['a confirmed finding below the threshold', { severity: 'medium', state: 'confirmed' }],
+    ['an unconfirmed critical finding', { severity: 'critical', state: 'unconfirmed' }],
+  ] as const)('passes on %s once the collector closed complete: exit 0', async (_name, found) => {
+    const { exit, verdicts } = await runWith(`below-${found.severity}`, [finder([{ subject: TARGET_SUBJECT, found: [found] }])]);
+    expect(exit).toBe(0);
+    expect(verdicts.map((v) => [v.verdict, v.coverage.met])).toEqual([['pass', true]]);
+  });
+
+  it('passes with no finding at all when the collector that looks for findings closed complete: exit 0', async () => {
+    const { exit, verdicts } = await runWith('none', [finder([{ subject: TARGET_SUBJECT }])]);
+    expect(exit).toBe(0);
+    expect(verdicts.map((v) => [v.verdict, v.vacuous])).toEqual([['pass', true]]);
+  });
+
+  it('fails on a confirmed finding at the threshold on a second subject: one verdict per subject, exit 1', async () => {
+    const looks = [{ subject: TARGET_SUBJECT }, { subject: 'api', found: [{ severity: 'high', state: 'confirmed' } as const] }];
+    const { exit, bySubject } = await runWith('second', [finder(looks)]);
+    expect(exit).toBe(1);
+    expect(bySubject).toEqual([
+      [TARGET_SUBJECT, 'pass'],
+      ['api', 'fail'],
+    ]);
+  });
+
+  it('never passes because nothing looked for findings: with only another collector, closed complete, it is blocked, exit 3', async () => {
+    const { exit, verdicts } = await runWith('nobody', [other]);
+    expect(exit).toBe(3);
+    expect(verdicts.map((v) => [v.verdict, v.add])).toEqual([['blocked', ['kind:finding']]]);
+  });
+
+  it("is not known while the collector that looks for findings hasn't closed, though another closed complete: exit 3", async () => {
+    const unclosed = finder([{ subject: TARGET_SUBJECT, found: [{ severity: 'high', state: 'unconfirmed' }], status: null }]);
+    const { exit, verdicts } = await runWith('unclosed', [unclosed, other]);
+    expect(exit).toBe(3);
+    expect(verdicts.map((v) => [v.verdict, v.reason])).toEqual([['not_checked', 'coverage not met']]);
+  });
 });

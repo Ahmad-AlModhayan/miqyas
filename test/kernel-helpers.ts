@@ -30,8 +30,16 @@ export const advisoryFact = (id: string, severity: string, more: { malicious?: b
 export const item = (v: Json, more: { [k: string]: Json } = {}): Given => ({ kind: 't.item', by: 'c@1', body: { v, w: true, u: 1, ...more } });
 /** The `collection` fact of collector `c@1`, or of another, which a test claim's `covered` reads. */
 export const done = (status = 'complete', by = 'c@1'): Given => ({ kind: 'collection', by, body: { status } });
-/** A `finding` fact of collector `f@1`: its severity and state in the body, the facts it rests on in `from`. */
-export const finding = (severity: string, state: string, from?: number[]): Given => ({ kind: 'finding', by: 'f@1', body: { severity, state }, ...(from ? { from } : {}) });
+/**
+ * A `finding` fact of collector `f@1`, its body whole and valid for its kind: an adapter's finding of this severity and
+ * state. The facts it rests on are its `from`, which the kind requires of a recorded fact.
+ */
+export const finding = (severity: string, state: string, from?: number[]): Given => ({
+  kind: 'finding',
+  by: 'f@1',
+  body: { id: `F-${severity}-${state}`, title: `a ${state} ${severity} finding`, severity, state, source: 'adapter' },
+  ...(from ? { from } : {}),
+});
 
 /** A verdict's rank in the order F < U < T, which the fold and the combinations keep. */
 export const rank = (v: string): number => (v === 'fail' ? 0 : v === 'pass' ? 2 : 1);
