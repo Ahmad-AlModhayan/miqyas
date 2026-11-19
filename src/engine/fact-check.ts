@@ -61,7 +61,52 @@ export function checkFact(fact: unknown): FactCheck {
   }
   const minusZero = minusZeroAt(fact, []);
   if (minusZero !== undefined) return refused(kind, minusZero, 'must not be minus zero, which a record cannot hold');
+  const unsaid = withheldProblem(fact as { body: unknown; withheld?: readonly string[] });
+  if (unsaid !== undefined) return refused(kind, unsaid.field, unsaid.why);
   return { ok: true };
+}
+
+/** A value a fact holds in place of one that must not be kept (docs/FOUNDATION.md §3): it says why, and its digest is keyed. */
+function isWithheldValue(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { why, digest } = value as { why?: unknown; digest?: unknown };
+  return typeof why === 'string' && typeof digest === 'string' && digest.startsWith('hmac-sha256:');
+}
+
+/** The dotted path from the body of each withheld value it holds. A list adds no name: its items share its path. */
+function withheldValuesAt(value: unknown, path: readonly string[], out: string[]): string[] {
+  if (isWithheldValue(value)) out.push(path.join('.'));
+  else if (Array.isArray(value)) for (const item of value) withheldValuesAt(item, path, out);
+  else if (value !== null && typeof value === 'object') for (const [key, item] of Object.entries(value)) withheldValuesAt(item, [...path, key], out);
+  return out;
+}
+
+/** Whether the body holds a field at a dotted path, reading through lists. */
+function holdsField(body: unknown, path: string): boolean {
+  let here: unknown[] = [body];
+  for (const name of path.split('.')) {
+    here = here
+      .flatMap((v) => (Array.isArray(v) ? v : [v]))
+      .filter((v): v is Record<string, unknown> => v !== null && typeof v === 'object' && Object.hasOwn(v, name))
+      .map((v) => v[name]);
+    if (here.length === 0) return false;
+  }
+  return true;
+}
+
+/**
+ * What `withheld` fails to say: a withheld value at a path it does not name, or a path it names that the body does not
+ * hold. A path it names may hold a plain value, which rests on one the collector did not keep (check 13's severity).
+ */
+function withheldProblem(fact: { body: unknown; withheld?: readonly string[] }): { field: string; why: string } | undefined {
+  const named = fact.withheld ?? [];
+  for (const at of withheldValuesAt(fact.body, [], [])) {
+    if (!named.includes(at)) return { field: `body.${at}`, why: `holds a withheld value, and withheld does not name ${JSON.stringify(at)}` };
+  }
+  for (const at of named) {
+    if (!holdsField(fact.body, at)) return { field: 'withheld', why: `names ${JSON.stringify(at)}, a field the body does not hold` };
+  }
+  return undefined;
 }
 
 /**
