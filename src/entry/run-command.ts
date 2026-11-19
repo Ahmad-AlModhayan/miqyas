@@ -3,7 +3,7 @@
 // driver, in that order on both paths, so a close that throws still leaves the report printed. With --proof-bundle the
 // same sequence runs inside the bundle, the claims on the new path are judged after it, and the head is printed last.
 import type { RunRecorder } from '../engine/recorder.js';
-import { type Verdict, sealResult } from '../kernel/judge.js';
+import { type SealResult, type Verdict, sealResult } from '../kernel/judge.js';
 import { runCheck13 } from './check13.js';
 import { type Severity, TARGET_SUBJECT, runFailOn } from './fail-on.js';
 import { type ProofBundleRun, runWithProofBundle } from './proof-bundle.js';
@@ -27,10 +27,10 @@ export async function runPrintClose<D extends { close(): Promise<void> }, R>(ste
   }
 }
 
-/** What the current path gives, as much of it as the seal keeps beside the fold. */
+/** What the current path gives, as much of it as the seal keeps beside the fold and the exit rule reads. */
 export interface CurrentPathResult {
   exitCode: number;
-  report: { verdict: string; plans: readonly { planId: string; verdict: string }[] };
+  report: { verdict: string; plans: readonly { planId: string; verdict: string }[]; readiness?: unknown };
 }
 
 export interface BundledRun {
@@ -39,6 +39,30 @@ export interface BundledRun {
   judge: (recorder: RunRecorder) => Promise<Verdict[]>;
   /** Where the head goes, after everything else. */
   printHead: (line: string) => void;
+  /** Where a note about the exit goes; standard error when not given. */
+  printNote?: (line: string) => void;
+}
+
+/** What the run exits with on the new path, and the note to print with it, if any. */
+export interface BundledExit {
+  exit: number;
+  note?: string;
+}
+
+/**
+ * The exit of a run with --proof-bundle, until plans and the other checks are judged on the new path: it is never
+ * greener than the current path. 1 if the current path gave 1 or the fold fails; otherwise 3 if the fold is not known;
+ * otherwise the current path's code, which is never turned into 0; and 2 only when neither path judged anything. The
+ * seal's own exit stays the fold of the bundle's verdicts, which verify recomputes.
+ */
+export function bundledExit(current: CurrentPathResult, sealed: SealResult): BundledExit {
+  if (current.exitCode === 1 || sealed.verdict === 'fail') return { exit: 1 };
+  if (sealed.verdicts > 0 && sealed.verdict === 'not_known') return { exit: 3 };
+  const currentJudged = current.report.plans.length > 0 || current.report.readiness !== undefined;
+  if (sealed.verdicts === 0 && !currentJudged) {
+    return { exit: 2, note: 'miqyas: nothing was judged: no plan or check on the current path, and no claim on the new path' };
+  }
+  return { exit: current.exitCode };
 }
 
 /** What decides which claims the run judges on the new path. */
@@ -64,13 +88,14 @@ export async function judgeNewPath(recorder: RunRecorder, settings: NewPathSetti
 /**
  * The run with --proof-bundle. The current path runs as it does without the flag; then the claims on the new path are
  * judged. The seal holds the fold of the verdict records with its exit code, and beside it, apart, what the current
- * path concluded. The run exits by the fold (docs/FOUNDATION.md §4): 0, 1 or 3, and 2 when no claim was judged.
+ * path concluded. The run exits by `bundledExit`, which takes both into account.
  */
 export async function runBundled<D extends { close(): Promise<void> }, R extends CurrentPathResult>(
   bundled: BundledRun,
   steps: RunSteps<D, R>,
 ): Promise<number> {
   const head: string[] = [];
+  let note: string | undefined;
   const exitCode = await runWithProofBundle({ ...bundled.bundle, print: (line) => head.push(line) }, async (recorder) => {
     const result = await runPrintClose(steps);
     const verdicts = await bundled.judge(recorder);
@@ -80,8 +105,11 @@ export async function runBundled<D extends { close(): Promise<void> }, R extends
       plans: result.report.plans.map((p) => ({ id: p.planId, verdict: p.verdict })),
     };
     const sealed = sealResult(verdicts.map((v) => v.verdict));
-    return { result: sealed.exit, fold: { ...sealed, currentPath } };
+    const exit = bundledExit(result, sealed);
+    note = exit.note;
+    return { result: exit.exit, fold: { ...sealed, currentPath } };
   });
   for (const line of head) bundled.printHead(line);
+  if (note !== undefined) (bundled.printNote ?? ((line: string) => process.stderr.write(line + '\n')))(note);
   return exitCode;
 }

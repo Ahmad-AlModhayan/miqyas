@@ -180,7 +180,7 @@ describe('unmatched: every quantifier against every mode, with a left item with 
     some: [leftItem(1, 1), rightItem(1, 2)],
     none: [leftItem(1, 1), rightItem(1, 2)],
   };
-  type Row = [PairQuantifier, Unmatched, 'absent' | 'present' | 'alone', ReturnType<typeof row>];
+  type Row = [PairQuantifier, Unmatched, 'absent' | 'present' | 'alone', { verdict: string; reason: string | undefined; shown: number[] }];
   // `present` adds the left item at position 3; `alone` is that item with no pair beside it, at position 1.
   const TABLE: Row[] = [
     ['every', 'uncovered', 'absent', pass()],

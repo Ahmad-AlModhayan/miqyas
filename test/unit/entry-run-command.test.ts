@@ -84,14 +84,14 @@ describe('run without --proof-bundle keeps the exit code of the current path', (
   });
 });
 
-describe('run with --proof-bundle exits by the fold of its verdicts (FOUNDATION §4)', () => {
-  /** A judge that records verdict records naming these words, as a claim on the new path would. */
-  const recording = (words: string[]) => async (recorder: Parameters<Parameters<typeof runBundled>[0]['judge']>[0]) => {
-    const verdicts = words.map((verdict, i) => ({ claim: `c${i + 1}@1`, verdict }) as unknown as Verdict);
-    for (const v of verdicts) await recorder.record('verdict', v as never);
-    return verdicts;
-  };
+/** A judge that records verdict records naming these words, as a claim on the new path would. */
+const recording = (words: string[]) => async (recorder: Parameters<Parameters<typeof runBundled>[0]['judge']>[0]) => {
+  const verdicts = words.map((verdict, i) => ({ claim: `c${i + 1}@1`, verdict }) as unknown as Verdict);
+  for (const v of verdicts) await recorder.record('verdict', v as never);
+  return verdicts;
+};
 
+describe('run with --proof-bundle seals the fold of its verdicts (FOUNDATION §4), whatever the current path gave', () => {
   it.each([
     [['pass'], 0],
     [['pass', 'pass'], 0],
@@ -100,21 +100,81 @@ describe('run with --proof-bundle exits by the fold of its verdicts (FOUNDATION 
     [['pass', 'not_checked'], 3],
     [['blocked'], 3],
     [['unverified', 'pass'], 3],
-  ])('%j exits %i, whatever the current path gave, which the seal keeps apart', async (words, exit) => {
+  ])('%j seals exit %i, and keeps what the current path gave apart', async (words, exit) => {
     const out = path.join(tmp, 'out');
     const failing: CurrentPathResult = { exitCode: 1, report: { verdict: 'fail', plans: [] } };
-    expect(await runBundled(bundled(out, recording(words)), { ...steps(), run: async () => failing })).toBe(exit);
+    await runBundled(bundled(out, recording(words)), { ...steps(), run: async () => failing });
     const seal = (await ledger(out)).at(-1);
     expect(seal.body.result).toMatchObject({ verdicts: words.length, exit, currentPath: { exitCode: 1 } });
     expect((await verifyBundle(out)).exitCode).toBe(0);
   });
 });
 
+describe('run with --proof-bundle never exits greener than the current path', () => {
+  // Until plans and the other checks are judged on the new path: 1 if the current path gave 1 or the fold fails;
+  // otherwise 3 if the fold is not known; otherwise the current path's code; 2 only when neither path judged anything.
+  const FOLDS = { pass: ['pass'], fail: ['pass', 'fail'], not_known: ['pass', 'not_checked'], none: [] as string[] };
+  type Fold = keyof typeof FOLDS;
+  const TABLE: [number, Fold, number][] = [
+    [0, 'pass', 0],
+    [0, 'fail', 1],
+    [0, 'not_known', 3],
+    [0, 'none', 0],
+    [1, 'pass', 1],
+    [1, 'fail', 1],
+    [1, 'not_known', 1],
+    [1, 'none', 1],
+    [3, 'pass', 3],
+    [3, 'fail', 1],
+    [3, 'not_known', 3],
+    [3, 'none', 3],
+    [2, 'pass', 2],
+    [2, 'fail', 1],
+    [2, 'not_known', 3],
+    [2, 'none', 2],
+  ];
+
+  it.each(TABLE)('the current path exits %i with a plan judged, the fold is %s: the run exits %i', async (current, fold, exit) => {
+    const out = path.join(tmp, 'out');
+    const notes: string[] = [];
+    const result: CurrentPathResult = { exitCode: current, report: { verdict: current === 0 ? 'pass' : 'fail', plans: [{ planId: 'p', verdict: 'x' }] } };
+    expect(await runBundled({ ...bundled(out, recording(FOLDS[fold])), printNote: (l) => notes.push(l) }, { ...steps(), run: async () => result })).toBe(exit);
+    expect(notes).toEqual([]);
+    // The seal's exit is the bundle's own fold, which verify recomputes; the process exit also takes the current path in.
+    const seal = (await ledger(out)).at(-1);
+    expect(seal.body.result).toMatchObject({ exit: fold === 'none' ? 2 : fold === 'pass' ? 0 : fold === 'fail' ? 1 : 3, currentPath: { exitCode: current } });
+    expect((await verifyBundle(out)).exitCode).toBe(0);
+  });
+
+  it('neither path judged anything: exit 2, and a message that says so', async () => {
+    const out = path.join(tmp, 'out');
+    const notes: string[] = [];
+    const nothing: CurrentPathResult = { exitCode: 0, report: { verdict: 'pass', plans: [] } };
+    expect(await runBundled({ ...bundled(out), printNote: (l) => notes.push(l) }, { ...steps(), run: async () => nothing })).toBe(2);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/nothing was judged/);
+  });
+
+  it('a current path with readiness checks and no plan has judged something; with no claim on the new path, its code stands', async () => {
+    const out = path.join(tmp, 'out');
+    const checks = { exitCode: 3, report: { verdict: 'not_checked', plans: [], readiness: { checks: [] } } } as CurrentPathResult;
+    expect(await runBundled({ ...bundled(out), printNote: () => {} }, { ...steps(), run: async () => checks })).toBe(3);
+  });
+
+  it('a current path that judged nothing, beside a claim on the new path: the fold decides', async () => {
+    const nothing: CurrentPathResult = { exitCode: 0, report: { verdict: 'pass', plans: [] } };
+    for (const [words, exit] of [[['pass'], 0], [['fail'], 1], [['blocked'], 3]] as const) {
+      const out = path.join(tmp, `out-${exit}`);
+      expect(await runBundled(bundled(out, recording([...words])), { ...steps(), run: async () => nothing })).toBe(exit);
+    }
+  });
+});
+
 describe('run with --proof-bundle', () => {
   it('runs the same sequence, then judges, then prints the head; seals the fold of its verdicts; the bundle verifies', async () => {
     const out = path.join(tmp, 'out');
-    // No claim at all on the new path: a usage error, exit 2, whatever the current path gave.
-    expect(await runBundled(bundled(out), steps())).toBe(2);
+    // No claim on the new path, and the current path judged a plan: its code stands.
+    expect(await runBundled(bundled(out), steps())).toBe(0);
     expect(events).toEqual(['open', 'run', 'print pass', 'close', 'judge', 'proof bundle head']);
 
     const seal = (await ledger(out)).at(-1);
