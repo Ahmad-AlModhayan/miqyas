@@ -173,7 +173,7 @@ export type Verdict = {
   verdict: VerdictValue;
   reason?: Reason;
   add?: string[];
-  /** Items for a `set` claim, pairs for a `pair` claim; `unmatched` is a `pair` claim's items with no partner. */
+  /** Items for a `set` claim, pairs for a `pair` claim; `unmatched` is a `pair` claim's left items with no partner. */
   items: { held: number; failed: number; outside: number; uncertain: number; unmatched?: number };
   read: number[];
   shown: number[];
@@ -358,10 +358,11 @@ type Keyed = { seq: number; body: Json; key: string };
 
 /**
  * Judges a `pair` claim over the facts in its view (docs/ALGORITHMS.md A2): the sides joined on their keys, each
- * pair sorted as A1 sorts an item, then A1's table over the pairs. An item with no partner, on either side, is
- * unmatched: under `uncovered` it means coverage is not met, under `fail` it is a counterexample (counted as held for
- * a `none` claim, as failed for the others), under `ignore` it is left out. Under `fail`, an unmatched item is uncertain instead while an item on the other side is uncertain, since
- * that item could be its partner: an error never makes a fail.
+ * pair sorted as A1 sorts an item, then A1's table over the pairs. A left item with no partner is unmatched; a right
+ * item with no partner is not counted, as in A2's loop. Under `uncovered` an unmatched item means coverage is not met,
+ * under `fail` it is a counterexample (counted as held for a `none` claim, as failed for the others), under `ignore` it
+ * is left out. Under `fail`, an unmatched item is uncertain instead while an item on the right is uncertain, since that
+ * item could be its partner: an error never makes a fail.
  */
 export function judgePair(loaded: LoadedPairClaim, input: JudgeInput): Verdict {
   const { claim, compiled } = loaded;
@@ -391,11 +392,10 @@ export function judgePair(loaded: LoadedPairClaim, input: JudgeInput): Verdict {
 
   const index = new Map<string, Keyed[]>();
   for (const b of right.keyed) index.set(b.key, [...(index.get(b.key) ?? []), b]);
-  const leftKeys = new Set(left.keyed.map((a) => a.key));
-  const unmatched: { seq: number; otherUncertain: boolean }[] = [];
+  const unmatched: number[] = [];
   for (const a of left.keyed) {
     const partners = index.get(a.key) ?? [];
-    if (partners.length === 0) unmatched.push({ seq: a.seq, otherUncertain: right.uncertain > 0 });
+    if (partners.length === 0) unmatched.push(a.seq);
     for (const b of partners) {
       const pair = { left: a.body, right: b.body };
       if (compiled.usable !== undefined && evaluate(compiled.usable, pair) !== 'true') {
@@ -408,8 +408,6 @@ export function judgePair(loaded: LoadedPairClaim, input: JudgeInput): Verdict {
       else groups.errored++;
     }
   }
-  for (const b of right.keyed) if (!leftKeys.has(b.key)) unmatched.push({ seq: b.seq, otherUncertain: left.uncertain > 0 });
-  unmatched.sort((x, y) => x.seq - y.seq);
 
   const policy = claim.unmatched ?? 'uncovered';
   if (policy === 'fail') {
@@ -417,9 +415,9 @@ export function judgePair(loaded: LoadedPairClaim, input: JudgeInput): Verdict {
     // that fail for an `every` claim. A `some` claim has no counterexample; an unmatched item is one more that is not a
     // witness, so it counts as failed, and the claim fails, covered, with nothing shown, as any `some` that finds none.
     const against = claim.quantifier === 'none' ? groups.yes : groups.no;
-    for (const u of unmatched) {
-      if (u.otherUncertain) groups.errored++;
-      else against.push([u.seq]);
+    for (const seq of unmatched) {
+      if (right.uncertain > 0) groups.errored++;
+      else against.push([seq]);
     }
   }
   const ctx = { collections: collections(inView), inputs: input.inputs ?? {} };

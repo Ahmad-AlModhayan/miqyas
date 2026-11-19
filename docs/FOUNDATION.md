@@ -187,7 +187,7 @@ interface Claim {
   where?: string; holds?: string; count?: string;   // CEL over `item`; `count` is CEL over `n`
   // pair
   left?: Selector; right?: Selector; on?: [string, string];   // key expressions for each side
-  unmatched?: 'uncovered' | 'fail' | 'ignore';                // an item with no partner; default 'uncovered'
+  unmatched?: 'uncovered' | 'fail' | 'ignore';                // a left item with no partner; default 'uncovered'
   // trace
   pattern?: 'absence' | 'universality' | 'existence' | 'precedence' | 'response';
   during?: 'globally' | 'before' | 'after' | 'between';       // which stretch of the session the pattern covers
@@ -240,7 +240,7 @@ the reason "nothing to check", unless the claim says `vacuous: 'pass'`, which a 
 rule establishes that the set really is empty. A `where` that selected nothing is reported either way, because a typo
 in a rule otherwise passes forever.
 
-A `pair` claim uses the same table over pairs. An item with no partner makes the coverage not met, unless the claim
+A `pair` claim uses the same table over pairs. A left item with no partner makes the coverage not met, unless the claim
 says it is a failure or can be ignored. A `trace` claim and a `sample` claim have tables of their own, in ALGORITHMS
 A3 and A4; each has a `fail`, a `pass` and a "can't tell yet".
 

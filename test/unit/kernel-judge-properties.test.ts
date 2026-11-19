@@ -338,6 +338,15 @@ describe('what the judge guarantees for pair claims (ALGORITHMS A6)', () => {
     expect(seen).toBeGreaterThan(10);
   });
 
+  it('only a left item can be unmatched: adding a right item no left item partners never changes the verdict, under any mode', async () => {
+    await forAllPairs((g, loaded, _claim, facts) => {
+      const before = judgeOver(loaded, place(facts), none);
+      // The generator's keys are 1 to 3, so key 99 partners nothing.
+      const after = judgeOver(loaded, g.shuffle(place([...facts, rightItem(99, 1)])), none);
+      expect(decided(after)).toEqual(decided(before));
+    });
+  });
+
   it('4. no uncovered absence: a pass of every or none, and a fail of some, imply covered was true', async () => {
     let seen = 0;
     await forAllPairs((_g, loaded, claim, facts) => {

@@ -39,8 +39,9 @@ describe('a pair claim joins the two sides on a key', () => {
   });
 
   it('compares keys as values: text "1" and the number 1 are different keys, and lists and maps compare by content', async () => {
+    // Only a left item can be unmatched (ALGORITHMS A2): the right item with no partner is not counted.
     const v = await judge('every', [leftItem(1, 5), rightItem('1', 5), done()], { unmatched: 'ignore' });
-    expect(v.items).toMatchObject({ held: 0, unmatched: 2 });
+    expect(v.items).toMatchObject({ held: 0, unmatched: 1 });
     const lists = await judge('every', [leftItem([1, 'a'], 5), rightItem([1, 'a'], 5), leftItem({ b: 1, a: 2 }, 6), rightItem({ a: 2, b: 1 }, 6), done()]);
     expect(lists.items).toMatchObject({ held: 2, unmatched: 0 });
     expect(lists.verdict).toBe('pass');
@@ -102,18 +103,43 @@ describe('the table of A1 over the pairs', () => {
   });
 });
 
-describe('unmatched: an item with no partner', () => {
+describe('unmatched: a left item with no partner', () => {
   const unmatchedLeft = [leftItem(1, 1), rightItem(1, 1), leftItem(2, 1), done()];
-  const unmatchedRight = [leftItem(1, 1), rightItem(1, 1), rightItem(3, 1), done()];
+  const extraRight = [leftItem(1, 1), rightItem(1, 1), rightItem(3, 1), done()];
 
-  it('uncovered (the default): coverage is not met, on either side', async () => {
-    for (const facts of [unmatchedLeft, unmatchedRight]) {
-      const v = await judge('every', facts);
-      expect(row(v)).toEqual(notChecked(COVERAGE));
-      expect(v.coverage.met).toBe(false);
-      expect(v.items).toMatchObject({ held: 1, unmatched: 1 });
-      expect(row(await judge('every', facts, { unmatched: 'uncovered' }))).toEqual(notChecked(COVERAGE));
+  it('uncovered (the default): coverage is not met', async () => {
+    const v = await judge('every', unmatchedLeft);
+    expect(row(v)).toEqual(notChecked(COVERAGE));
+    expect(v.coverage.met).toBe(false);
+    expect(v.items).toMatchObject({ held: 1, unmatched: 1 });
+    expect(row(await judge('every', unmatchedLeft, { unmatched: 'uncovered' }))).toEqual(notChecked(COVERAGE));
+  });
+
+  it('a right item with no partner is not unmatched, under any mode: it neither lowers coverage nor fails the claim', async () => {
+    for (const mode of [undefined, 'uncovered', 'fail', 'ignore'] as const) {
+      const v = await judge('every', extraRight, mode === undefined ? {} : { unmatched: mode });
+      expect(row(v)).toEqual(pass());
+      expect(v.coverage.met).toBe(true);
+      expect(v.items).toMatchObject({ held: 1, failed: 0, unmatched: 0 });
     }
+  });
+
+  it('every quantifier, every mode: only right items with no partner leave the verdict as the pairs give it', async () => {
+    const neutral = { every: [leftItem(1, 1), rightItem(1, 1)], some: [leftItem(1, 1), rightItem(1, 2)], none: [leftItem(1, 1), rightItem(1, 2)] };
+    const expected = { every: pass(), some: fail(), none: pass() };
+    for (const q of ['every', 'some', 'none'] as const) {
+      for (const mode of ['uncovered', 'fail', 'ignore'] as const) {
+        const v = await judge(q, [...neutral[q], rightItem(3, 1), rightItem(4, 2), done()], { unmatched: mode });
+        expect(row(v), `${q}, ${mode}`).toEqual(expected[q]);
+        expect(v.items.unmatched, `${q}, ${mode}`).toBe(0);
+      }
+    }
+  });
+
+  it('none, fail, a left and a right item on different keys: the left one is the counterexample, the right one is not counted', async () => {
+    const v = await judge('none', [leftItem(1, 1), rightItem(2, 1), done()], { unmatched: 'fail' });
+    expect(row(v)).toEqual(fail([1]));
+    expect(v.items).toMatchObject({ held: 1, failed: 0, unmatched: 1 });
   });
 
   it('uncovered: a failing pair still fails, and a witness still passes', async () => {
@@ -121,9 +147,8 @@ describe('unmatched: an item with no partner', () => {
     expect(row(await judge('some', [leftItem(1, 1), rightItem(1, 1), leftItem(2, 1), done()]))).toEqual(pass([1, 2]));
   });
 
-  it('fail: each unmatched item is a counterexample, shown, on either side', async () => {
+  it('fail: each unmatched left item is a counterexample, shown', async () => {
     expect(row(await judge('every', unmatchedLeft, { unmatched: 'fail' }))).toEqual(fail([3]));
-    expect(row(await judge('every', unmatchedRight, { unmatched: 'fail' }))).toEqual(fail([3]));
     expect((await judge('every', unmatchedLeft, { unmatched: 'fail' })).items).toMatchObject({ held: 1, failed: 1, unmatched: 1 });
   });
 
@@ -135,11 +160,11 @@ describe('unmatched: an item with no partner', () => {
   });
 
   it('ignore: unmatched items are left out', async () => {
-    for (const facts of [unmatchedLeft, unmatchedRight]) {
+    for (const [facts, unmatched] of [[unmatchedLeft, 1], [extraRight, 0]] as const) {
       const v = await judge('every', facts, { unmatched: 'ignore' });
       expect(row(v)).toEqual(pass());
       expect(v.coverage.met).toBe(true);
-      expect(v.items).toMatchObject({ held: 1, unmatched: 1 });
+      expect(v.items).toMatchObject({ held: 1, unmatched });
     }
     // Only unmatched items: no pair is inside the claim, so it is vacuous.
     const empty = await judge('every', [leftItem(1, 1), rightItem(2, 1), done()], { unmatched: 'ignore' });
