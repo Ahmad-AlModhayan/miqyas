@@ -60,6 +60,151 @@ build, runs the plans and the mutations, and writes `bench/<date>-<commit>/summa
 Tests: `npm test` (unit, offline) and `npm run test:e2e` (Chromium against a local fixture, scripted agent, no
 network).
 
+## Architecture (C4 + UML)
+
+### System Context (C4 Level 1)
+
+```mermaid
+flowchart TB
+    dev(["Developer / QA Engineer<br/>[Person]<br/>Runs plans, readiness checks,<br/>mutations, and offline verification"])
+    ci["CI / CD Pipeline<br/>[External System]<br/>Enforces readiness gate via exit codes"]:::ext
+
+    miqyas["Miqyas<br/>[Software System]<br/>Decoupled open-core verification platform<br/>Gated collection -> deterministic judge -> proof bundle"]
+
+    sut["Target Software Under Test<br/>[External System]<br/>Web app, local dev server, or source build"]:::ext
+    scanners["External Scanners<br/>[External Tools]<br/>gitleaks, osv-scanner, axe-core behind adapters"]:::ext
+    llms["LLM Providers (Optional)<br/>[External Systems]<br/>Anthropic / OpenAI; scrubbed inputs only,<br/>never judge verdicts"]:::ext
+
+    dev -->|"run, lint, mutate, scrub, bench, verify [CLI]"| miqyas
+    ci -->|"Readiness gate [CLI / Exit Codes]"| miqyas
+    miqyas -->|"Drives sessions & probes through Gate [Playwright / HTTP]"| sut
+    miqyas -->|"Collects structured facts [Local Process]"| scanners
+    miqyas -->|"Scrubbed exploration / bindings [HTTPS]"| llms
+
+    classDef ext stroke-dasharray: 5 5,stroke-width:1.5px;
+```
+
+### Containers & Open-Core Boundary (C4 Level 2)
+
+```mermaid
+flowchart TB
+    dev(["Developer / CI<br/>[CLI Caller]"])
+
+    subgraph miqyas_repo["Miqyas Repository"]
+        subgraph apache_layer["Apache-2.0 Interface Layer (zero AGPL imports)"]
+            cli["Thin CLI — src/cli.ts<br/>[Node.js, TypeScript]<br/>Spawns core entry across strict process boundary"]
+            surfaces["Surface Drivers & Protocol — src/surfaces/, src/protocol/<br/>[TypeScript, Playwright, axe-core]<br/>Web crawler, proxy, detectors, miqyas-worker/1 stdio"]
+            scrubber["Secret Scrubber — src/scrub/<br/>[TypeScript]<br/>Rule-based redactor for builds, prompts, logs"]
+        end
+
+        subgraph agpl_layer["AGPL-3.0-only Core Engine"]
+            entry["Entry & Proof Orchestrator — src/entry/, src/proof-core/<br/>[Node.js, TypeScript]<br/>Grade 1 13-check readiness, mutate self-check, bench, reports"]
+            kernel["Verification Kernel — src/kernel/<br/>[TypeScript]<br/>Hash-chained ledger, blobs, CEL judge, fold, offline verify"]
+            gate["Request Gate & Engine — src/gate/, src/engine/<br/>[TypeScript]<br/>Wire/origin classifier, grants, recorder, derivations"]
+            adapters["Adapters, Collectors & Agent Router<br/>[src/adapters/, src/collectors/, src/agents/]<br/>Scanner adapters + scrubbed LLM router & spend caps"]
+        end
+
+        store[("Run & Proof Bundle Store — .miqyas/runs/<br/>[Local Filesystem]<br/>Sealed bundles, report.json/md, crops, scrubbed payloads.jsonl")]
+    end
+
+    sut["Target Under Test"]:::ext
+    scanners["External Scanners"]:::ext
+    llms["LLM Providers"]:::ext
+
+    dev --> cli
+    cli -->|"Spawns child process"| entry
+    entry --> gate
+    entry --> kernel
+    entry --> adapters
+    gate -->|"miqyas-worker/1"| surfaces
+    gate --> scrubber
+    surfaces -->|"Playwright / HTTP"| sut
+    adapters -->|"Local Process"| scanners
+    adapters --> scrubber
+    adapters -->|"HTTPS"| llms
+    kernel --> store
+
+    classDef ext stroke-dasharray: 5 5,stroke-width:1.5px;
+```
+
+### Runtime Flow: Gated Verification & Offline Proof Replay (UML Sequence)
+
+```mermaid
+sequenceDiagram
+    actor Caller as Developer / CI
+    participant CLI as Thin CLI (Apache-2.0)
+    participant Core as Entry & Orchestrator (AGPL-3.0)
+    participant Gate as Request Gate (src/gate)
+    participant Worker as Web Surface & Scrubber (Apache-2.0)
+    participant Kernel as Ledger & CEL Judge (src/kernel)
+    participant Bundle as Proof Bundle (.miqyas/runs/)
+
+    Caller->>CLI: miqyas run / check13 / mutate
+    CLI->>Core: Spawn core entry (process boundary, zero AGPL import)
+    Core->>Core: Resolve claims, required facts, and collectors
+
+    loop For each permitted action / probe
+        Core->>Gate: Request action against target
+        Gate->>Gate: Classify wire method & origin against grants
+        alt Denied by Gate
+            Gate->>Kernel: Record deny effect fact (target untouched)
+        else Permitted
+            Gate->>Worker: Execute action (miqyas-worker/1)
+            Worker->>Worker: Scrub secrets from observations & payloads
+            Worker-->>Kernel: Append normalized facts & evidence blobs
+        end
+    end
+
+    Note over Kernel,Bundle: Deterministic judging — no model, clock, or network
+    Core->>Kernel: Judge closed fact sets via pure CEL rules & fold verdicts
+    Kernel->>Bundle: Seal hash-chained ledger, blobs, report.json & report.md
+    Core-->>Caller: Exit code (0 pass / 1 fail / 2 usage / 3 blocked)
+
+    Note over Caller,Bundle: Offline verification anytime later
+    Caller->>Kernel: miqyas verify .miqyas/runs/run-id
+    Kernel->>Bundle: Read sealed ledger & blobs only
+    Kernel-->>Caller: Recompute & confirm identical verdicts offline
+```
+
+<details>
+<summary>Level 3 — Component Diagram: Verification Kernel, Gate &amp; Proof Core</summary>
+
+```mermaid
+flowchart TB
+    cli["Thin CLI (src/cli.ts)<br/>[Apache-2.0]"]:::ext
+    surf["Web Surface & Scrubber<br/>[Apache-2.0]"]:::ext
+    adap["Adapters & Agent Router<br/>[src/adapters, src/agents]"]:::ext
+
+    subgraph core_c["Miqyas Core Engine (AGPL-3.0-only)"]
+        entry["Core Entry & Readiness Runner<br/>[src/entry/cli.ts, run-command.ts, check13.ts, verify.ts]<br/>Command dispatch, Grade 1 checks, bundle & fail-on"]
+        orch["Plan Orchestrator & Mutator<br/>[src/proof-core/orchestrator.ts, plan.ts, mutate.ts, report.ts]<br/>Plan runs, mutation self-check, bench, reports"]
+        gate_c["Request Gate<br/>[src/gate/decide/*]<br/>Wire & origin classifier, grants, allow/deny effects"]
+        eng_c["Derivation & Recording Engine<br/>[src/engine/*]<br/>Fact recorder, derivations, scrubbing & withhold rules"]
+        ledger["Ledger, Blobs & Merkle Tree<br/>[src/kernel/ledger, blobs, tree, checkpoint, store]<br/>Append-only canonical facts & content-addressed blobs"]
+        judge["CEL Judge & Verdict Folder<br/>[src/kernel/claim, cel, cel-cost, judge, fold, verify]<br/>Pure 3-valued verdicts (held/broken/unknown) & offline verify"]
+    end
+
+    store[("Proof Bundle Store<br/>[.miqyas/runs/]")]:::ext
+
+    cli -->|"Child Process"| entry
+    entry --> orch
+    entry -->|"Offline verify"| judge
+    orch --> gate_c
+    orch --> eng_c
+    orch --> adap
+    gate_c --> surf
+    eng_c --> surf
+    eng_c --> ledger
+    gate_c --> ledger
+    judge --> ledger
+    ledger --> store
+    orch --> store
+
+    classDef ext stroke-dasharray: 5 5,stroke-width:1.5px;
+```
+
+</details>
+
 ## Documents
 
 - [Product requirements (PRD)](docs/PRD.md) and [software requirements (SRS)](docs/SRS.md)
