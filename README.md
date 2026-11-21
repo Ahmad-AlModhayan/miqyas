@@ -64,150 +64,40 @@ network).
 
 ### System Context (C4 Level 1)
 
-```mermaid
-flowchart TB
-    dev(["<b>Developer / QA Engineer</b><br/><i>Person</i><br/>Runs plans, readiness checks,<br/>mutations &amp; offline verify"])
-    ci("<b>CI / CD Pipeline</b><br/><i>[External System]</i><br/>Enforces readiness gate"):::ext
-
-    miqyas("<b>Miqyas</b><br/><i>[Software System]</i><br/>Decoupled open-core verification platform<br/>Gated collection → pure judge → proof bundle")
-
-    sut("<b>Target Under Test</b><br/><i>[External System]</i><br/>Web app, server, or build"):::ext
-    scanners("<b>External Scanners</b><br/><i>[External Tools]</i><br/>gitleaks, osv-scanner, axe-core"):::ext
-    llms("<b>LLM Providers (Optional)</b><br/><i>[External Systems]</i><br/>Scrubbed inputs only,<br/>never judge verdicts"):::ext
-
-    dev -->|"run, lint, mutate, verify<br/>[CLI]"| miqyas
-    ci -->|"Readiness gate<br/>[Exit Codes]"| miqyas
-    miqyas -->|"Gated browser &amp; probes<br/>[Playwright / HTTP]"| sut
-    miqyas -->|"Collects facts<br/>[Local Process]"| scanners
-    miqyas -->|"Scrubbed exploration<br/>[HTTPS]"| llms
-
-    classDef ext stroke-dasharray:5 5,stroke-width:1.5px;
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/c4-context.dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/diagrams/c4-context.light.svg">
+  <img alt="Miqyas System Context (C4 Level 1)" src="docs/diagrams/c4-context.light.svg" width="100%">
+</picture>
 
 ### Containers & Open-Core Boundary (C4 Level 2)
 
-```mermaid
-flowchart TB
-    dev(["<b>Developer / CI</b><br/><i>CLI Caller</i>"])
-
-    subgraph miqyas_repo["Miqyas Repository"]
-        direction TB
-        subgraph cli_tier["Apache-2.0 CLI Entry (zero AGPL imports)"]
-            cli("<b>Thin CLI</b><br/><i>[src/cli.ts]</i><br/>Spawns core across process boundary")
-        end
-
-        subgraph agpl_layer["AGPL-3.0-only Core Engine"]
-            direction TB
-            entry("<b>Entry &amp; Proof Orchestrator</b><br/><i>[src/entry/, proof-core/]</i><br/>Grade 1 checks, mutate, bench, reports")
-            kernel("<b>Verification Kernel</b><br/><i>[src/kernel/]</i><br/>Ledger, blobs, CEL judge, verify")
-            gate("<b>Request Gate &amp; Engine</b><br/><i>[src/gate/, engine/]</i><br/>Permits, recorder, derivations")
-            adapters("<b>Adapters &amp; Agent Router</b><br/><i>[src/adapters/, agents/]</i><br/>Scanners &amp; scrubbed LLM caps")
-        end
-
-        store[("<b>Proof Bundle Store</b><br/><i>[.miqyas/runs/ — FS]</i><br/>Bundles, reports, payloads")]
-
-        subgraph driver_tier["Apache-2.0 Drivers &amp; Scrubber"]
-            direction LR
-            surfaces("<b>Surface Drivers &amp; Protocol</b><br/><i>[src/surfaces/, protocol/]</i><br/>Playwright, axe-core, worker/1")
-            scrubber("<b>Secret Scrubber</b><br/><i>[src/scrub/]</i><br/>Redacts builds, prompts, logs")
-        end
-    end
-
-    sut("<b>Target Under Test</b><br/><i>[Web / Build]</i>"):::ext
-    scanners("<b>External Scanners</b><br/><i>[gitleaks / osv]</i>"):::ext
-    llms("<b>LLM Providers</b><br/><i>[Anthropic / OpenAI]</i>"):::ext
-
-    dev -->|"CLI args"| cli
-    cli -->|"Spawns process"| entry
-    entry -->|"Judges &amp; verifies"| kernel
-    entry -->|"Gated checks"| gate
-    entry -->|"Scanners &amp; helpers"| adapters
-    kernel -->|"Seals bundles"| store
-    gate -->|"Permitted [stdio]"| surfaces
-    gate -->|"Scrubs evidence"| scrubber
-    adapters -->|"Scrubs prompts"| scrubber
-    store ~~~ sut
-    scrubber ~~~ scanners
-    scrubber ~~~ llms
-    surfaces -->|"Playwright / HTTP"| sut
-    adapters -->|"Process"| scanners
-    adapters -->|"Scrubbed [HTTPS]"| llms
-
-    style miqyas_repo fill:none,stroke:#8b949e,stroke-width:1.5px,stroke-dasharray:5 3
-    style cli_tier fill:none,stroke:#8b949e,stroke-width:1.5px,stroke-dasharray:4 2
-    style agpl_layer fill:none,stroke:#8b949e,stroke-width:1.5px,stroke-dasharray:4 2
-    style driver_tier fill:none,stroke:#8b949e,stroke-width:1.5px,stroke-dasharray:4 2
-    classDef ext stroke-dasharray:5 5,stroke-width:1.5px;
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/c4-containers.dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/diagrams/c4-containers.light.svg">
+  <img alt="Miqyas Decoupled Open-Core Containers (C4 Level 2)" src="docs/diagrams/c4-containers.light.svg" width="100%">
+</picture>
 
 ### Runtime Flow: Gated Verification & Offline Proof Replay (UML Sequence)
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant CLI as Thin CLI (Apache)
-    participant Core as Core & Gate (AGPL)
-    participant Worker as Surface & Scrubber
-    participant Kernel as Ledger & CEL Judge
-    participant Bundle as Proof Bundle
-
-    CLI->>Core: Spawn core entry (process boundary)
-    Core->>Core: Resolve claims, facts & collectors
-
-    loop For each action / probe
-        Core->>Core: Gate checks wire & origin grants
-        alt Denied by Gate
-            Core->>Kernel: Record deny effect (target untouched)
-        else Permitted
-            Core->>Worker: Run action (miqyas-worker/1)
-            Worker->>Worker: Scrub secrets from payloads
-            Worker-->>Kernel: Append normalized facts & blobs
-        end
-    end
-
-    Core->>Kernel: Pure CEL judge & verdict fold<br/>(no model, clock, or network)
-    Kernel->>Bundle: Seal hash-chained ledger & reports
-    Core-->>CLI: Exit code (0/1/2/3)
-
-    CLI->>Kernel: miqyas verify (offline)
-    Kernel->>Bundle: Read sealed ledger & blobs
-    Kernel-->>CLI: Confirm identical verdicts
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/uml-verify-sequence.dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/diagrams/uml-verify-sequence.light.svg">
+  <img alt="Miqyas Gated Verification and Offline Proof Replay (UML Sequence)" src="docs/diagrams/uml-verify-sequence.light.svg" width="100%">
+</picture>
 
 <details>
 <summary>Level 3 — Component Diagram: Verification Kernel, Gate &amp; Proof Core</summary>
 
-```mermaid
-flowchart TB
-    cli("<b>Thin CLI (src/cli.ts)</b><br/><i>[Apache-2.0]</i>"):::ext
-
-    subgraph core_c["Miqyas Core Engine (AGPL-3.0-only)"]
-        direction TB
-        entry("<b>Core Entry &amp; Orchestrator</b><br/><i>[src/entry/*, proof-core/*]</i><br/>Grade 1 checks, plan runner, mutate, reports")
-        judge("<b>CEL Judge &amp; Verifier</b><br/><i>[src/kernel/cel*, judge, fold]</i><br/>Pure 3-valued verdicts &amp; verify")
-        ledger("<b>Ledger &amp; Blobs</b><br/><i>[src/kernel/ledger, blobs, tree]</i><br/>Append-only facts &amp; checkpoints")
-        gate_eng("<b>Request Gate &amp; Recorder</b><br/><i>[src/gate/decide/*, engine/*]</i><br/>Wire/origin grants &amp; derivations")
-    end
-
-    store[("<b>Proof Bundle Store</b><br/><i>[.miqyas/runs/]</i>")]:::ext
-    surf("<b>Web Surface &amp; Scrubber</b><br/><i>[Apache-2.0]</i>"):::ext
-    adap("<b>Adapters &amp; Router</b><br/><i>[src/adapters, agents]</i>"):::ext
-
-    cli -->|"Child Process"| entry
-    entry -->|"Offline verify"| judge
-    entry -->|"Routes actions"| gate_eng
-    entry -->|"Scanner facts"| adap
-    judge -->|"Reads fact sets"| ledger
-    gate_eng -->|"Appends facts"| ledger
-    ledger -->|"Seals bundles"| store
-    entry -->|"Writes reports"| store
-    gate_eng -->|"Actions &amp; scrub"| surf
-
-    style core_c fill:none,stroke:#8b949e,stroke-width:1.5px,stroke-dasharray:5 3
-    classDef ext stroke-dasharray:5 5,stroke-width:1.5px;
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/c4-components-core.dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/diagrams/c4-components-core.light.svg">
+  <img alt="Miqyas Core Engine Components (C4 Level 3)" src="docs/diagrams/c4-components-core.light.svg" width="100%">
+</picture>
 
 </details>
+
+> Diagram source: [`docs/diagrams/architecture.json`](docs/diagrams/architecture.json) (compiled into dual-theme Light & Dark SVGs).
 
 ## Documents
 
