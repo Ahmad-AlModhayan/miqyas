@@ -60,6 +60,45 @@ build, runs the plans and the mutations, and writes `bench/<date>-<commit>/summa
 Tests: `npm test` (unit, offline) and `npm run test:e2e` (Chromium against a local fixture, scripted agent, no
 network).
 
+## Architecture (C4 + UML)
+
+### System Context (C4 Level 1)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/c4-context.dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/diagrams/c4-context.light.svg">
+  <img alt="Miqyas System Context (C4 Level 1)" src="docs/diagrams/c4-context.light.svg" width="100%">
+</picture>
+
+### Containers & Open-Core Boundary (C4 Level 2)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/c4-containers.dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/diagrams/c4-containers.light.svg">
+  <img alt="Miqyas Decoupled Open-Core Containers (C4 Level 2)" src="docs/diagrams/c4-containers.light.svg" width="100%">
+</picture>
+
+### Runtime Flow: Gated Verification & Offline Proof Replay (UML Sequence)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/uml-verify-sequence.dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/diagrams/uml-verify-sequence.light.svg">
+  <img alt="Miqyas Gated Verification and Offline Proof Replay (UML Sequence)" src="docs/diagrams/uml-verify-sequence.light.svg" width="100%">
+</picture>
+
+<details>
+<summary>Level 3 — Component Diagram: Verification Kernel, Gate &amp; Proof Core</summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/c4-components-core.dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/diagrams/c4-components-core.light.svg">
+  <img alt="Miqyas Core Engine Components (C4 Level 3)" src="docs/diagrams/c4-components-core.light.svg" width="100%">
+</picture>
+
+</details>
+
+> Diagram source: [`docs/diagrams/architecture.json`](docs/diagrams/architecture.json) (compiled into dual-theme Light & Dark SVGs).
+
 ## Documents
 
 - [Product requirements (PRD)](docs/PRD.md) and [software requirements (SRS)](docs/SRS.md)

@@ -1,0 +1,224 @@
+{
+  "product": "miqyas",
+  "title": "Miqyas Architecture Diagrams (C4 + UML)",
+  "diagrams": [
+    {
+      "id": "c4-context",
+      "kind": "c4",
+      "badge": "C4 · LEVEL 1 · SYSTEM CONTEXT",
+      "title": "Miqyas — System Context",
+      "subtitle": "Decoupled open-core verification platform: gated evidence collection → pure deterministic CEL judge → offline-verifiable proof bundle",
+      "rowGap": 56,
+      "rows": [
+        {
+          "nodes": [
+            { "id": "dev", "shape": "person", "icon": "person", "title": "Developer / QA Engineer", "tech": "Person · CLI", "desc": "Runs plans, Grade 1 checks, mutations & offline proof verification" },
+            { "id": "ci", "ext": true, "icon": "cli", "title": "CI / CD Pipeline", "tech": "External System", "desc": "Enforces readiness gate before release via exit codes" }
+          ]
+        },
+        {
+          "nodes": [
+            { "id": "miqyas", "emphasis": "solid", "icon": "shield", "title": "Miqyas", "tech": "Software System · Decoupled Open-Core", "desc": "Gated surface collection, secret scrubber, pure CEL judge & sealed proof bundles" }
+          ],
+          "maxCardW": 500
+        },
+        {
+          "nodes": [
+            { "id": "sut", "ext": true, "icon": "web", "title": "Target Under Test", "tech": "Web · Server · Build", "desc": "Application under verification" },
+            { "id": "scanners", "ext": true, "icon": "cli", "title": "External Scanners", "tech": "gitleaks · osv-scanner · axe-core", "desc": "Third-party tools behind adapters" },
+            { "id": "llms", "ext": true, "icon": "cloud", "title": "LLM Providers (Optional)", "tech": "HTTPS · Scrubbed Only", "desc": "Exploration helpers — never judge verdicts" }
+          ]
+        }
+      ],
+      "edges": [
+        { "from": "dev", "to": "miqyas", "label": "run, lint, mutate, verify [CLI]" },
+        { "from": "ci", "to": "miqyas", "label": "Readiness gate [Exit Codes]" },
+        { "from": "miqyas", "to": "sut", "label": "Gated probes [Playwright / HTTP]" },
+        { "from": "miqyas", "to": "scanners", "label": "Collects facts [Process]" },
+        { "from": "miqyas", "to": "llms", "label": "Scrubbed exploration [HTTPS]", "tone": "warning" }
+      ],
+      "legend": [
+        { "kind": "emphasis", "label": "Miqyas Verification Platform" },
+        { "kind": "ext", "label": "External Pipeline / Target / Scanner / LLM" }
+      ]
+    },
+    {
+      "id": "c4-containers",
+      "kind": "c4",
+      "badge": "C4 · LEVEL 2 · CONTAINERS",
+      "title": "Miqyas — Decoupled Open-Core Containers",
+      "subtitle": "CI-enforced licence boundary: Apache-2.0 CLI, surface drivers & scrubber import zero AGPL-3.0-only core modules",
+      "rowGap": 50,
+      "rows": [
+        {
+          "nodes": [
+            { "id": "dev", "shape": "person", "icon": "person", "title": "Developer / CI", "tech": "CLI Caller", "desc": "Invokes run, lint, mutate, scrub, verify" }
+          ],
+          "maxCardW": 320
+        },
+        {
+          "topSpace": 44,
+          "inset": 180,
+          "nodes": [
+            { "id": "cli", "tone": "positive", "icon": "cli", "title": "Thin CLI", "tech": "src/cli.ts · Apache-2.0", "desc": "Spawns core engine across a process boundary (zero AGPL imports)" }
+          ],
+          "maxCardW": 440
+        },
+        {
+          "topSpace": 34,
+          "inset": 180,
+          "nodes": [
+            { "id": "entry", "emphasis": "solid", "icon": "core", "title": "Entry & Proof Orchestrator", "tech": "src/entry/ · proof-core/", "desc": "Grade 1 checks, plan runner, mutate, bench & reports" }
+          ],
+          "maxCardW": 460
+        },
+        {
+          "inset": 36,
+          "nodes": [
+            { "id": "gate", "icon": "lock", "title": "Request Gate & Engine", "tech": "src/gate/ · engine/", "desc": "Permits, recorder & derivations" },
+            { "id": "kernel", "icon": "shield", "title": "Verification Kernel", "tech": "src/kernel/", "desc": "Ledger, blobs, pure CEL judge & verify" },
+            { "id": "adapters", "icon": "bridge", "title": "Adapters & Agent Router", "tech": "src/adapters/ · agents/", "desc": "Scanners & scrubbed LLM caps" }
+          ]
+        },
+        {
+          "topSpace": 34,
+          "inset": 140,
+          "bottomGap": 56,
+          "nodes": [
+            { "id": "surfaces", "tone": "positive", "icon": "web", "title": "Surface Drivers & Protocol", "tech": "src/surfaces/ · protocol/", "desc": "Playwright, axe-core, miqyas-worker/1" },
+            { "id": "scrubber", "tone": "positive", "icon": "lock", "title": "Secret Scrubber", "tech": "src/scrub/", "desc": "Redacts builds, prompts & logs" }
+          ]
+        },
+        {
+          "topSpace": 12,
+          "nodes": [
+            { "id": "store", "shape": "db", "icon": "db", "title": "Proof Bundle Store", "tech": ".miqyas/runs/ · FS", "desc": "Sealed bundles & reports" },
+            { "id": "sut", "ext": true, "icon": "web", "title": "Target Under Test", "tech": "Web / Build", "desc": "Probed surface" },
+            { "id": "scanners", "ext": true, "icon": "cli", "title": "External Scanners", "tech": "gitleaks · osv", "desc": "Adapter subprocesses" },
+            { "id": "llms", "ext": true, "icon": "cloud", "title": "LLM Providers", "tech": "HTTPS", "desc": "Scrubbed helper calls" }
+          ]
+        }
+      ],
+      "boundaries": [
+        { "id": "repo", "depth": 0, "label": "Miqyas Repository", "children": ["cli_tier", "agpl_layer", "driver_tier"], "padX": 18, "padTop": 32, "padBot": 16 },
+        { "id": "cli_tier", "depth": 1, "tone": "positive", "fill": "tinted", "label": "Apache-2.0 CLI Entry · zero AGPL imports", "nodes": ["cli"], "padX": 14, "padTop": 28, "padBot": 12 },
+        { "id": "agpl_layer", "depth": 1, "tone": "primary", "fill": "tinted", "label": "AGPL-3.0-only Core Engine", "nodes": ["entry", "gate", "kernel", "adapters"], "padX": 14, "padTop": 28, "padBot": 14 },
+        { "id": "driver_tier", "depth": 1, "tone": "positive", "fill": "tinted", "label": "Apache-2.0 Drivers & Scrubber", "nodes": ["surfaces", "scrubber"], "padX": 14, "padTop": 28, "padBot": 14 }
+      ],
+      "edges": [
+        { "from": "dev", "to": "cli", "label": "CLI args" },
+        { "from": "cli", "to": "entry", "label": "Spawns process" },
+        { "from": "entry", "to": "gate", "label": "Gated checks" },
+        { "from": "entry", "to": "kernel", "label": "Judges & verifies" },
+        { "from": "entry", "to": "adapters", "label": "Scanners & helpers" },
+        { "from": "gate", "to": "surfaces", "label": "Permitted [stdio]" },
+        { "from": "gate", "to": "scrubber", "label": "Scrubs evidence" },
+        { "from": "adapters", "to": "scrubber", "label": "Scrubs prompts" },
+        { "from": "kernel", "to": "store", "label": "Seals bundles", "tone": "primary", "laneX": 100, "labelPos": "mid" },
+        { "from": "surfaces", "to": "sut", "label": "Playwright / HTTP" },
+        { "from": "adapters", "to": "scanners", "label": "Process", "laneX": 844, "labelPos": "mid", "laneEndDy": -8 },
+        { "from": "adapters", "to": "llms", "label": "Scrubbed [HTTPS]", "tone": "warning", "laneX": 936, "labelPos": "bot", "laneEndDy": 6 }
+      ],
+      "legend": [
+        { "kind": "positive", "label": "Apache-2.0 Layer (zero AGPL)" },
+        { "kind": "emphasis", "label": "AGPL-3.0 Core Orchestrator" },
+        { "kind": "db", "label": "Sealed Proof Bundle Store" },
+        { "kind": "ext", "label": "Target / Scanner / Optional LLM" }
+      ]
+    },
+    {
+      "id": "uml-verify-sequence",
+      "kind": "sequence",
+      "badge": "UML · SEQUENCE",
+      "title": "Miqyas — Gated Verification & Offline Proof Replay",
+      "subtitle": "Every probe passes the Request Gate before touching the target; the pure CEL judge replays identically offline without models or network",
+      "participants": [
+        { "id": "cli", "label": "Thin CLI", "sub": "Apache-2.0", "tone": "positive" },
+        { "id": "core", "label": "Core & Gate", "sub": "AGPL-3.0", "tone": "primary" },
+        { "id": "worker", "label": "Surface & Scrubber", "sub": "Apache-2.0", "tone": "positive" },
+        { "id": "kernel", "label": "Ledger & CEL Judge", "sub": "Pure · Deterministic", "tone": "info" },
+        { "id": "bundle", "label": "Proof Bundle", "sub": ".miqyas/runs/" }
+      ],
+      "steps": [
+        { "from": "cli", "to": "core", "label": "Spawn core entry (process boundary)" },
+        { "from": "core", "to": "core", "label": "Resolve claims, facts & collectors" },
+        { "type": "frame_start", "kind": "LOOP", "label": "For each action / probe", "tone": "neutral" },
+        { "from": "core", "to": "core", "label": "Gate checks wire & origin grants" },
+        { "type": "frame_start", "kind": "ALT", "label": "Denied by Gate", "tone": "warning" },
+        { "from": "core", "to": "kernel", "label": "Record deny effect (target untouched)", "tone": "warning" },
+        { "type": "frame_else", "label": "Permitted by Gate" },
+        { "from": "core", "to": "worker", "label": "Run action (miqyas-worker/1)" },
+        { "from": "worker", "to": "worker", "label": "Scrub secrets from payloads" },
+        { "from": "worker", "to": "kernel", "label": "Append normalized facts & blobs", "dashed": true, "tone": "positive" },
+        { "type": "frame_end" },
+        { "type": "frame_end" },
+        { "from": "core", "to": "kernel", "label": "Pure CEL judge & verdict fold\n(no model, clock, or network)", "tone": "primary" },
+        { "from": "kernel", "to": "bundle", "label": "Seal hash-chained ledger & reports", "tone": "positive" },
+        { "from": "core", "to": "cli", "label": "Exit code (0 pass / 1 fail / 2 err / 3 blocked)", "dashed": true },
+        { "from": "cli", "to": "kernel", "label": "miqyas verify (offline replay)" },
+        { "from": "kernel", "to": "bundle", "label": "Read sealed ledger & blobs" },
+        { "from": "kernel", "to": "cli", "label": "Confirm identical verdicts", "dashed": true, "tone": "positive" }
+      ]
+    },
+    {
+      "id": "c4-components-core",
+      "kind": "c4",
+      "badge": "C4 · LEVEL 3 · COMPONENTS",
+      "title": "Miqyas — Core Engine Components (AGPL-3.0-only)",
+      "subtitle": "Separation of gated evidence collection, append-only fact ledger, and pure 3-valued CEL judge for offline proof verification",
+      "rowGap": 54,
+      "rows": [
+        {
+          "nodes": [
+            { "id": "cli", "ext": true, "icon": "cli", "title": "Thin CLI (src/cli.ts)", "tech": "Apache-2.0 Process Boundary", "desc": "Zero AGPL imports; spawns core entry" }
+          ],
+          "maxCardW": 380
+        },
+        {
+          "topSpace": 26,
+          "inset": 32,
+          "nodes": [
+            { "id": "entry", "emphasis": "solid", "icon": "core", "title": "Core Entry & Orchestrator", "tech": "src/entry/* · proof-core/*", "desc": "Grade 1 checks, plan runner, mutate, bench & reports" }
+          ],
+          "maxCardW": 460
+        },
+        {
+          "inset": 24,
+          "bottomGap": 56,
+          "nodes": [
+            { "id": "gate_eng", "icon": "lock", "title": "Request Gate & Engine", "tech": "src/gate/decide/* · engine/*", "desc": "Wire/origin grants & derivations" },
+            { "id": "ledger", "shape": "db", "icon": "db", "title": "Ledger & Blobs", "tech": "src/kernel/ledger · blobs", "desc": "Append-only facts & checkpoints" },
+            { "id": "judge", "icon": "shield", "title": "CEL Judge & Verifier", "tech": "src/kernel/cel* · judge · fold", "desc": "Pure 3-valued verdicts & verify" }
+          ]
+        },
+        {
+          "topSpace": 12,
+          "nodes": [
+            { "id": "surf", "ext": true, "icon": "web", "title": "Web Surface & Scrubber", "tech": "Apache-2.0 · stdio", "desc": "Playwright driver & redaction" },
+            { "id": "store", "ext": true, "shape": "db", "icon": "db", "title": "Proof Bundle Store", "tech": ".miqyas/runs/", "desc": "Sealed bundles & reports" },
+            { "id": "adap", "ext": true, "icon": "bridge", "title": "Adapters & Router", "tech": "src/adapters · agents", "desc": "External scanners & LLM caps" }
+          ]
+        }
+      ],
+      "boundaries": [
+        { "id": "core_c", "depth": 0, "label": "Miqyas Core Engine · AGPL-3.0-only", "nodes": ["entry", "gate_eng", "ledger", "judge"], "padX": 14, "padTop": 30, "padBot": 14 }
+      ],
+      "edges": [
+        { "from": "cli", "to": "entry", "label": "Child Process" },
+        { "from": "entry", "to": "gate_eng", "label": "Routes actions" },
+        { "from": "entry", "to": "judge", "label": "Offline verify" },
+        { "from": "gate_eng", "to": "ledger", "label": "Appends" },
+        { "from": "judge", "to": "ledger", "label": "Reads" },
+        { "from": "gate_eng", "to": "surf", "label": "Actions & scrub" },
+        { "from": "ledger", "to": "store", "label": "Seals bundles", "tone": "primary" },
+        { "from": "entry", "to": "adap", "label": "Scanner facts", "laneX": 938, "labelPos": "top" }
+      ],
+      "legend": [
+        { "kind": "emphasis", "label": "Core Entry Orchestrator" },
+        { "kind": "solid", "label": "Kernel / Gate Component" },
+        { "kind": "db", "label": "Append-Only Fact Ledger / Bundles" },
+        { "kind": "ext", "label": "Apache-2.0 Boundary / Adapters" }
+      ]
+    }
+  ]
+}

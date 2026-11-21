@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 533.5" width="960" height="533.5" role="img" aria-label="Miqyas — System Context">
+  <title>Miqyas — System Context</title>
+  <defs>
+    <clipPath id="canvas-clip">
+      <rect x="0.5" y="0.5" width="959" height="532.5" rx="12"/>
+    </clipPath>
+    <filter id="card-shadow" x="-6%" y="-6%" width="112%" height="118%">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="2.2" flood-color="#000000" flood-opacity="0.30"/>
+    </filter>
+    <marker id="arrow-default" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#8e8980"/>
+    </marker>
+    <marker id="arrow-start-default" viewBox="0 0 10 10" refX="1.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+      <path d="M 9 1.5 L 1 5 L 9 8.5 z" fill="#8e8980"/>
+    </marker>
+    <marker id="arrow-primary" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#b9a7f6"/>
+    </marker>
+    <marker id="arrow-start-primary" viewBox="0 0 10 10" refX="1.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+      <path d="M 9 1.5 L 1 5 L 9 8.5 z" fill="#b9a7f6"/>
+    </marker>
+    <marker id="arrow-positive" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#4cc897"/>
+    </marker>
+    <marker id="arrow-start-positive" viewBox="0 0 10 10" refX="1.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+      <path d="M 9 1.5 L 1 5 L 9 8.5 z" fill="#4cc897"/>
+    </marker>
+    <marker id="arrow-info" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#7cc8ec"/>
+    </marker>
+    <marker id="arrow-start-info" viewBox="0 0 10 10" refX="1.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+      <path d="M 9 1.5 L 1 5 L 9 8.5 z" fill="#7cc8ec"/>
+    </marker>
+    <marker id="arrow-warning" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#ffb547"/>
+    </marker>
+    <marker id="arrow-start-warning" viewBox="0 0 10 10" refX="1.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+      <path d="M 9 1.5 L 1 5 L 9 8.5 z" fill="#ffb547"/>
+    </marker>
+    <marker id="arrow-critical" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#ff8a80"/>
+    </marker>
+    <marker id="arrow-start-critical" viewBox="0 0 10 10" refX="1.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+      <path d="M 9 1.5 L 1 5 L 9 8.5 z" fill="#ff8a80"/>
+    </marker>
+    <marker id="arrow-neutral" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#b9b4ab"/>
+    </marker>
+    <marker id="arrow-start-neutral" viewBox="0 0 10 10" refX="1.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+      <path d="M 9 1.5 L 1 5 L 9 8.5 z" fill="#b9b4ab"/>
+    </marker>
+  </defs>
+  <rect x="0.5" y="0.5" width="959" height="532.5" rx="12" fill="#0e0d0b" stroke="#282622" stroke-width="1"/>
+  
+  <g clip-path="url(#canvas-clip)">
+    <rect x="0" y="0" width="960" height="69" fill="#151412"/>
+    <line x1="0" y1="69" x2="960" y2="69" stroke="#282622" stroke-width="1"/>
+    <rect x="20" y="16" width="3.5" height="36" rx="1.75" fill="#b9a7f6"/>
+    <rect x="34" y="14" width="193" height="18" rx="9" fill="#2a2148" stroke="#4c3b82" stroke-width="0.8"/>
+    <text x="130.5" y="26" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" letter-spacing="0.6" fill="#e2dafd">C4 · LEVEL 1 · SYSTEM CONTEXT</text>
+    <text x="239" y="28" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="700" fill="#f2efe9">Miqyas — System Context</text>
+    <text x="34" y="50" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a6a197">Decoupled open-core verification platform: gated evidence collection → pure deterministic CEL judge → offline-verifiable proof bundle</text>
+  </g>
+  
+  <g class="edges">
+    <path d="M 283.5 178.5 L 283.5 186.3 Q 283.5 194.2 291.3 194.2 L 418.7 194.2 Q 426.7 194.2 426.7 202.2 L 426.7 234.5" fill="none" stroke="#8e8980" stroke-width="1.45" marker-end="url(#arrow-default)"/>
+    <path d="M 676.5 178.5 L 676.5 210.8 Q 676.5 218.8 668.5 218.8 L 541.2 218.8 Q 533.3 218.8 533.3 226.7 L 533.3 234.5" fill="none" stroke="#8e8980" stroke-width="1.45" marker-end="url(#arrow-default)"/>
+    <path d="M 400.0 320.0 L 400.0 327.8 Q 400.0 335.7 392.2 335.7 L 190.0 335.7 Q 182.0 335.7 182.0 343.7 L 182.0 376.0" fill="none" stroke="#8e8980" stroke-width="1.45" marker-end="url(#arrow-default)"/>
+    <path d="M 480.0 320.0 L 480.0 376.0" fill="none" stroke="#8e8980" stroke-width="1.45" marker-end="url(#arrow-default)"/>
+    <path d="M 560.0 320.0 L 560.0 352.3 Q 560.0 360.3 568.0 360.3 L 770.2 360.3 Q 778.0 360.3 778.0 368.2 L 778.0 376.0" fill="none" stroke="#ffb547" stroke-width="1.45" marker-end="url(#arrow-warning)"/>
+  </g>
+  
+  <g class="node" data-id="dev">
+    <rect x="96" y="93" width="375" height="85.5" rx="20" fill="#1b1a17" stroke="#34312c" stroke-width="1.35" filter="url(#card-shadow)"/>
+    <g transform="translate(108,104)"><circle cx="8" cy="5" r="2.8" stroke="#b9a7f6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M2.8 14c0-2.6 2.3-4.2 5.2-4.2s5.2 1.6 5.2 4.2" stroke="#b9a7f6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+    <text x="130" y="116.5" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.2" font-weight="700" fill="#f2efe9">Developer / QA Engineer</text>
+    <rect x="110" y="124" width="83" height="16.5" rx="4" fill="#282621"/>
+    <text x="116" y="135.2" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.3" font-weight="500" fill="#cdc8be">Person · CLI</text>
+    <text x="110" y="154.0" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.6" fill="#a6a197" opacity="1">Runs plans, Grade 1 checks, mutations &amp; offline proof verification</text>
+  </g>
+  <g class="node" data-id="ci">
+    <rect x="489" y="93" width="375" height="85.5" rx="10" fill="#141311" stroke="#635f57" stroke-width="1.25" stroke-dasharray="4.5 3.5"/>
+    <g transform="translate(501,104)"><rect x="2" y="2.5" width="12" height="11" rx="1.8" stroke="#858076" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M5 6.5l2 1.8-2 1.8M8.5 10.2h2.8" stroke="#858076" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+    <text x="523" y="116.5" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.2" font-weight="700" fill="#f2efe9">CI / CD Pipeline</text>
+    <rect x="503" y="124" width="101" height="16.5" rx="4" fill="#282621"/>
+    <text x="509" y="135.2" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.3" font-weight="500" fill="#cdc8be">External System</text>
+    <text x="503" y="154.0" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.6" fill="#a6a197" opacity="1">Enforces readiness gate before release via exit codes</text>
+  </g>
+  <g class="node" data-id="miqyas">
+    <rect x="230" y="234.5" width="500" height="85.5" rx="10" fill="#372473" stroke="#9b86e8" stroke-width="1.5" filter="url(#card-shadow)"/>
+    <g transform="translate(242,245.5)"><path d="M8 2l5 2v4.2c0 3-2.1 5.1-5 6-2.9-.9-5-3-5-6V4l5-2z" stroke="#f5f2ff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M6 8.2l1.4 1.4 2.8-3" stroke="#f5f2ff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+    <text x="264" y="258" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.2" font-weight="700" fill="#f5f2ff">Miqyas</text>
+    <rect x="244" y="265.5" width="231" height="16.5" rx="4" fill="#23164d"/>
+    <text x="250" y="276.7" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.3" font-weight="500" fill="#dfd5fe">Software System · Decoupled Open-Core</text>
+    <text x="244" y="295.5" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.6" fill="#f5f2ff" opacity="0.92">Gated surface collection, secret scrubber, pure CEL judge &amp; sealed proof bundles</text>
+  </g>
+  <g class="node" data-id="sut">
+    <rect x="42" y="376" width="280" height="85.5" rx="10" fill="#141311" stroke="#635f57" stroke-width="1.25" stroke-dasharray="4.5 3.5"/>
+    <g transform="translate(54,387)"><circle cx="8" cy="8" r="5.8" stroke="#858076" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M2.5 8h11M8 2.2c1.7 1.7 2.5 3.7 2.5 5.8S9.7 12.1 8 13.8M8 2.2C6.3 3.9 5.5 5.9 5.5 8s.8 4.1 2.5 5.8" stroke="#858076" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+    <text x="76" y="399.5" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.2" font-weight="700" fill="#f2efe9">Target Under Test</text>
+    <rect x="56" y="407" width="131" height="16.5" rx="4" fill="#282621"/>
+    <text x="62" y="418.2" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.3" font-weight="500" fill="#cdc8be">Web · Server · Build</text>
+    <text x="56" y="437.0" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.6" fill="#a6a197" opacity="1">Application under verification</text>
+  </g>
+  <g class="node" data-id="scanners">
+    <rect x="340" y="376" width="280" height="85.5" rx="10" fill="#141311" stroke="#635f57" stroke-width="1.25" stroke-dasharray="4.5 3.5"/>
+    <g transform="translate(352,387)"><rect x="2" y="2.5" width="12" height="11" rx="1.8" stroke="#858076" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M5 6.5l2 1.8-2 1.8M8.5 10.2h2.8" stroke="#858076" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+    <text x="374" y="399.5" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.2" font-weight="700" fill="#f2efe9">External Scanners</text>
+    <rect x="354" y="407" width="207" height="16.5" rx="4" fill="#282621"/>
+    <text x="360" y="418.2" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.3" font-weight="500" fill="#cdc8be">gitleaks · osv-scanner · axe-core</text>
+    <text x="354" y="437.0" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.6" fill="#a6a197" opacity="1">Third-party tools behind adapters</text>
+  </g>
+  <g class="node" data-id="llms">
+    <rect x="638" y="376" width="280" height="85.5" rx="10" fill="#141311" stroke="#635f57" stroke-width="1.25" stroke-dasharray="4.5 3.5"/>
+    <g transform="translate(650,387)"><path d="M4.8 12.8h6.8a2.7 2.7 0 0 0 .5-5.3A4 4 0 0 0 4.5 6.4a2.8 2.8 0 0 0 .3 6.4z" stroke="#858076" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+    <text x="672" y="399.5" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.2" font-weight="700" fill="#f2efe9">LLM Providers (Optional)</text>
+    <rect x="652" y="407" width="137" height="16.5" rx="4" fill="#282621"/>
+    <text x="658" y="418.2" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.3" font-weight="500" fill="#cdc8be">HTTPS · Scrubbed Only</text>
+    <text x="652" y="437.0" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.6" fill="#a6a197" opacity="1">Exploration helpers — never judge verdicts</text>
+  </g>
+  <g class="edge-labels">
+    
+    <rect x="275.6" y="185.2" width="159" height="18" rx="4.5" fill="#1d1c19" stroke="#3e3b35" stroke-width="0.9"/>
+    <text x="355.1" y="197.6" text-anchor="middle" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9.6" font-weight="600" fill="#e3ded4">run, lint, mutate, verify [CLI]</text>
+    
+    <rect x="529.4" y="209.8" width="151" height="18" rx="4.5" fill="#1d1c19" stroke="#3e3b35" stroke-width="0.9"/>
+    <text x="604.9" y="222.2" text-anchor="middle" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9.6" font-weight="600" fill="#e3ded4">Readiness gate [Exit Codes]</text>
+    
+    <rect x="199.5" y="326.7" width="183" height="18" rx="4.5" fill="#1d1c19" stroke="#3e3b35" stroke-width="0.9"/>
+    <text x="291.0" y="339.1" text-anchor="middle" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9.6" font-weight="600" fill="#e3ded4">Gated probes [Playwright / HTTP]</text>
+    
+    <rect x="413.0" y="339.0" width="134" height="18" rx="4.5" fill="#1d1c19" stroke="#3e3b35" stroke-width="0.9"/>
+    <text x="480.0" y="351.4" text-anchor="middle" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9.6" font-weight="600" fill="#e3ded4">Collects facts [Process]</text>
+    
+    <rect x="586.5" y="351.3" width="165" height="18" rx="4.5" fill="#1d1c19" stroke="#3e3b35" stroke-width="0.9"/>
+    <text x="669.0" y="363.7" text-anchor="middle" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9.6" font-weight="600" fill="#e3ded4">Scrubbed exploration [HTTPS]</text>
+  </g>
+  <g clip-path="url(#canvas-clip)">
+    <rect x="0" y="495.5" width="960" height="38" fill="#151412"/>
+    <line x1="0" y1="495.5" x2="960" y2="495.5" stroke="#282622" stroke-width="1"/>
+    <rect x="24" y="507.5" width="14" height="14" rx="3.5" fill="#372473" stroke="#9b86e8" stroke-width="1.2"/>
+    <text x="44" y="518.5" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" fill="#a6a197">Miqyas Verification Platform</text>
+    <rect x="211" y="507.5" width="14" height="14" rx="3.5" fill="#141311" stroke="#635f57" stroke-width="1.2" stroke-dasharray="3 2"/>
+    <text x="231" y="518.5" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" fill="#a6a197">External Pipeline / Target / Scanner / LLM</text>
+  </g>
+</svg>
