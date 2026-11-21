@@ -66,104 +66,112 @@ network).
 
 ```mermaid
 flowchart TB
-    dev(["Developer / QA Engineer<br/>[Person]<br/>Runs plans, readiness checks,<br/>mutations, and offline verification"])
-    ci["CI / CD Pipeline<br/>[External System]<br/>Enforces readiness gate via exit codes"]:::ext
+    dev(["<b>Developer / QA Engineer</b><br/><i>Person</i><br/>Runs plans, readiness checks,<br/>mutations &amp; offline verify"])
+    ci("<b>CI / CD Pipeline</b><br/><i>[External System]</i><br/>Enforces readiness gate"):::ext
 
-    miqyas["Miqyas<br/>[Software System]<br/>Decoupled open-core verification platform<br/>Gated collection -> deterministic judge -> proof bundle"]
+    miqyas("<b>Miqyas</b><br/><i>[Software System]</i><br/>Decoupled open-core verification platform<br/>Gated collection → pure judge → proof bundle")
 
-    sut["Target Software Under Test<br/>[External System]<br/>Web app, local dev server, or source build"]:::ext
-    scanners["External Scanners<br/>[External Tools]<br/>gitleaks, osv-scanner, axe-core behind adapters"]:::ext
-    llms["LLM Providers (Optional)<br/>[External Systems]<br/>Anthropic / OpenAI; scrubbed inputs only,<br/>never judge verdicts"]:::ext
+    sut("<b>Target Under Test</b><br/><i>[External System]</i><br/>Web app, server, or build"):::ext
+    scanners("<b>External Scanners</b><br/><i>[External Tools]</i><br/>gitleaks, osv-scanner, axe-core"):::ext
+    llms("<b>LLM Providers (Optional)</b><br/><i>[External Systems]</i><br/>Scrubbed inputs only,<br/>never judge verdicts"):::ext
 
-    dev -->|"run, lint, mutate, scrub, bench, verify [CLI]"| miqyas
-    ci -->|"Readiness gate [CLI / Exit Codes]"| miqyas
-    miqyas -->|"Drives sessions & probes through Gate [Playwright / HTTP]"| sut
-    miqyas -->|"Collects structured facts [Local Process]"| scanners
-    miqyas -->|"Scrubbed exploration / bindings [HTTPS]"| llms
+    dev -->|"run, lint, mutate, verify<br/>[CLI]"| miqyas
+    ci -->|"Readiness gate<br/>[Exit Codes]"| miqyas
+    miqyas -->|"Gated browser &amp; probes<br/>[Playwright / HTTP]"| sut
+    miqyas -->|"Collects facts<br/>[Local Process]"| scanners
+    miqyas -->|"Scrubbed exploration<br/>[HTTPS]"| llms
 
-    classDef ext stroke-dasharray: 5 5,stroke-width:1.5px;
+    classDef ext stroke-dasharray:5 5,stroke-width:1.5px;
 ```
 
 ### Containers & Open-Core Boundary (C4 Level 2)
 
 ```mermaid
 flowchart TB
-    dev(["Developer / CI<br/>[CLI Caller]"])
+    dev(["<b>Developer / CI</b><br/><i>CLI Caller</i>"])
 
     subgraph miqyas_repo["Miqyas Repository"]
-        subgraph apache_layer["Apache-2.0 Interface Layer (zero AGPL imports)"]
-            cli["Thin CLI — src/cli.ts<br/>[Node.js, TypeScript]<br/>Spawns core entry across strict process boundary"]
-            surfaces["Surface Drivers & Protocol — src/surfaces/, src/protocol/<br/>[TypeScript, Playwright, axe-core]<br/>Web crawler, proxy, detectors, miqyas-worker/1 stdio"]
-            scrubber["Secret Scrubber — src/scrub/<br/>[TypeScript]<br/>Rule-based redactor for builds, prompts, logs"]
+        direction TB
+        subgraph cli_tier["Apache-2.0 CLI Entry (zero AGPL imports)"]
+            cli("<b>Thin CLI</b><br/><i>[src/cli.ts]</i><br/>Spawns core across process boundary")
         end
 
         subgraph agpl_layer["AGPL-3.0-only Core Engine"]
-            entry["Entry & Proof Orchestrator — src/entry/, src/proof-core/<br/>[Node.js, TypeScript]<br/>Grade 1 13-check readiness, mutate self-check, bench, reports"]
-            kernel["Verification Kernel — src/kernel/<br/>[TypeScript]<br/>Hash-chained ledger, blobs, CEL judge, fold, offline verify"]
-            gate["Request Gate & Engine — src/gate/, src/engine/<br/>[TypeScript]<br/>Wire/origin classifier, grants, recorder, derivations"]
-            adapters["Adapters, Collectors & Agent Router<br/>[src/adapters/, src/collectors/, src/agents/]<br/>Scanner adapters + scrubbed LLM router & spend caps"]
+            direction TB
+            entry("<b>Entry &amp; Proof Orchestrator</b><br/><i>[src/entry/, proof-core/]</i><br/>Grade 1 checks, mutate, bench, reports")
+            kernel("<b>Verification Kernel</b><br/><i>[src/kernel/]</i><br/>Ledger, blobs, CEL judge, verify")
+            gate("<b>Request Gate &amp; Engine</b><br/><i>[src/gate/, engine/]</i><br/>Permits, recorder, derivations")
+            adapters("<b>Adapters &amp; Agent Router</b><br/><i>[src/adapters/, agents/]</i><br/>Scanners &amp; scrubbed LLM caps")
         end
 
-        store[("Run & Proof Bundle Store — .miqyas/runs/<br/>[Local Filesystem]<br/>Sealed bundles, report.json/md, crops, scrubbed payloads.jsonl")]
+        store[("<b>Proof Bundle Store</b><br/><i>[.miqyas/runs/ — FS]</i><br/>Bundles, reports, payloads")]
+
+        subgraph driver_tier["Apache-2.0 Drivers &amp; Scrubber"]
+            direction LR
+            surfaces("<b>Surface Drivers &amp; Protocol</b><br/><i>[src/surfaces/, protocol/]</i><br/>Playwright, axe-core, worker/1")
+            scrubber("<b>Secret Scrubber</b><br/><i>[src/scrub/]</i><br/>Redacts builds, prompts, logs")
+        end
     end
 
-    sut["Target Under Test"]:::ext
-    scanners["External Scanners"]:::ext
-    llms["LLM Providers"]:::ext
+    sut("<b>Target Under Test</b><br/><i>[Web / Build]</i>"):::ext
+    scanners("<b>External Scanners</b><br/><i>[gitleaks / osv]</i>"):::ext
+    llms("<b>LLM Providers</b><br/><i>[Anthropic / OpenAI]</i>"):::ext
 
-    dev --> cli
-    cli -->|"Spawns child process"| entry
-    entry --> gate
-    entry --> kernel
-    entry --> adapters
-    gate -->|"miqyas-worker/1"| surfaces
-    gate --> scrubber
+    dev -->|"CLI args"| cli
+    cli -->|"Spawns process"| entry
+    entry -->|"Judges &amp; verifies"| kernel
+    entry -->|"Gated checks"| gate
+    entry -->|"Scanners &amp; helpers"| adapters
+    kernel -->|"Seals bundles"| store
+    gate -->|"Permitted [stdio]"| surfaces
+    gate -->|"Scrubs evidence"| scrubber
+    adapters -->|"Scrubs prompts"| scrubber
+    store ~~~ sut
+    scrubber ~~~ scanners
+    scrubber ~~~ llms
     surfaces -->|"Playwright / HTTP"| sut
-    adapters -->|"Local Process"| scanners
-    adapters --> scrubber
-    adapters -->|"HTTPS"| llms
-    kernel --> store
+    adapters -->|"Process"| scanners
+    adapters -->|"Scrubbed [HTTPS]"| llms
 
-    classDef ext stroke-dasharray: 5 5,stroke-width:1.5px;
+    style miqyas_repo fill:none,stroke:#8b949e,stroke-width:1.5px,stroke-dasharray:5 3
+    style cli_tier fill:none,stroke:#8b949e,stroke-width:1.5px,stroke-dasharray:4 2
+    style agpl_layer fill:none,stroke:#8b949e,stroke-width:1.5px,stroke-dasharray:4 2
+    style driver_tier fill:none,stroke:#8b949e,stroke-width:1.5px,stroke-dasharray:4 2
+    classDef ext stroke-dasharray:5 5,stroke-width:1.5px;
 ```
 
 ### Runtime Flow: Gated Verification & Offline Proof Replay (UML Sequence)
 
 ```mermaid
 sequenceDiagram
-    actor Caller as Developer / CI
-    participant CLI as Thin CLI (Apache-2.0)
-    participant Core as Entry & Orchestrator (AGPL-3.0)
-    participant Gate as Request Gate (src/gate)
-    participant Worker as Web Surface & Scrubber (Apache-2.0)
-    participant Kernel as Ledger & CEL Judge (src/kernel)
-    participant Bundle as Proof Bundle (.miqyas/runs/)
+    autonumber
+    participant CLI as Thin CLI (Apache)
+    participant Core as Core & Gate (AGPL)
+    participant Worker as Surface & Scrubber
+    participant Kernel as Ledger & CEL Judge
+    participant Bundle as Proof Bundle
 
-    Caller->>CLI: miqyas run / check13 / mutate
-    CLI->>Core: Spawn core entry (process boundary, zero AGPL import)
-    Core->>Core: Resolve claims, required facts, and collectors
+    CLI->>Core: Spawn core entry (process boundary)
+    Core->>Core: Resolve claims, facts & collectors
 
-    loop For each permitted action / probe
-        Core->>Gate: Request action against target
-        Gate->>Gate: Classify wire method & origin against grants
+    loop For each action / probe
+        Core->>Core: Gate checks wire & origin grants
         alt Denied by Gate
-            Gate->>Kernel: Record deny effect fact (target untouched)
+            Core->>Kernel: Record deny effect (target untouched)
         else Permitted
-            Gate->>Worker: Execute action (miqyas-worker/1)
-            Worker->>Worker: Scrub secrets from observations & payloads
-            Worker-->>Kernel: Append normalized facts & evidence blobs
+            Core->>Worker: Run action (miqyas-worker/1)
+            Worker->>Worker: Scrub secrets from payloads
+            Worker-->>Kernel: Append normalized facts & blobs
         end
     end
 
-    Note over Kernel,Bundle: Deterministic judging — no model, clock, or network
-    Core->>Kernel: Judge closed fact sets via pure CEL rules & fold verdicts
-    Kernel->>Bundle: Seal hash-chained ledger, blobs, report.json & report.md
-    Core-->>Caller: Exit code (0 pass / 1 fail / 2 usage / 3 blocked)
+    Core->>Kernel: Pure CEL judge & verdict fold<br/>(no model, clock, or network)
+    Kernel->>Bundle: Seal hash-chained ledger & reports
+    Core-->>CLI: Exit code (0/1/2/3)
 
-    Note over Caller,Bundle: Offline verification anytime later
-    Caller->>Kernel: miqyas verify .miqyas/runs/run-id
-    Kernel->>Bundle: Read sealed ledger & blobs only
-    Kernel-->>Caller: Recompute & confirm identical verdicts offline
+    CLI->>Kernel: miqyas verify (offline)
+    Kernel->>Bundle: Read sealed ledger & blobs
+    Kernel-->>CLI: Confirm identical verdicts
 ```
 
 <details>
@@ -171,36 +179,32 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    cli["Thin CLI (src/cli.ts)<br/>[Apache-2.0]"]:::ext
-    surf["Web Surface & Scrubber<br/>[Apache-2.0]"]:::ext
-    adap["Adapters & Agent Router<br/>[src/adapters, src/agents]"]:::ext
+    cli("<b>Thin CLI (src/cli.ts)</b><br/><i>[Apache-2.0]</i>"):::ext
 
     subgraph core_c["Miqyas Core Engine (AGPL-3.0-only)"]
-        entry["Core Entry & Readiness Runner<br/>[src/entry/cli.ts, run-command.ts, check13.ts, verify.ts]<br/>Command dispatch, Grade 1 checks, bundle & fail-on"]
-        orch["Plan Orchestrator & Mutator<br/>[src/proof-core/orchestrator.ts, plan.ts, mutate.ts, report.ts]<br/>Plan runs, mutation self-check, bench, reports"]
-        gate_c["Request Gate<br/>[src/gate/decide/*]<br/>Wire & origin classifier, grants, allow/deny effects"]
-        eng_c["Derivation & Recording Engine<br/>[src/engine/*]<br/>Fact recorder, derivations, scrubbing & withhold rules"]
-        ledger["Ledger, Blobs & Merkle Tree<br/>[src/kernel/ledger, blobs, tree, checkpoint, store]<br/>Append-only canonical facts & content-addressed blobs"]
-        judge["CEL Judge & Verdict Folder<br/>[src/kernel/claim, cel, cel-cost, judge, fold, verify]<br/>Pure 3-valued verdicts (held/broken/unknown) & offline verify"]
+        direction TB
+        entry("<b>Core Entry &amp; Orchestrator</b><br/><i>[src/entry/*, proof-core/*]</i><br/>Grade 1 checks, plan runner, mutate, reports")
+        judge("<b>CEL Judge &amp; Verifier</b><br/><i>[src/kernel/cel*, judge, fold]</i><br/>Pure 3-valued verdicts &amp; verify")
+        ledger("<b>Ledger &amp; Blobs</b><br/><i>[src/kernel/ledger, blobs, tree]</i><br/>Append-only facts &amp; checkpoints")
+        gate_eng("<b>Request Gate &amp; Recorder</b><br/><i>[src/gate/decide/*, engine/*]</i><br/>Wire/origin grants &amp; derivations")
     end
 
-    store[("Proof Bundle Store<br/>[.miqyas/runs/]")]:::ext
+    store[("<b>Proof Bundle Store</b><br/><i>[.miqyas/runs/]</i>")]:::ext
+    surf("<b>Web Surface &amp; Scrubber</b><br/><i>[Apache-2.0]</i>"):::ext
+    adap("<b>Adapters &amp; Router</b><br/><i>[src/adapters, agents]</i>"):::ext
 
     cli -->|"Child Process"| entry
-    entry --> orch
     entry -->|"Offline verify"| judge
-    orch --> gate_c
-    orch --> eng_c
-    orch --> adap
-    gate_c --> surf
-    eng_c --> surf
-    eng_c --> ledger
-    gate_c --> ledger
-    judge --> ledger
-    ledger --> store
-    orch --> store
+    entry -->|"Routes actions"| gate_eng
+    entry -->|"Scanner facts"| adap
+    judge -->|"Reads fact sets"| ledger
+    gate_eng -->|"Appends facts"| ledger
+    ledger -->|"Seals bundles"| store
+    entry -->|"Writes reports"| store
+    gate_eng -->|"Actions &amp; scrub"| surf
 
-    classDef ext stroke-dasharray: 5 5,stroke-width:1.5px;
+    style core_c fill:none,stroke:#8b949e,stroke-width:1.5px,stroke-dasharray:5 3
+    classDef ext stroke-dasharray:5 5,stroke-width:1.5px;
 ```
 
 </details>
